@@ -1,0 +1,15 @@
+.env
+
+CLAUDE.md
+
+.vscode/
+.guardrails/
+
+__pycache__/
+*.pyc
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+.DS_Store
