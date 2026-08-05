@@ -24,34 +24,38 @@ _LOCK_FILE_NAMES = {
 }
 
 
-def select_pr_files(files: list[SubmittedFile]) -> tuple[list[SubmittedFile], list[SkippedFile]]:
-    """Returns the files to review and the files skipped, with a reason for each skip."""
-    max_files = get_settings().max_files_per_submission
-    if len(files) <= max_files:
-        return files, []
+def select_pr_files(files: list[SubmittedFile]) -> tuple[list[SubmittedFile], list[SkippedFile], list[SubmittedFile]]:
+    """Returns the files to review, the files skipped (with a reason for each), and the test files set aside as TCASE context."""
+    candidates, excluded, test_files = _partition_non_logic_files(files)
 
-    candidates, excluded = _partition_non_logic_files(files)
+    max_files = get_settings().max_files_per_submission
+    if len(candidates) <= max_files:
+        return candidates, excluded, test_files
+
     ranked = sorted(candidates, key=lambda file: file.content.count("\n"), reverse=True)
     selected, cut = ranked[:max_files], ranked[max_files:]
     skipped_for_cap = [
         SkippedFile(file_path=file.file_path, reason="exceeded_pr_file_cap") for file in cut
     ]
-    return selected, excluded + skipped_for_cap
+    return selected, excluded + skipped_for_cap, test_files
 
 
 def _partition_non_logic_files(
     files: list[SubmittedFile],
-) -> tuple[list[SubmittedFile], list[SkippedFile]]:
+) -> tuple[list[SubmittedFile], list[SkippedFile], list[SubmittedFile]]:
     """Splits files into review candidates and non-logic files excluded outright."""
     candidates: list[SubmittedFile] = []
     excluded: list[SkippedFile] = []
+    test_files: list[SubmittedFile] = []
     for file in files:
         reason = _non_logic_file_reason(file.file_path)
         if reason is None:
             candidates.append(file)
+        elif reason == "test_file":
+            test_files.append(file)
         else:
             excluded.append(SkippedFile(file_path=file.file_path, reason=reason))
-    return candidates, excluded
+    return candidates, excluded, test_files
 
 
 def _non_logic_file_reason(file_path: str) -> str | None:
@@ -62,7 +66,7 @@ def _non_logic_file_reason(file_path: str) -> str | None:
         return "lock_file"
     if _is_vendored_file(file_path):
         return "vendored_file"
-    if _is_test_file(file_path):
+    if is_test_file(file_path):
         return "test_file"
     return None
 
@@ -79,8 +83,8 @@ def _is_vendored_file(file_path: str) -> bool:
     return any(segment in file_path for segment in _VENDORED_PATH_SEGMENTS)
 
 
-def _is_test_file(file_path: str) -> bool:
-    name = Path(file_path).name
-    if any(segment in file_path for segment in _TEST_PATH_SEGMENTS):
+def is_test_file(file_path: str) -> bool:
+    name = Path(file_path).name.lower()
+    if any(segment in file_path.lower() for segment in _TEST_PATH_SEGMENTS):
         return True
     return name.startswith("test_") or name.endswith("_test.py")

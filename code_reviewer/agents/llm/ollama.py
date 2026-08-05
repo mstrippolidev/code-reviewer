@@ -15,6 +15,9 @@ settings = get_settings()
 class OllamaLLM(LLMInterface[T]):
     """Builds chat models backed by a local Ollama instance."""
 
+    def __init__(self, temperature: float = 0.2) -> None:
+        self._temperature = temperature
+
     def create_model(self, output_schema: type[T]) -> Runnable[LanguageModelInput, T]:
         """Build the chat model for the current environment, bound to output_schema.
 
@@ -24,7 +27,7 @@ class OllamaLLM(LLMInterface[T]):
         """
         model = init_chat_model(
             self._get_model_name(),
-            temperature=0.2,
+            temperature=self._temperature,
             model_provider=self._get_model_provider(),
             base_url=self._get_base_url(),
         )
