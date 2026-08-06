@@ -5,20 +5,19 @@
 from collections import Counter
 from pathlib import Path
 
-from code_reviewer.pipeline.pr_file_selection import is_test_file
 from code_reviewer.schemas.paired import Pairing
 from code_reviewer.schemas.submission import SubmittedFile
 
 
-def pair_source_files_with_tests(files: list[SubmittedFile]) -> list[Pairing]:
-    """Pairs every source file in files with its matching test files, if any.
+def pair_source_files_with_tests(
+    source_files: list[SubmittedFile], test_files: list[SubmittedFile]
+) -> list[Pairing]:
+    """Pairs every file in source_files with its matching files in test_files.
 
     A stem shared by more than one source file is ambiguous — pairing could
     attach a test file to the wrong source, which is worse than not pairing
     at all, so no test files are matched for any file sharing that stem.
     """
-    source_files = [file for file in files if not is_test_file(file.file_path)]
-    test_files = [file for file in files if is_test_file(file.file_path)]
     stem_counts = Counter(_pairing_stem(source.file_path) for source in source_files)
 
     return [

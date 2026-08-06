@@ -8,7 +8,14 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from code_reviewer.agents.llm.base import LLMInterface
 from code_reviewer.agents.llm.ollama import OllamaLLM
-from code_reviewer.schemas.review import CodeKey, AgentOutput
+from code_reviewer.schemas.review import (
+    AgentOutput,
+    AgentReviewEntry,
+    CodeKey,
+    Incident,
+    Priority,
+    SizeStatus,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -93,3 +100,42 @@ class AgentBase:
         """
         for entry in result.review:
             entry.code_key = self._code_agent
+
+
+class FileSizeAwareAgentBase(AgentBase):
+    """AgentBase for agents that need full-file context (SOLID2, COH, COUP,
+    ARCH, BOUND). Short-circuits to a fixed rating-0 result without an LLM
+    call when size_status is HARD_LIMIT_EXCEEDED; otherwise behaves exactly
+    like AgentBase."""
+
+    def execute_agent(
+        self,
+        code: str,
+        file_path: str | None = None,
+        size_status: SizeStatus = SizeStatus.NORMAL,
+    ) -> AgentOutput:
+        if size_status == SizeStatus.HARD_LIMIT_EXCEEDED:
+            return self._hard_limit_result(code, file_path)
+        return super().execute_agent(code, file_path)
+
+    def _hard_limit_result(self, code: str, file_path: str | None) -> AgentOutput:
+        """Builds the fixed rating-0 result for a file too large for
+        full-file context, without spending an LLM call on it."""
+        line_count = code.count("\n")
+        incident = Incident(
+            priority=Priority.HIGH,
+            line_position=f"1-{line_count}",
+            description=(
+                f"File has {line_count} lines exceeding the hard size limit. "
+                f"{self._code_agent} analysis requires full file context, which "
+                "cannot be guaranteed at this size."
+            ),
+            advice="Split this file into smaller modules under 500 lines each, grouped by responsibility.",
+        )
+        agent_review_entry = AgentReviewEntry(
+            file_path=file_path,
+            rating=0,
+            code_key=self._code_agent,
+            incidents=[incident],
+        )
+        return AgentOutput(review=[agent_review_entry])

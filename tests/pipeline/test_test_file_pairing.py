@@ -12,62 +12,67 @@ def _test_files_for(pairings, source_path: str) -> set[str]:
 
 
 def test_prefix_convention_pairs_source_with_its_test_file() -> None:
-    files = [_file("login.py"), _file("test_login.py")]
+    source_files = [_file("login.py")]
+    test_files = [_file("test_login.py")]
 
-    pairings = pair_source_files_with_tests(files)
+    pairings = pair_source_files_with_tests(source_files, test_files)
 
     assert _test_files_for(pairings, "login.py") == {"test_login.py"}
 
 
 def test_suffix_convention_pairs_source_with_its_test_file() -> None:
-    files = [_file("login.py"), _file("login_test.py")]
+    source_files = [_file("login.py")]
+    test_files = [_file("login_test.py")]
 
-    pairings = pair_source_files_with_tests(files)
+    pairings = pair_source_files_with_tests(source_files, test_files)
 
     assert _test_files_for(pairings, "login.py") == {"login_test.py"}
 
 
 def test_matching_is_case_insensitive() -> None:
-    files = [_file("login.py"), _file("Test_Login.py")]
+    source_files = [_file("login.py")]
+    test_files = [_file("Test_Login.py")]
 
-    pairings = pair_source_files_with_tests(files)
+    pairings = pair_source_files_with_tests(source_files, test_files)
 
     assert _test_files_for(pairings, "login.py") == {"Test_Login.py"}
 
 
 def test_test_directory_file_without_naming_convention_still_pairs_by_basename() -> None:
-    files = [_file("service.py"), _file("tests/service.py")]
+    source_files = [_file("service.py")]
+    test_files = [_file("tests/service.py")]
 
-    pairings = pair_source_files_with_tests(files)
+    pairings = pair_source_files_with_tests(source_files, test_files)
 
     assert _test_files_for(pairings, "service.py") == {"tests/service.py"}
 
 
 def test_source_with_no_matching_test_file_gets_empty_list() -> None:
-    files = [_file("login.py"), _file("test_billing.py")]
+    source_files = [_file("login.py")]
+    test_files = [_file("test_billing.py")]
 
-    pairings = pair_source_files_with_tests(files)
+    pairings = pair_source_files_with_tests(source_files, test_files)
 
     assert _test_files_for(pairings, "login.py") == set()
 
 
 def test_submission_with_no_test_files_pairs_every_source_with_an_empty_list() -> None:
-    files = [_file("login.py"), _file("billing.py")]
+    source_files = [_file("login.py"), _file("billing.py")]
 
-    pairings = pair_source_files_with_tests(files)
+    pairings = pair_source_files_with_tests(source_files, [])
 
     assert _test_files_for(pairings, "login.py") == set()
     assert _test_files_for(pairings, "billing.py") == set()
 
 
 def test_multiple_test_files_in_different_directories_all_pair_to_one_source() -> None:
-    files = [
-        _file("login.py"),
+    source_files = [_file("login.py")]
+    test_files = [
         _file("tests/unit/test_login.py"),
         _file("tests/integration/test_login.py"),
     ]
 
-    pairings = pair_source_files_with_tests(files)
+    pairings = pair_source_files_with_tests(source_files, test_files)
 
     assert _test_files_for(pairings, "login.py") == {
         "tests/unit/test_login.py",
@@ -76,36 +81,36 @@ def test_multiple_test_files_in_different_directories_all_pair_to_one_source() -
 
 
 def test_ambiguous_stem_collision_pairs_neither_source() -> None:
-    files = [
+    source_files = [
         _file("app/auth/utils.py"),
         _file("app/billing/utils.py"),
-        _file("test_utils.py"),
     ]
+    test_files = [_file("test_utils.py")]
 
-    pairings = pair_source_files_with_tests(files)
+    pairings = pair_source_files_with_tests(source_files, test_files)
 
     assert _test_files_for(pairings, "app/auth/utils.py") == set()
     assert _test_files_for(pairings, "app/billing/utils.py") == set()
 
 
 def test_collision_on_one_stem_does_not_affect_unrelated_pairings() -> None:
-    files = [
+    source_files = [
         _file("app/auth/utils.py"),
         _file("app/billing/utils.py"),
-        _file("test_utils.py"),
         _file("login.py"),
-        _file("test_login.py"),
     ]
+    test_files = [_file("test_utils.py"), _file("test_login.py")]
 
-    pairings = pair_source_files_with_tests(files)
+    pairings = pair_source_files_with_tests(source_files, test_files)
 
     assert _test_files_for(pairings, "login.py") == {"test_login.py"}
 
 
 def test_returns_exactly_one_pairing_per_source_file() -> None:
-    files = [_file("login.py"), _file("billing.py"), _file("test_login.py")]
+    source_files = [_file("login.py"), _file("billing.py")]
+    test_files = [_file("test_login.py")]
 
-    pairings = pair_source_files_with_tests(files)
+    pairings = pair_source_files_with_tests(source_files, test_files)
 
     paired_source_paths = {p.source_file.file_path for p in pairings}
     assert paired_source_paths == {"login.py", "billing.py"}
