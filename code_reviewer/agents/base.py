@@ -4,9 +4,10 @@
 
 import logging
 
-from langchain_core.prompts import ChatPromptTemplate
+from langchain.agents import create_agent
 
 from code_reviewer.agents.llm.base import LLMInterface
+from code_reviewer.agents.llm.middleware import retry_model
 from code_reviewer.agents.llm.ollama import OllamaLLM
 from code_reviewer.schemas.review import (
     AgentOutput,
@@ -34,10 +35,23 @@ class AgentBase:
         system_prompt: str,
         llm: LLMInterface | None = None,
     ) -> None:
+        """Wire up the LangChain agent for one review agent.
+
+        Args:
+            code_agent: This agent's CodeKey, stamped onto every review entry.
+            system_prompt: This agent's review instructions.
+            llm: Provider to run against. Defaults to a local OllamaLLM()
+                when not given.
+        """
         self._code_agent = code_agent
         self._system_prompt = system_prompt
         llm_factory = llm if llm is not None else OllamaLLM()
-        self._llm = llm_factory.create_model(AgentOutput)
+        self._agent = create_agent(
+            model=llm_factory.create_raw_model(),
+            system_prompt=self._system_prompt,
+            middleware=[retry_model],
+            response_format=llm_factory.build_response_format(AgentOutput),
+        )
 
     def get_agent_key(self) -> CodeKey:
         return self._code_agent
@@ -69,13 +83,17 @@ class AgentBase:
             AgentInvocationError: If the LLM call fails or its output
                 cannot be validated against AgentOutput.
         """
-        chat_template = ChatPromptTemplate([
-            ("system", self._system_prompt),
-            ("human", "{code}"),
-        ])
-        chain = chat_template | self._llm
+        messages = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": code
+                }
+            ]
+        }
+        config = {"recursion_limit": 4}
         try:
-            return chain.invoke({"code": code})
+            return self._agent.invoke(messages, config=config)["structured_response"]
         except Exception as error:
             logger.error("Agent %s failed to review the given code.", self._code_agent)
             raise AgentInvocationError(

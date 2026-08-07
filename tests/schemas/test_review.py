@@ -39,11 +39,26 @@ def test_agent_review_entry_rejects_out_of_range_rating(rating: int) -> None:
         AgentReviewEntry(rating=rating, code_key=CodeKey.VAR, incidents=[])
 
 
-@pytest.mark.parametrize("rating", [0, 100])
-def test_agent_review_entry_accepts_boundary_ratings(rating: int) -> None:
-    entry = AgentReviewEntry(rating=rating, code_key=CodeKey.VAR, incidents=[])
+def test_agent_review_entry_accepts_rating_100_with_no_incidents() -> None:
+    entry = AgentReviewEntry(rating=100, code_key=CodeKey.VAR, incidents=[])
 
-    assert entry.rating == rating
+    assert entry.rating == 100
+
+
+def test_agent_review_entry_accepts_rating_0_with_incidents() -> None:
+    entry = AgentReviewEntry(rating=0, code_key=CodeKey.VAR, incidents=[Incident(**_incident())])
+
+    assert entry.rating == 0
+
+
+def test_agent_review_entry_rejects_discounted_rating_with_no_incidents() -> None:
+    with pytest.raises(ValidationError):
+        AgentReviewEntry(rating=85, code_key=CodeKey.VAR, incidents=[])
+
+
+def test_agent_review_entry_rejects_full_rating_with_incidents() -> None:
+    with pytest.raises(ValidationError):
+        AgentReviewEntry(rating=100, code_key=CodeKey.VAR, incidents=[Incident(**_incident())])
 
 
 def test_agent_review_entry_rejects_unknown_code_key() -> None:
@@ -54,7 +69,7 @@ def test_agent_review_entry_rejects_unknown_code_key() -> None:
 def test_agent_output_holds_multiple_review_entries() -> None:
     output = AgentOutput(
         review=[
-            AgentReviewEntry(rating=80, code_key=CodeKey.VAR, incidents=[]),
+            AgentReviewEntry(rating=100, code_key=CodeKey.VAR, incidents=[]),
             AgentReviewEntry(rating=60, code_key=CodeKey.VAR, incidents=[Incident(**_incident())]),
         ]
     )
