@@ -24,7 +24,7 @@ class LLMInterface(ABC, Generic[T]):
     those three hooks; it never repeats the init_chat_model wiring itself.
     """
 
-    def __init__(self, temperature: float = 0.1) -> None:
+    def __init__(self, temperature: float = 0.0) -> None:
         self._temperature = temperature
 
     def create_model(

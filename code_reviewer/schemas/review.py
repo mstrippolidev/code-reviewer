@@ -1,7 +1,6 @@
 from enum import Enum
-from typing import Self
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 
 class CodeKey(str, Enum):
@@ -78,9 +77,14 @@ class AgentReviewEntry(BaseModel):
         ),
     )
     rating: int = Field(
+        default=100,
         ge=0,
         le=100,
-        description="Score for this agent's dimension only, starting at 100 and discounted per incident.",
+        description=(
+            "Score for this agent's dimension only. Computed by the "
+            "calculate_rating middleware after the model responds — the "
+            "model does not need to set this."
+        ),
     )
     code_key: CodeKey = Field(
         description="Identity of the agent producing this review. Must match the agent's own key."
@@ -89,18 +93,11 @@ class AgentReviewEntry(BaseModel):
         description="All incidents this agent found in the file or chunk; empty if none."
     )
 
-    @model_validator(mode='after')
-    def validate_rating_with_incidents(self) -> Self:
-        if len(self.incidents) == 0 and self.rating < 100:
-            raise ValueError('Cannot have a rating less than 100 without any incident')
-        if self.rating == 100 and len(self.incidents) > 0:
-            raise ValueError("Rating cannot be 100 if there are incidents to report")
-        return self
-
 
 class AgentOutput(BaseModel):
     review: list[AgentReviewEntry] = Field(
-        description="One entry per file or chunk this agent call covered."
+        min_length=1,
+        description="One entry per file or chunk this agent call covered. Never empty.",
     )
 
 

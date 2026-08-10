@@ -3,13 +3,29 @@
     re-prompts the model with its own invalid response so it can fix the
     mistake, instead of retrying blind with an unchanged request.
 """
-from typing import Callable
+from typing import Any, Callable
 
-from langchain.agents.middleware import ModelRequest, ModelResponse, wrap_model_call
+from langchain.agents.middleware import (
+    AgentState,
+    ModelRequest,
+    ModelResponse,
+    Runtime,
+    after_model,
+    wrap_model_call,
+)
 from langchain.agents.structured_output import StructuredOutputValidationError
 from langchain_core.messages import HumanMessage
 
+from code_reviewer.schemas.review import AgentReviewEntry, Priority
+
 MAX_RETRIES = 2
+
+PRIORITY_DISCOUNTS = {
+    Priority.CRITICAL: 20,
+    Priority.HIGH: 15,
+    Priority.MEDIUM: 7,
+    Priority.LOW: 3,
+}
 
 
 @wrap_model_call
@@ -46,3 +62,20 @@ def _append_correction(
         "Return a corrected response that fixes this."
     )
     return request.override(messages=[*request.messages, error.ai_message, correction])
+
+
+@after_model
+def calculate_rating(state: AgentState, runtime: Runtime) -> dict[str, Any]:
+    """Calculate the rating for the agent's output."""
+    output = state["structured_response"]
+    for review in output.review:
+        review.rating = _calculate_rating_for_review(review)
+    return {"structured_response": output}
+
+
+def _calculate_rating_for_review(review: AgentReviewEntry) -> int:
+    """Calculate the rating for one review entry."""
+    rating = 100
+    for incident in review.incidents:
+        rating -= PRIORITY_DISCOUNTS[incident.priority]
+    return max(rating, 0)

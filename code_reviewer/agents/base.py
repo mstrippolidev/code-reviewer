@@ -7,7 +7,7 @@ import logging
 from langchain.agents import create_agent
 
 from code_reviewer.agents.llm.base import LLMInterface
-from code_reviewer.agents.llm.middleware import retry_model
+from code_reviewer.agents.llm.middleware import retry_model, calculate_rating
 from code_reviewer.agents.llm.ollama import OllamaLLM
 from code_reviewer.schemas.review import (
     AgentOutput,
@@ -49,7 +49,7 @@ class AgentBase:
         self._agent = create_agent(
             model=llm_factory.create_raw_model(),
             system_prompt=self._system_prompt,
-            middleware=[retry_model],
+            middleware=[retry_model, calculate_rating],
             response_format=llm_factory.build_response_format(AgentOutput),
         )
 
