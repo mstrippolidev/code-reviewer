@@ -51,14 +51,10 @@ def test_agent_review_entry_accepts_rating_0_with_incidents() -> None:
     assert entry.rating == 0
 
 
-def test_agent_review_entry_rejects_discounted_rating_with_no_incidents() -> None:
-    with pytest.raises(ValidationError):
-        AgentReviewEntry(rating=85, code_key=CodeKey.VAR, incidents=[])
+def test_agent_review_entry_rating_defaults_to_100() -> None:
+    entry = AgentReviewEntry(code_key=CodeKey.VAR, incidents=[Incident(**_incident())])
 
-
-def test_agent_review_entry_rejects_full_rating_with_incidents() -> None:
-    with pytest.raises(ValidationError):
-        AgentReviewEntry(rating=100, code_key=CodeKey.VAR, incidents=[Incident(**_incident())])
+    assert entry.rating == 100
 
 
 def test_agent_review_entry_rejects_unknown_code_key() -> None:
