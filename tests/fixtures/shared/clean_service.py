@@ -5,7 +5,6 @@
 
 
 def filter_active_subscribers(subscribers: list[dict]) -> list[dict]:
-    """Return only subscribers whose subscription is currently active."""
     return [subscriber for subscriber in subscribers if subscriber["is_active"]]
 
 

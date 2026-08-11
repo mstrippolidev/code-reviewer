@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     ollama_llm_model: str
     ollama_embed_model: str
 
+    openrouter_api_key: str
+    openrouter_model: str
+
     pg_host: str
     pg_port: int
     pg_database: str

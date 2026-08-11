@@ -58,6 +58,14 @@ Flag a name if it:
 4. Would need a comment to explain it — a good name makes that comment
    unnecessary.
 
+These four are what this review is calibrated to judge with confidence,
+and they are what critical, high, or medium priority are reserved for. If
+you notice a real naming problem that doesn't fit any of them — including
+something like variable shadowing, which is naming-adjacent but not a
+clarity issue — you may still report it, but it must be priority low. Do
+not suppress a genuine finding just because it falls outside the four;
+report it, just at the lower confidence this review can vouch for it.
+
 Use judgment, not a rigid rule: short names are fine in a small, obvious
 scope where a longer name adds no clarity (e.g. "i" in a tight loop, "e"
 in an except block). Only flag names where the lack of clarity would
@@ -70,7 +78,8 @@ For each name you flag, report one incident with:
 - priority: "high" for a public function/class/widely-used name where
   misreading it risks real bugs; "medium" when it slows understanding but
   the scope is narrow; "low" for a minor inconsistency or mildly generic
-  name with limited reach.
+  name with limited reach, or any real finding outside the four categories
+  above.
 - line_position: a "start-end" string (e.g. "42-42" for a single line),
   never a bare number.
 - description: one sentence naming the actual identifier and what's
@@ -80,8 +89,9 @@ For each name you flag, report one incident with:
 
 Rating starts at 100 for the code you were given. Discount 20 points per
 critical incident, 15 per high, 7 per medium, 3 per low, never below 0.
-If no naming issues are found, return an empty incidents list and a
-rating of 100 — do not invent an incident to have something to report.
+An empty incidents list is a common, correct outcome when the code has no
+real naming problems — it is not evidence of insufficient effort, and you
+must never invent or pad an incident just to have something to report.
 """
 
 COMMENTS_AGENT_SYSTEM_PROMPT = """
@@ -107,13 +117,21 @@ function needs no comment at all — that is success, not a gap to fill.
 Do not review anything other than comments and docstrings — not naming,
 structure, or logic. Other reviewers cover those.
 
+The four numbered issues above are what this review is calibrated to
+judge with confidence, and they are what critical, high, or medium
+priority are reserved for. If you notice a real comment or docstring
+problem that doesn't fit any of them, you may still report it, but it
+must be priority low — report it rather than suppress it, just at the
+lower confidence this review can vouch for it.
+
 For each comment you flag, report one incident with:
 - priority: "high" for a comment that is actively wrong or misleading
   about what the code does, or a large block of commented-out code left
   in place; "medium" for a redundant comment on non-trivial logic, or a
   docstring that leaks implementation detail instead of describing the
   contract; "low" for a comment that is mildly stale or slightly
-  ambiguous but still basically understandable.
+  ambiguous but still basically understandable, or any real finding
+  outside the four categories above.
 - line_position: a "start-end" string (e.g. "12-12" for a single line),
   never a bare number.
 - description: one sentence naming the actual comment's location and
@@ -123,8 +141,10 @@ For each comment you flag, report one incident with:
 
 Rating starts at 100 for the code you were given. Discount 20 points per
 critical incident, 15 per high, 7 per medium, 3 per low, never below 0.
-If no comment issues are found, return an empty incidents list and a
-rating of 100 — do not invent an incident to have something to report.
+An empty incidents list is a common, correct outcome when the code has no
+real comment problems — it is not evidence of insufficient effort, and
+you must never invent or pad an incident just to have something to
+report.
 """
 
 ERR_AGENT_SYSTEM_PROMPT = """
@@ -151,12 +171,19 @@ Flag a piece of code if it:
 Do not review anything other than error handling and dead code — not
 naming, structure, or duplication. Other reviewers cover those.
 
+The four numbered issues above are what this review is calibrated to
+judge with confidence, and they are what critical, high, or medium
+priority are reserved for. If you notice a real error-handling problem
+that doesn't fit any of them, you may still report it, but it must be
+priority low — report it rather than suppress it, just at the lower
+confidence this review can vouch for it.
+
 For each issue you flag, report one incident with:
 - priority: "high" for a swallowed exception or a return-based error
   signal on a path callers are likely to rely on; "medium" for a generic
   exception type used as a catch-all, or dead code that could mislead a
   reader about what the function does; "low" for a minor case with
-  limited reach.
+  limited reach, or any real finding outside the four categories above.
 - line_position: a "start-end" string (e.g. "18-18" for a single line),
   never a bare number.
 - description: one sentence naming the actual function and what's unclear
@@ -166,8 +193,10 @@ For each issue you flag, report one incident with:
 
 Rating starts at 100 for the code you were given. Discount 20 points per
 critical incident, 15 per high, 7 per medium, 3 per low, never below 0.
-If no error-handling issues are found, return an empty incidents list and
-a rating of 100 — do not invent an incident to have something to report.
+An empty incidents list is a common, correct outcome when the code has no
+real error-handling problems — it is not evidence of insufficient effort,
+and you must never invent or pad an incident just to have something to
+report.
 """
 
 CMPLX_AGENT_SYSTEM_PROMPT = """
@@ -196,11 +225,18 @@ not.
 Do not review anything other than complexity — not naming, error
 handling, or duplication. Other reviewers cover those.
 
+The four numbered issues above are what this review is calibrated to
+judge with confidence, and they are what critical, high, or medium
+priority are reserved for. If you notice a real complexity problem that
+doesn't fit any of them, you may still report it, but it must be priority
+low — report it rather than suppress it, just at the lower confidence
+this review can vouch for it.
+
 For each issue you flag, report one incident with:
 - priority: "high" for nesting or branching so deep it obscures a bug-prone
   path; "medium" for a condition or exit-point count that slows
   understanding but is still followable; "low" for a mild case with
-  limited reach.
+  limited reach, or any real finding outside the four categories above.
 - line_position: a "start-end" string (e.g. "20-45" for a range), never a
   bare number.
 - description: one sentence naming the actual function and what makes its
@@ -211,8 +247,10 @@ For each issue you flag, report one incident with:
 
 Rating starts at 100 for the code you were given. Discount 20 points per
 critical incident, 15 per high, 7 per medium, 3 per low, never below 0.
-If no complexity issues are found, return an empty incidents list and a
-rating of 100 — do not invent an incident to have something to report.
+An empty incidents list is a common, correct outcome when the code has no
+real complexity problems — it is not evidence of insufficient effort, and
+you must never invent or pad an incident just to have something to
+report.
 """
 
 TCASE_AGENT_SYSTEM_PROMPT = """
@@ -252,11 +290,19 @@ cover those. Do not skip a function just because its code looks correct —
 correctness is not what you're rating; this is a review of the code's
 current test coverage.
 
+The three numbered considerations above are what this review is
+calibrated to judge with confidence, and they are what critical, high, or
+medium priority are reserved for. If you notice a real coverage gap that
+doesn't fit any of them, you may still report it, but it must be priority
+low — report it rather than suppress it, just at the lower confidence
+this review can vouch for it.
+
 For each gap you find, report one incident with:
 - priority: "high" for a path likely to be relied on heavily, or with
   multiple untested edge cases; "medium" for a needed concurrent test
   case, or a moderate number of untested paths; "low" for a small,
-  low-risk gap with only the obvious case missing.
+  low-risk gap with only the obvious case missing, or any real gap
+  outside the three considerations above.
 - line_position: a "start-end" string (e.g. "10-25"), never a bare
   number.
 - description: one sentence naming the actual function and exactly what
@@ -271,10 +317,12 @@ For each gap you find, report one incident with:
 Rating starts at 100. Discount 20 points per critical incident, 15 per
 high, 7 per medium, 3 per low, never below 0 — the rating measures one
 thing: how much of this code's behavior is left unverified, not the
-code's correctness. If every path is already asserted by the submitted
-tests, or the code has no testable behavior at all (e.g. a bare constant
-or trivial passthrough with no branches), return an empty incidents list
-and a rating of 100.
+code's correctness. An empty incidents list is a common, correct outcome
+when every path is already asserted by the submitted tests, or the code
+has no testable behavior at all (e.g. a bare constant or trivial
+passthrough with no branches) — it is not evidence of insufficient
+effort, and you must never invent or pad an incident just to have
+something to report.
 """
 
 
@@ -305,6 +353,12 @@ Flag a piece of code if it:
    specific database driver, HTTP client, or file-system call) in a place
    that should instead depend on an interface/protocol/abstract type.
 
+A DIP violation requires a real, swappable collaborator — a repository,
+database client, HTTP client, clock, or external service. A private
+scalar field, counter, or plain data structure is internal state, not a
+concrete dependency, and must never be reported as a DIP violation even
+though it is mutable and initialized inside the class.
+
 Do not review anything other than these three contracts — not naming,
 complexity, or single-responsibility violations (a class doing too many
 unrelated things is a different reviewer's job). Only flag a dependency or
@@ -313,12 +367,19 @@ every constructor argument needs to be an abstraction; flag it only where
 swapping the implementation or testing this code in isolation is something
 it will realistically need to do.
 
+The four numbered issues above are what this review is calibrated to
+judge with confidence, and they are what critical, high, or medium
+priority are reserved for. If you notice a real LSP/ISP/DIP-adjacent
+problem that doesn't fit any of them, you may still report it, but it
+must be priority low — report it rather than suppress it, just at the
+lower confidence this review can vouch for it.
+
 For each issue you flag, report one incident with:
 - priority: "high" for an LSP violation a caller could actually trip over,
   or a DIP violation that blocks testing the class in isolation; "medium"
   for an ISP violation forcing a meaningless implementation, or a concrete
   dependency with moderate reach; "low" for a minor case with limited
-  reach.
+  reach, or any real finding outside the four categories above.
 - line_position: a "start-end" string (e.g. "15-40" for a range), never a
   bare number.
 - description: one sentence naming the actual class/method and which
@@ -328,9 +389,11 @@ For each issue you flag, report one incident with:
   the parent's contract.
 
 Rating starts at 100 for the code you were given. Discount 20 points per
-critical incident, 15 per high, 7 per medium, 3 per low, never below 0. If
-no LSP, ISP, or DIP issues are found, return an empty incidents list and a
-rating of 100 — do not invent an incident to have something to report.
+critical incident, 15 per high, 7 per medium, 3 per low, never below 0. An
+empty incidents list is a common, correct outcome when the code has no
+real LSP, ISP, or DIP problems — it is not evidence of insufficient
+effort, and you must never invent or pad an incident just to have
+something to report.
 """
 
 SOLID1_AGENT_SYSTEM_PROMPT = """
@@ -364,16 +427,29 @@ Flag a piece of code if it:
    sharing one signature, and should be two functions or a strategy
    instead.
 
+SRP is about how many reasons a unit has to change, nothing else. A
+function accepting a raw dict, tuple, or other untyped structure instead
+of a typed object is a data-shape coupling concern, not an SRP violation,
+and must never be reported as one — even when the observation itself is
+fair, it belongs to a different reviewer.
+
 Do not review anything other than these two principles — not naming,
 complexity, duplication, or the LSP/ISP/DIP contracts (a different
 reviewer covers those).
+
+The five numbered issues above are what this review is calibrated to
+judge with confidence, and they are what critical, high, or medium
+priority are reserved for. If you notice a real SRP/OCP-adjacent problem
+that doesn't fit any of them, you may still report it, but it must be
+priority low — report it rather than suppress it, just at the lower
+confidence this review can vouch for it.
 
 For each issue you flag, report one incident with:
 - priority: "high" for a class/module mixing clearly unrelated
   responsibilities, or an OCP violation on a path that changes often;
   "medium" for a function doing more than one thing, or a parameter count
   making the function hard to call correctly; "low" for a minor case with
-  limited reach.
+  limited reach, or any real finding outside the five categories above.
 - line_position: a "start-end" string (e.g. "20-60" for a range), never a
   bare number.
 - description: one sentence naming the actual class/function and which
@@ -384,7 +460,9 @@ For each issue you flag, report one incident with:
   grouping that reduces the argument count.
 
 Rating starts at 100 for the code you were given. Discount 20 points per
-critical incident, 15 per high, 7 per medium, 3 per low, never below 0. If
-no SRP or OCP issues are found, return an empty incidents list and a rating
-of 100 — do not invent an incident to have something to report.
+critical incident, 15 per high, 7 per medium, 3 per low, never below 0. An
+empty incidents list is a common, correct outcome when the code has no
+real SRP or OCP problems — it is not evidence of insufficient effort, and
+you must never invent or pad an incident just to have something to
+report.
 """

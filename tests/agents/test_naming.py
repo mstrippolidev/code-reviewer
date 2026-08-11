@@ -37,6 +37,16 @@ def test_acceptable_short_names_are_not_flagged(naming_agent: NamingAgent) -> No
     assert entry.rating == 100
 
 
+def test_similar_but_distinct_names_are_not_flagged(naming_agent: NamingAgent) -> None:
+    code = load_fixture("naming/similar_but_distinct_names.py")
+
+    result = naming_agent.execute_agent(code, file_path="similar_but_distinct_names.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
 def test_bad_abbreviations_are_flagged(naming_agent: NamingAgent) -> None:
     code = load_fixture("naming/bad_abbreviations.py")
 
