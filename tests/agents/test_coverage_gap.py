@@ -6,18 +6,18 @@
 import pytest
 
 from code_reviewer.agents.coverage_gap import CoverageGapAgent
+from code_reviewer.agents.llm.base import LLMInterface
 from code_reviewer.schemas.paired import Pairing
 from code_reviewer.schemas.review import CodeKey
 from code_reviewer.schemas.submission import SubmittedFile
-from tests.conftest import SmallOllamaLLM
 from tests.helpers import load_fixture
 
 pytestmark = pytest.mark.llm
 
 
 @pytest.fixture
-def test_gap_agent() -> CoverageGapAgent:
-    return CoverageGapAgent(llm=SmallOllamaLLM(temperature=0.0))
+def test_gap_agent(small_llm: LLMInterface) -> CoverageGapAgent:
+    return CoverageGapAgent(llm=small_llm)
 
 
 def _pairing(source_name: str, test_name: str | None = None) -> Pairing:

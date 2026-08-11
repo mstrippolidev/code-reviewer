@@ -47,12 +47,15 @@ class LLMInterface(ABC, Generic[T]):
         """
             Build the bare chat model, with no structured-output binding.
         """
-        return init_chat_model(
-                    self._get_model_name(),
-                    temperature=self._temperature,
-                    model_provider=self._get_model_provider(),
-                    base_url=self._get_base_url(),
-                )
+        kwargs: dict[str, Any] = {
+            "temperature": self._temperature,
+            "model_provider": self._get_model_provider(),
+            "base_url": self._get_base_url(),
+        }
+        api_key = self._get_api_key()
+        if api_key is not None:
+            kwargs["api_key"] = api_key
+        return init_chat_model(self._get_model_name(), **kwargs)
 
 
     @abstractmethod
@@ -66,6 +69,11 @@ class LLMInterface(ABC, Generic[T]):
     @abstractmethod
     def _get_base_url(self) -> str:
         """Base URL of the provider's API."""
+
+    def _get_api_key(self) -> str | None:
+        """API key for the provider's API, or None when no auth is needed
+        (e.g. a local Ollama instance). Cloud providers override this."""
+        return None
 
     @abstractmethod
     def build_response_format(self, schema: type[T]) -> ResponseFormat[T]:

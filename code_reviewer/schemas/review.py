@@ -90,7 +90,12 @@ class AgentReviewEntry(BaseModel):
         description="Identity of the agent producing this review. Must match the agent's own key."
     )
     incidents: list[Incident] = Field(
-        description="All incidents this agent found in the file or chunk; empty if none."
+        description=(
+            "All incidents this agent found in the file or chunk. An empty "
+            "list is a common, fully valid response when the code has no "
+            "real issues — it is not evidence of insufficient effort. "
+            "Never invent or pad an incident just to return a non-empty list."
+        )
     )
 
 
