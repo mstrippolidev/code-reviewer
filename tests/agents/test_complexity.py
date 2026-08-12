@@ -5,7 +5,7 @@
 import pytest
 
 from code_reviewer.agents.complexity import ComplexityAgent
-from code_reviewer.schemas.review import CodeKey
+from code_reviewer.schemas.review import CodeKey, Priority
 from tests.helpers import load_fixture
 
 pytestmark = pytest.mark.llm
@@ -75,6 +75,58 @@ def test_high_cyclomatic_complexity_is_flagged(complexity_agent: ComplexityAgent
     entry = result.review[0]
     assert entry.incidents != []
     assert entry.rating < 100
+
+
+def test_guard_clause_style_is_not_flagged(complexity_agent: ComplexityAgent) -> None:
+    """Regression test: flat, top-level guard clauses are the preferred
+    alternative to nesting and must not be flagged for exit-point count."""
+    code = load_fixture("complexity/guard_clause_style.py")
+
+    result = complexity_agent.execute_agent(code, file_path="guard_clause_style.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+def test_high_priority_scenario_is_flagged_high(complexity_agent: ComplexityAgent) -> None:
+    code = load_fixture("complexity/priority_high.py")
+
+    result = complexity_agent.execute_agent(code, file_path="priority_high.py")
+
+    entry = result.review[0]
+    assert any(incident.priority == Priority.HIGH for incident in entry.incidents)
+
+
+def test_medium_priority_scenario_is_flagged_medium(complexity_agent: ComplexityAgent) -> None:
+    code = load_fixture("complexity/priority_medium.py")
+
+    result = complexity_agent.execute_agent(code, file_path="priority_medium.py")
+
+    entry = result.review[0]
+    assert any(incident.priority == Priority.MEDIUM for incident in entry.incidents)
+
+
+def test_low_priority_scenario_is_flagged_low(complexity_agent: ComplexityAgent) -> None:
+    code = load_fixture("complexity/priority_low.py")
+
+    result = complexity_agent.execute_agent(code, file_path="priority_low.py")
+
+    entry = result.review[0]
+    assert any(incident.priority == Priority.LOW for incident in entry.incidents)
+
+
+def test_out_of_scope_scenario_is_flagged_low(complexity_agent: ComplexityAgent) -> None:
+    """Using a raised/caught exception for ordinary control flow is a real
+    clarity problem outside CMPLX's four in-scope categories, so it must
+    still be reported, but only at priority low."""
+    code = load_fixture("complexity/priority_out_of_scope_low.py")
+
+    result = complexity_agent.execute_agent(code, file_path="priority_out_of_scope_low.py")
+
+    entry = result.review[0]
+    assert entry.incidents != []
+    assert all(incident.priority == Priority.LOW for incident in entry.incidents)
 
 
 def test_file_path_is_stamped_on_every_entry(complexity_agent: ComplexityAgent) -> None:
