@@ -1,22 +1,26 @@
 """
-    Complexity fixture: six exit points scattered across a guard, a loop,
-    and a trailing check, making it hard to know what state the function
-    leaves things in without tracing every branch.
+    Complexity fixture: six exit points scattered through nested branches
+    at different depths, each leaving `status` in a different, hard to
+    predict state — unlike a flat sequence of guard clauses, tracing which
+    exit fires requires holding the whole nested structure in mind at once.
 """
 
 
-def validate_and_process_order(order: dict) -> str:
-    if not order:
-        return "invalid: empty order"
-    if order.get("total", 0) <= 0:
-        return "invalid: non-positive total"
-
-    for item in order.get("items", []):
-        if item.get("quantity", 0) <= 0:
-            return "invalid: item quantity"
-        if item.get("price", 0) < 0:
-            return "invalid: item price"
-
-    if order.get("status") == "cancelled":
-        return "skipped: order cancelled"
-    return "processed"
+def process_transaction(transaction: dict) -> str:
+    status = "pending"
+    if transaction.get("amount", 0) > 0:
+        if transaction.get("currency") == "USD":
+            if transaction.get("verified"):
+                status = "approved"
+                return status
+            else:
+                for flag in transaction.get("flags", []):
+                    if flag == "suspicious":
+                        return "rejected"
+                return "under_review"
+        else:
+            return "unsupported_currency"
+    else:
+        if transaction.get("refund"):
+            return "refund_processed"
+        return "invalid_amount"

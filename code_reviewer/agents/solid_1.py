@@ -5,7 +5,7 @@
 
 from code_reviewer.agents.base import FileSizeAwareAgentBase
 from code_reviewer.agents.llm.base import LLMInterface
-from code_reviewer.prompts.templates import SOLID1_AGENT_SYSTEM_PROMPT
+from code_reviewer.prompts.agents.solid_1 import SOLID1_AGENT_SYSTEM_PROMPT
 from code_reviewer.schemas.review import CodeKey
 
 

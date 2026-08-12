@@ -1,9 +1,3 @@
-"""
-    Example of clean, well-named code. Shared "should not be flagged" fixture,
-    reusable across multiple agents' test suites, not just naming.
-"""
-
-
 def filter_active_subscribers(subscribers: list[dict]) -> list[dict]:
     return [subscriber for subscriber in subscribers if subscriber["is_active"]]
 

@@ -7,7 +7,7 @@ from guardrails.validators import register_validator
 
 from code_reviewer.agents.llm.base import LLMInterface
 from code_reviewer.guardrails.validators.base import BaseLLMValidator
-from code_reviewer.prompts.templates import PROMPT_INJECTION_SYSTEM_PROMPT
+from code_reviewer.prompts.intake import PROMPT_INJECTION_SYSTEM_PROMPT
 
 
 @register_validator(name="prompt-injection", data_type="string")

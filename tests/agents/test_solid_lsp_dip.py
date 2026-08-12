@@ -82,6 +82,50 @@ def test_file_path_is_stamped_on_every_entry(solid2_agent: SolidLspDipAgent) -> 
     assert all(entry.file_path == "lsp_violation.py" for entry in result.review)
 
 
+@pytest.mark.llm
+def test_high_priority_scenario_is_flagged_high(solid2_agent: SolidLspDipAgent) -> None:
+    code = load_fixture("solid2/priority_high.py")
+
+    result = solid2_agent.execute_agent(code, file_path="priority_high.py")
+
+    entry = result.review[0]
+    assert any(incident.priority == Priority.HIGH for incident in entry.incidents)
+
+
+@pytest.mark.llm
+def test_medium_priority_scenario_is_flagged_medium(solid2_agent: SolidLspDipAgent) -> None:
+    code = load_fixture("solid2/priority_medium.py")
+
+    result = solid2_agent.execute_agent(code, file_path="priority_medium.py")
+
+    entry = result.review[0]
+    assert any(incident.priority == Priority.MEDIUM for incident in entry.incidents)
+
+
+@pytest.mark.llm
+def test_low_priority_scenario_is_flagged_low(solid2_agent: SolidLspDipAgent) -> None:
+    code = load_fixture("solid2/priority_low.py")
+
+    result = solid2_agent.execute_agent(code, file_path="priority_low.py")
+
+    entry = result.review[0]
+    assert any(incident.priority == Priority.LOW for incident in entry.incidents)
+
+
+@pytest.mark.llm
+def test_out_of_scope_scenario_is_flagged_low(solid2_agent: SolidLspDipAgent) -> None:
+    """An isinstance check that special-cases a concrete subclass is
+    DIP-adjacent but outside SOLID2's four in-scope categories, so it must
+    still be reported, but only at priority low."""
+    code = load_fixture("solid2/priority_out_of_scope_low.py")
+
+    result = solid2_agent.execute_agent(code, file_path="priority_out_of_scope_low.py")
+
+    entry = result.review[0]
+    assert entry.incidents != []
+    assert all(incident.priority == Priority.LOW for incident in entry.incidents)
+
+
 def test_hard_limit_exceeded_short_circuits_without_an_llm_call(solid2_agent: SolidLspDipAgent) -> None:
     code = "x\n" * 900
 

@@ -8,7 +8,7 @@ import pytest
 from code_reviewer.agents.coverage_gap import CoverageGapAgent
 from code_reviewer.agents.llm.base import LLMInterface
 from code_reviewer.schemas.paired import Pairing
-from code_reviewer.schemas.review import CodeKey
+from code_reviewer.schemas.review import CodeKey, Priority
 from code_reviewer.schemas.submission import SubmittedFile
 from tests.helpers import load_fixture
 
@@ -71,6 +71,47 @@ def test_concurrent_state_without_concurrent_tests_is_flagged(test_gap_agent: Co
 
     entry = result.review[0]
     assert entry.incidents != []
+
+
+def test_high_priority_scenario_is_flagged_high(test_gap_agent: CoverageGapAgent) -> None:
+    pairing = _pairing("priority_high_source.py", "priority_high_test.py")
+
+    result = test_gap_agent.execute_agent(pairing.get_content(), file_path=pairing.source_file.file_path)
+
+    entry = result.review[0]
+    assert any(incident.priority == Priority.HIGH for incident in entry.incidents)
+
+
+def test_medium_priority_scenario_is_flagged_medium(test_gap_agent: CoverageGapAgent) -> None:
+    pairing = _pairing("priority_medium_source.py", "priority_medium_test.py")
+
+    result = test_gap_agent.execute_agent(pairing.get_content(), file_path=pairing.source_file.file_path)
+
+    entry = result.review[0]
+    assert any(incident.priority == Priority.MEDIUM for incident in entry.incidents)
+
+
+def test_low_priority_scenario_is_flagged_low(test_gap_agent: CoverageGapAgent) -> None:
+    pairing = _pairing("priority_low_source.py", "priority_low_test.py")
+
+    result = test_gap_agent.execute_agent(pairing.get_content(), file_path=pairing.source_file.file_path)
+
+    entry = result.review[0]
+    assert any(incident.priority == Priority.LOW for incident in entry.incidents)
+
+
+def test_out_of_scope_scenario_is_flagged_low(test_gap_agent: CoverageGapAgent) -> None:
+    """Vacuous assertions that exercise every path without verifying
+    anything are coverage-adjacent but outside TCASE's three in-scope
+    considerations, so they must still be reported, but only at priority
+    low."""
+    pairing = _pairing("priority_out_of_scope_low_source.py", "priority_out_of_scope_low_test.py")
+
+    result = test_gap_agent.execute_agent(pairing.get_content(), file_path=pairing.source_file.file_path)
+
+    entry = result.review[0]
+    assert entry.incidents != []
+    assert all(incident.priority == Priority.LOW for incident in entry.incidents)
 
 
 def test_file_path_is_stamped_from_the_source_file(test_gap_agent: CoverageGapAgent) -> None:
