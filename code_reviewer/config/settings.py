@@ -52,6 +52,8 @@ class Settings(BaseSettings):
 
     guardrails_api_key: str
 
+    max_batch_concurrency: int = 4
+
 
 @lru_cache
 def get_settings() -> Settings:
