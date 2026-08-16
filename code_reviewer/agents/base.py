@@ -9,6 +9,7 @@ from langchain.agents import create_agent
 from code_reviewer.agents.llm.base import LLMInterface
 from code_reviewer.agents.llm.middleware import retry_model, calculate_rating
 from code_reviewer.agents.llm.ollama import OllamaLLM
+from code_reviewer.config.settings import get_settings
 from code_reviewer.schemas.review import (
     AgentOutput,
     AgentReviewEntry,
@@ -54,10 +55,57 @@ class AgentBase:
         )
 
     def get_agent_key(self) -> CodeKey:
+        """Returns this agent's own CodeKey."""
         return self._code_agent
 
     def get_system_prompt(self) -> str:
+        """Returns this agent's review instructions."""
         return self._system_prompt
+
+    def execute_agent_batch(self, chunks: list[str], file_path: str | None = None) -> list[AgentOutput]:
+        """Review each given chunk and return this agent's structured
+        findings for every one, executed concurrently via LangChain's batch().
+
+        Args:
+            chunks: The source code chunks to review, one call per item.
+            file_path: Path of the file being reviewed, relative to the
+                repo root. Stamped onto every result, same as execute_agent.
+
+        Returns:
+            One AgentOutput per chunk, in the same order as chunks.
+
+        Raises:
+            AgentInvocationError: If any call fails or its output cannot
+                be validated against AgentOutput.
+        """
+        results = self._invoke_batch(chunks)
+        for result in results:
+            self._set_file_path_and_code_key(result, file_path)
+        return results
+
+    def _invoke_batch(self, chunks: list[str]) -> list[AgentOutput]:
+        """Run this agent's prompt against each chunk, one call per chunk,
+        executed concurrently instead of sequentially.
+
+        Args:
+            chunks: The source code chunks this agent is reviewing.
+
+        Returns:
+            One AgentOutput per chunk, in the same order as chunks.
+
+        Raises:
+            AgentInvocationError: If any call fails or its output cannot
+                be validated against AgentOutput.
+        """
+        payloads = [{"messages": [{"role": "user", "content": code}]} for code in chunks]
+        config = {"max_concurrency": get_settings().max_batch_concurrency}
+        try:
+            return [result["structured_response"] for result in self._agent.batch(payloads, config=config)]
+        except Exception as error:
+            logger.error("Agent %s failed to review the given code.", self._code_agent)
+            raise AgentInvocationError(
+                f"Agent {self._code_agent} failed to review the given code."
+            ) from error
 
     def execute_agent(self, code: str, file_path: str | None = None) -> AgentOutput:
         """Review the given code and return this agent's structured findings.
@@ -67,10 +115,16 @@ class AgentBase:
             file_path: Path of the file being reviewed, relative to the repo
                 root. Only meaningful for PR or whole-file reviews — leave
                 as None when reviewing a standalone snippet with no file.
+
+        Returns:
+            This agent's structured review of the given code.
+
+        Raises:
+            AgentInvocationError: If the LLM call fails or its output
+                cannot be validated against AgentOutput.
         """
         result = self._invoke(code)
-        self._set_file_path(result, file_path)
-        self._set_code_key(result)
+        self._set_file_path_and_code_key(result, file_path)
         return result
 
     def _invoke(self, code: str) -> AgentOutput:
@@ -78,6 +132,9 @@ class AgentBase:
 
         Args:
             code: The source code (or chunk) this agent is reviewing.
+
+        Returns:
+            This agent's structured review of the given code.
 
         Raises:
             AgentInvocationError: If the LLM call fails or its output
@@ -99,6 +156,11 @@ class AgentBase:
             raise AgentInvocationError(
                 f"Agent {self._code_agent} failed to review the given code."
             ) from error
+
+    def _set_file_path_and_code_key(self, result: AgentOutput, file_path: str | None) -> None:
+        """Stamps result with the caller-known file_path and this agent's own CodeKey."""
+        self._set_file_path(result, file_path)
+        self._set_code_key(result)
 
     def _set_file_path(self, result: AgentOutput, file_path: str | None) -> None:
         """Stamp every review entry with the caller-known file_path.
@@ -132,6 +194,20 @@ class FileSizeAwareAgentBase(AgentBase):
         file_path: str | None = None,
         size_status: SizeStatus = SizeStatus.NORMAL,
     ) -> AgentOutput:
+        """Review the given code, short-circuiting to a fixed rating-0
+        result instead of an LLM call when the file exceeds the hard limit.
+
+        Args:
+            code: The full file content to review.
+            file_path: Path of the file being reviewed, relative to the
+                repo root.
+            size_status: This file's size classification. Only
+                HARD_LIMIT_EXCEEDED changes behavior.
+
+        Returns:
+            This agent's structured review of the given code, or the fixed
+            hard-limit result when size_status is HARD_LIMIT_EXCEEDED.
+        """
         if size_status == SizeStatus.HARD_LIMIT_EXCEEDED:
             return self._hard_limit_result(code, file_path)
         return super().execute_agent(code, file_path)
