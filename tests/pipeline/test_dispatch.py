@@ -1,0 +1,237 @@
+"""
+    Tests for dispatch's own wiring — which agents get called, with what
+    content, and how chunked results get merged — for both the sequential
+    (review_file) and RunnableParallel-fanned-out (review_file_runnable)
+    dispatch strategies. Agents are faked so these exercise dispatch's
+    logic only, never a real LLM.
+"""
+from typing import Callable
+
+import pytest
+
+from code_reviewer.agents.registry import AgentsContainer
+from code_reviewer.pipeline.dispatch import review_file, review_file_runnable
+from code_reviewer.schemas.review import AgentOutput, AgentReviewEntry, CodeKey, Incident, Priority, SizeStatus
+from code_reviewer.schemas.submission import PreparedFile, SubmittedFile
+
+SOURCE_WITH_TWO_FUNCTIONS = "def foo():\n    return 1\n\n\ndef bar():\n    return 2\n"
+
+
+class FakeAgent:
+    """Stands in for AgentBase/FileSizeAwareAgentBase/CoverageGapAgent —
+    dispatch only ever calls get_agent_key/execute_agent/execute_agent_batch,
+    so a duck-typed fake is enough to isolate dispatch's own logic."""
+
+    def __init__(self, code_key: CodeKey, rating: int = 100, incidents: list[Incident] | None = None) -> None:
+        self._code_key = code_key
+        self._rating = rating
+        self._incidents = incidents or []
+        self.execute_agent_calls: list[tuple] = []
+        self.execute_agent_batch_calls: list[tuple] = []
+
+    def get_agent_key(self) -> CodeKey:
+        return self._code_key
+
+    def execute_agent(self, code: str, file_path: str | None = None, size_status: SizeStatus | None = None) -> AgentOutput:
+        self.execute_agent_calls.append((code, file_path, size_status))
+        entry = AgentReviewEntry(
+            file_path=file_path, code_key=self._code_key, rating=self._rating, incidents=list(self._incidents)
+        )
+        return AgentOutput(review=[entry])
+
+    def execute_agent_batch(self, chunks: list[str], file_path: str | None = None) -> list[AgentOutput]:
+        self.execute_agent_batch_calls.append((chunks, file_path))
+        return [
+            AgentOutput(
+                review=[
+                    AgentReviewEntry(
+                        file_path=file_path, code_key=self._code_key, rating=self._rating, incidents=list(self._incidents)
+                    )
+                ]
+            )
+            for _ in chunks
+        ]
+
+
+@pytest.fixture
+def file_agent() -> FakeAgent:
+    return FakeAgent(CodeKey.COH)
+
+
+@pytest.fixture
+def cmplx_agent() -> FakeAgent:
+    return FakeAgent(CodeKey.CMPLX)
+
+
+@pytest.fixture
+def var_agent() -> FakeAgent:
+    return FakeAgent(CodeKey.VAR)
+
+
+@pytest.fixture
+def tcase_agent() -> FakeAgent:
+    return FakeAgent(CodeKey.TCASE)
+
+
+@pytest.fixture
+def container(file_agent: FakeAgent, cmplx_agent: FakeAgent, var_agent: FakeAgent, tcase_agent: FakeAgent) -> AgentsContainer:
+    return AgentsContainer(
+        file_agents=[file_agent],
+        chunk_agents=[cmplx_agent, var_agent],
+        tcase_agent=tcase_agent,
+    )
+
+
+def _prepared_file(size_status: SizeStatus = SizeStatus.NORMAL, content: str = "x = 1\n") -> PreparedFile:
+    return PreparedFile(
+        source_file=SubmittedFile(file_path="f.py", content=content),
+        test_files=[],
+        size_status=size_status,
+    )
+
+
+DispatchFn = Callable[[PreparedFile, AgentsContainer], list[AgentReviewEntry]]
+DISPATCH_FUNCTIONS = pytest.mark.parametrize("dispatch", [review_file, review_file_runnable])
+
+
+@DISPATCH_FUNCTIONS
+def test_returns_one_entry_per_agent_for_a_normal_size_file(dispatch: DispatchFn, container: AgentsContainer) -> None:
+    entries = dispatch(_prepared_file(), container)
+
+    assert {entry.code_key for entry in entries} == {CodeKey.COH, CodeKey.CMPLX, CodeKey.VAR, CodeKey.TCASE}
+    assert len(entries) == 4
+
+
+@DISPATCH_FUNCTIONS
+def test_file_agent_receives_full_content_and_size_status(
+    dispatch: DispatchFn, container: AgentsContainer, file_agent: FakeAgent
+) -> None:
+    prepared = _prepared_file(size_status=SizeStatus.HARD_LIMIT_EXCEEDED, content="x = 1\n")
+
+    dispatch(prepared, container)
+
+    assert file_agent.execute_agent_calls == [("x = 1\n", "f.py", SizeStatus.HARD_LIMIT_EXCEEDED)]
+
+
+@DISPATCH_FUNCTIONS
+def test_chunk_agent_receives_whole_file_when_size_is_normal(
+    dispatch: DispatchFn, container: AgentsContainer, var_agent: FakeAgent
+) -> None:
+    prepared = _prepared_file(size_status=SizeStatus.NORMAL, content="x = 1\n")
+
+    dispatch(prepared, container)
+
+    assert var_agent.execute_agent_calls == [("x = 1\n", "f.py", None)]
+    assert var_agent.execute_agent_batch_calls == []
+
+
+@DISPATCH_FUNCTIONS
+def test_chunk_agent_is_split_and_batched_at_the_soft_limit(
+    dispatch: DispatchFn, container: AgentsContainer, var_agent: FakeAgent
+) -> None:
+    prepared = _prepared_file(size_status=SizeStatus.SOFT_LIMIT, content=SOURCE_WITH_TWO_FUNCTIONS)
+
+    dispatch(prepared, container)
+
+    assert var_agent.execute_agent_calls == []
+    assert len(var_agent.execute_agent_batch_calls) == 1
+    chunks, file_path = var_agent.execute_agent_batch_calls[0]
+    assert file_path == "f.py"
+    assert chunks == ["def foo():\n    return 1", "def bar():\n    return 2"]
+
+
+@DISPATCH_FUNCTIONS
+def test_chunked_incidents_are_offset_to_file_absolute_positions(dispatch: DispatchFn, container: AgentsContainer) -> None:
+    incident = Incident(priority=Priority.MEDIUM, line_position="1-1", description="d", advice="a")
+    container.chunk_agents[1]._incidents = [incident]  # var_agent
+    prepared = _prepared_file(size_status=SizeStatus.SOFT_LIMIT, content=SOURCE_WITH_TWO_FUNCTIONS)
+
+    entries = dispatch(prepared, container)
+
+    var_entry = next(entry for entry in entries if entry.code_key == CodeKey.VAR)
+    assert [incident.line_position for incident in var_entry.incidents] == ["1-1", "5-5"]
+
+
+@DISPATCH_FUNCTIONS
+def test_chunked_rating_is_recomputed_from_merged_incidents(dispatch: DispatchFn, container: AgentsContainer) -> None:
+    incident = Incident(priority=Priority.MEDIUM, line_position="1-1", description="d", advice="a")
+    container.chunk_agents[1]._incidents = [incident]  # var_agent, rating 100 on each individual chunk call
+    prepared = _prepared_file(size_status=SizeStatus.SOFT_LIMIT, content=SOURCE_WITH_TWO_FUNCTIONS)
+
+    entries = dispatch(prepared, container)
+
+    var_entry = next(entry for entry in entries if entry.code_key == CodeKey.VAR)
+    assert var_entry.rating == 100 - 7 - 7  # two chunks, one medium incident (-7) each
+
+
+@DISPATCH_FUNCTIONS
+def test_cmplx_gets_soft_limit_incident_appended_only_in_soft_limit_band(dispatch: DispatchFn, container: AgentsContainer) -> None:
+    normal_entries = dispatch(_prepared_file(size_status=SizeStatus.NORMAL), container)
+    soft_entries = dispatch(_prepared_file(size_status=SizeStatus.SOFT_LIMIT), container)
+
+    normal_cmplx = next(entry for entry in normal_entries if entry.code_key == CodeKey.CMPLX)
+    soft_cmplx = next(entry for entry in soft_entries if entry.code_key == CodeKey.CMPLX)
+    assert normal_cmplx.incidents == []
+    assert len(soft_cmplx.incidents) == 1
+    assert "soft limit" in soft_cmplx.incidents[0].description
+
+
+@DISPATCH_FUNCTIONS
+def test_tcase_receives_paired_source_and_test_content_not_raw_code(
+    dispatch: DispatchFn, container: AgentsContainer, tcase_agent: FakeAgent
+) -> None:
+    prepared = PreparedFile(
+        source_file=SubmittedFile(file_path="f.py", content="def foo(): ..."),
+        test_files=[SubmittedFile(file_path="test_f.py", content="def test_foo(): ...")],
+        size_status=SizeStatus.NORMAL,
+    )
+
+    dispatch(prepared, container)
+
+    content, file_path, _ = tcase_agent.execute_agent_calls[0]
+    assert "def foo(): ..." in content
+    assert "def test_foo(): ..." in content
+    assert file_path == "f.py"
+
+
+@DISPATCH_FUNCTIONS
+def test_tcase_states_no_test_file_was_submitted_when_none_paired(
+    dispatch: DispatchFn, container: AgentsContainer, tcase_agent: FakeAgent
+) -> None:
+    dispatch(_prepared_file(), container)
+
+    content, _, _ = tcase_agent.execute_agent_calls[0]
+    assert "No test file was submitted" in content
+
+
+@DISPATCH_FUNCTIONS
+def test_tcase_is_never_chunked_even_at_hard_limit(
+    dispatch: DispatchFn, container: AgentsContainer, tcase_agent: FakeAgent
+) -> None:
+    prepared = _prepared_file(size_status=SizeStatus.HARD_LIMIT_EXCEEDED, content=SOURCE_WITH_TWO_FUNCTIONS)
+
+    dispatch(prepared, container)
+
+    assert len(tcase_agent.execute_agent_calls) == 1
+    assert tcase_agent.execute_agent_batch_calls == []
+
+
+def _comparable(entries: list[AgentReviewEntry]) -> list[tuple]:
+    """Reduces entries to (code_key, rating, incident positions) tuples,
+    sorted by code_key, so two dispatch strategies' outputs can be
+    compared regardless of branch execution order."""
+    signatures = [
+        (entry.code_key, entry.rating, [incident.line_position for incident in entry.incidents]) for entry in entries
+    ]
+    return sorted(signatures, key=lambda signature: signature[0].value)
+
+
+def test_review_file_and_review_file_runnable_produce_equivalent_results(container: AgentsContainer) -> None:
+    incident = Incident(priority=Priority.HIGH, line_position="1-1", description="d", advice="a")
+    container.chunk_agents[1]._incidents = [incident]  # var_agent
+    prepared = _prepared_file(size_status=SizeStatus.SOFT_LIMIT, content=SOURCE_WITH_TWO_FUNCTIONS)
+
+    sequential = review_file(prepared, container)
+    parallel = review_file_runnable(prepared, container)
+
+    assert _comparable(sequential) == _comparable(parallel)

@@ -3,14 +3,17 @@
     agents' work into per-function/class pieces once the file is too
     large for a single call.
 """
+from langchain_core.runnables import RunnableLambda, RunnableParallel
+
 from code_reviewer.agents.base import AgentBase, FileSizeAwareAgentBase
 from code_reviewer.agents.coverage_gap import CoverageGapAgent
 from code_reviewer.agents.llm.middleware import PRIORITY_DISCOUNTS
 from code_reviewer.agents.registry import AgentsContainer
+from code_reviewer.config.settings import get_settings
 from code_reviewer.pipeline.code_splitter.interface import CodeChunk, CodeSplitterInterface
 from code_reviewer.pipeline.code_splitter.python import PythonCodeSplit
 from code_reviewer.schemas.paired import Pairing
-from code_reviewer.schemas.review import AgentReviewEntry, CodeKey, Incident, Priority, SizeStatus
+from code_reviewer.schemas.review import AgentOutput, AgentReviewEntry, CodeKey, Incident, Priority, SizeStatus
 from code_reviewer.schemas.submission import PreparedFile
 
 _CHUNKED_SIZE_STATUSES = (SizeStatus.SOFT_LIMIT, SizeStatus.HARD_LIMIT_EXCEEDED)
@@ -55,6 +58,21 @@ def _run_file_agents(
     ]
 
 
+def _run_chunk_agent(
+    agent: AgentBase,
+    ctx: dict[str, str | SizeStatus],
+    splitter: CodeSplitterInterface,
+) -> AgentReviewEntry:
+    """Runs one chunk agent on a shared context, splitting into per-
+    function/class chunks once the file is at or past the soft size limit."""
+    size_status = ctx["size_status"]
+    if size_status not in _CHUNKED_SIZE_STATUSES:
+        return agent.execute_agent(ctx["code"], ctx["file_path"]).review[0]
+
+    code_chunks = splitter.split_code(ctx["code"])
+    return _run_chunked_agent(agent, ctx["file_path"], code_chunks)
+
+
 def _run_chunk_agents(
     prepared_file: PreparedFile,
     chunk_agents: list[AgentBase],
@@ -69,11 +87,11 @@ def _run_chunk_agents(
     code_chunks = splitter.split_code(source.content)
     return [_run_chunked_agent(agent, source.file_path, code_chunks) for agent in chunk_agents]
 
+
 def _get_chunks(chunks: list[CodeChunk]) -> list[str]:
-    """
-        Convert code chunk to list of str
-    """
+    """Converts code chunks to their raw text, in source order."""
     return [chunk.code for chunk in chunks]
+
 
 def _run_chunked_agent(agent: AgentBase, file_path: str, chunks: list[CodeChunk]) -> AgentReviewEntry:
     """Runs one chunk agent across every chunk, merging the results into
@@ -158,3 +176,72 @@ def _soft_limit_incident(content: str) -> Incident:
         ),
         advice="Split this file into smaller modules under 500 lines each, grouped by responsibility.",
     )
+
+
+def review_file_runnable(
+    prepared_file: PreparedFile,
+    agents_container: AgentsContainer,
+    splitter: CodeSplitterInterface | None = None,
+) -> list[AgentReviewEntry]:
+    """Dispatches a prepared file to every built agent, fanned out
+    concurrently via a single RunnableParallel instead of sequential calls.
+
+    Args:
+        prepared_file: A file that already passed every pipeline guard,
+            paired with its test files and classified by size.
+        agents_container: The complete set of built agents, grouped for
+            dispatch.
+        splitter: Splits chunk agents' work into per-function/class
+            pieces once the file is too large for one call. Defaults to
+            PythonCodeSplit() — this codebase is Python-only today.
+
+    Returns:
+        One AgentReviewEntry per agent that reviewed this file.
+    """
+    splitter = splitter or PythonCodeSplit()
+    pairing = Pairing(source_file=prepared_file.source_file, test_files=prepared_file.test_files)
+    context = {
+        "code": prepared_file.source_file.content,
+        "file_path": prepared_file.source_file.file_path,
+        "size_status": prepared_file.size_status,
+    }
+    branches = (
+        {agent.get_agent_key().value: _file_agent_branch(agent) for agent in agents_container.file_agents}
+        | {agent.get_agent_key().value: _chunk_agent_branch(agent, splitter) for agent in agents_container.chunk_agents}
+        | {"TCASE": _tcase_branch(agents_container.tcase_agent, pairing.get_content())}
+    )
+    config = {"max_concurrency": get_settings().max_dispatch_concurrency}
+    results = RunnableParallel(branches).invoke(context, config=config)
+    entries = _unpack_runnable_results(results)
+    _apply_cmplx_soft_limit_incident(entries, prepared_file)
+    return entries
+
+
+def _file_agent_branch(agent: FileSizeAwareAgentBase) -> RunnableLambda:
+    """Builds a branch that runs one file agent against the shared context."""
+    return RunnableLambda(lambda ctx: agent.execute_agent(ctx["code"], ctx["file_path"], ctx["size_status"]))
+
+
+def _chunk_agent_branch(agent: AgentBase, splitter: CodeSplitterInterface) -> RunnableLambda:
+    """Builds a branch that runs one chunk agent against the shared context."""
+    return RunnableLambda(lambda ctx: _run_chunk_agent(agent, ctx, splitter))
+
+
+def _tcase_branch(agent: CoverageGapAgent, pairing_content: str) -> RunnableLambda:
+    """Builds a branch that runs TCASE against its own paired content,
+    ignoring the shared context's raw source code."""
+    return RunnableLambda(lambda ctx: agent.execute_agent(pairing_content, ctx["file_path"]))
+
+
+def _unpack_runnable_results(results: dict[str, AgentOutput | AgentReviewEntry]) -> list[AgentReviewEntry]:
+    """Extracts one AgentReviewEntry per branch from a RunnableParallel
+    result. File agent and TCASE branches return a raw AgentOutput
+    (unwrapped here); chunk agent branches already return an unwrapped
+    AgentReviewEntry, since chunked ones are merged from multiple calls."""
+    entries = []
+    for result in results.values():
+        if isinstance(result, AgentOutput):
+            entries.append(result.review[0])
+        else:
+            entries.append(result)
+    return entries
