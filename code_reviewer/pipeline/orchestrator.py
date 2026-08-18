@@ -3,14 +3,16 @@
     It orchestrates the intake screen, file selection, and per-file pipeline run and
     call the agents for each.
 """
+from code_reviewer.agents.registry import AgentsContainer
 from code_reviewer.guardrails.errors import IntakeRejectedError
 from code_reviewer.guardrails.intake_screen import run_intake_screen
+from code_reviewer.pipeline.dispatch import review_file_runnable
 from code_reviewer.pipeline.errors import FileTooLargeError, SubmissionTooLargeError
 from code_reviewer.pipeline.file_size import run_file_size_guard
 from code_reviewer.pipeline.pr_file_selection import select_pr_files
 from code_reviewer.pipeline.raw_character_guard import run_raw_character_guard
 from code_reviewer.pipeline.test_file_pairing import pair_source_files_with_tests
-from code_reviewer.schemas.review import SizeStatus, SkippedFile
+from code_reviewer.schemas.review import AgentReviewEntry, SizeStatus, SkippedFile
 from code_reviewer.schemas.submission import PreparedFile, SubmittedFile
 
 _SKIP_REASONS = {
@@ -18,6 +20,30 @@ _SKIP_REASONS = {
     FileTooLargeError: "file_too_large",
     IntakeRejectedError: "intake_rejected",
 }
+
+
+def review_submission(
+    files: list[SubmittedFile], agents_container: AgentsContainer
+) -> tuple[list[AgentReviewEntry], list[SkippedFile]]:
+    """Runs the full pipeline end to end: guards, dispatch, per prepared
+    file — the single entry point from a raw submission to agent results.
+
+    Args:
+        files: Every file in the submission, source and test alike.
+        agents_container: The complete set of built agents, grouped for
+            dispatch. Built once by the caller and reused across requests.
+
+    Returns:
+        Every AgentReviewEntry produced across every prepared file, and
+        every file skipped along the way with its reason.
+    """
+    prepared_files, skipped_files = prepare_files_for_pipeline(files)
+    entries = [
+        entry
+        for prepared_file in prepared_files
+        for entry in review_file_runnable(prepared_file, agents_container)
+    ]
+    return entries, skipped_files
 
 
 def prepare_files_for_pipeline(files: list[SubmittedFile]) -> tuple[list[PreparedFile], list[SkippedFile]]:
