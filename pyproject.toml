@@ -16,7 +16,8 @@ dependencies = [
     "langchain-openrouter (>=0.2.7,<0.3.0)",
     "llama-index-core (>=0.14.23,<0.15.0)",
     "llama-index-vector-stores-postgres (>=0.8.1,<0.9.0)",
-    "llama-index-embeddings-ollama (>=0.9.0,<0.10.0)"
+    "llama-index-embeddings-ollama (>=0.9.0,<0.10.0)",
+    "tree-sitter-language-pack (>=1.14.3,<2.0.0)"
 ]
 
 

@@ -28,23 +28,27 @@ def _build_connection_url(drivername: str) -> URL:
 
 def create_vector_store_instance(
     embedding: EmbeddingInterface | None = None,
+    schema_name: str = "code_reviewer",
 ) -> PGVectorStore:
     """Build the PGVectorStore the RAG layer reads and writes through.
 
     Args:
         embedding: Provider whose embed_dim sizes the store's vector
             column. Defaults to the local Ollama provider.
+        schema_name: Postgres schema to connect to. Defaults to the
+            production "code_reviewer" schema; integration tests override
+            this to an isolated schema so they never touch real data.
 
     Returns:
-        A PGVectorStore connected to the code_reviewer schema, with
-        repo_id and owner_id indexed for tenant-scoped filtering.
+        A PGVectorStore connected to the given schema, with repo_id and
+        owner_id indexed for tenant-scoped filtering.
     """
     embedding = embedding or OllamaEmbeddingProvider()
     return PGVectorStore.from_params(
         connection_string=_build_connection_url("postgresql+psycopg2"),
         async_connection_string=_build_connection_url("postgresql+asyncpg"),
         table_name="code_embeddings",
-        schema_name="code_reviewer",
+        schema_name=schema_name,
         embed_dim=embedding.embed_dim,
         indexed_metadata_keys={("repo_id", "text"), ("owner_id", "text")},
         use_jsonb=True,
