@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from llama_index.core import Document
+from llama_index.core import Document, VectorStoreIndex
 from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.node_parser.text.code import CodeSplitter
 from llama_index.core.schema import BaseNode
@@ -19,6 +19,7 @@ from code_reviewer.rag.errors import (
     FileEmbeddingError,
     RepoOwnerRequiredError,
     VectorStoreDeletionError,
+    VectorStoreQueryError,
     VectorStoreWriteError,
 )
 from code_reviewer.rag.vector_store import create_vector_store_instance
@@ -41,6 +42,15 @@ class RepoData:
     owner_id: str | None = None
 
 
+@dataclass
+class SimilarChunk:
+    """One indexed chunk returned by find_similar."""
+
+    file_path: str
+    text: str
+    score: float
+
+
 class LlamaIndexRagManager:
     """Keeps one repo's indexed code corpus in sync with its current file content."""
 
@@ -56,6 +66,17 @@ class LlamaIndexRagManager:
         self._embedding = embedding or OllamaEmbeddingProvider()
         self._vector_store = vector_store or create_vector_store_instance(embedding=self._embedding)
         self._pipeline = pipeline or self._build_default_pipeline()
+        self._index: VectorStoreIndex | None = None
+
+    def _get_index(self) -> VectorStoreIndex:
+        """Build the retrieval-side VectorStoreIndex on first.
+        """
+        if self._index is None:
+            self._index = VectorStoreIndex.from_vector_store(
+                vector_store=self._vector_store,
+                embed_model=self._embedding.create_embedding_model(),
+            )
+        return self._index
 
     def _build_default_pipeline(self) -> IngestionPipeline:
         """Build the real split-and-embed pipeline used outside of tests."""
@@ -64,10 +85,6 @@ class LlamaIndexRagManager:
 
     def index_file(self, repo_data: RepoData, file_path: str, content: str) -> None:
         """Replace one file's indexed chunks with freshly embedded ones from its current content.
-
-        Splits and embeds the new content before deleting anything, so a
-        failure during embedding never leaves the file with no indexed
-        chunks at all.
 
         Raises:
             RepoOwnerRequiredError: If repo_data has no owner_id.
@@ -133,16 +150,17 @@ class LlamaIndexRagManager:
             logger.exception("Failed to delete existing chunks for %r in repo %r", file_path, repo_id)
             raise VectorStoreDeletionError(f"Failed to delete existing chunks for {file_path!r}") from error
 
-    def _scope_filters(self, repo_id: str, file_path: str | None = None) -> MetadataFilters:
-        """Build the repo_id (or repo_id + file_path) filter every scoped operation uses.
-
-        Both filters always combine with AND: matching every chunk in the
-        repo when file_path is omitted, or exactly one file's chunks when
-        it isn't.
+    def _scope_filters(
+        self, repo_id: str, file_path: str | None = None, owner_id: str | None = None
+    ) -> MetadataFilters:
+        """Build the repo_id filter every scoped operation uses, narrowed by
+        file_path and/or owner_id when given.
         """
         filters = [MetadataFilter(key="repo_id", value=repo_id)]
         if file_path:
             filters.append(MetadataFilter(key="file_path", value=file_path))
+        if owner_id:
+            filters.append(MetadataFilter(key='owner_id', value=owner_id))
 
         return MetadataFilters(filters=filters, condition=FilterCondition.AND)
 
@@ -157,3 +175,25 @@ class LlamaIndexRagManager:
         except Exception as error:
             logger.exception("Failed to delete all chunks for repo %r", repo_id)
             raise VectorStoreDeletionError(f"Failed to delete chunks for repo {repo_id!r}") from error
+
+    def find_similar(self, repo_data: RepoData, query: str, top_k: int = 5) -> list[SimilarChunk]:
+        """Find the top_k indexed chunks most similar to query, scoped to repo_data's repo/owner.
+
+        Raises:
+            VectorStoreQueryError: If embedding the query or querying the
+                vector store fails.
+        """
+        retriever = self._get_index().as_retriever(
+            similarity_top_k=top_k,
+            filters=self._scope_filters(repo_data.repo_id, owner_id=repo_data.owner_id),
+        )
+        try:
+            nodes = retriever.retrieve(query)
+        except Exception as error:
+            logger.exception("Similarity search failed for repo %r", repo_data.repo_id)
+            raise VectorStoreQueryError(f"Similarity search failed for repo {repo_data.repo_id!r}") from error
+
+        return [
+            SimilarChunk(file_path=node.node.metadata["file_path"], text=node.node.get_content(), score=node.get_score())
+            for node in nodes
+        ]

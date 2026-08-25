@@ -17,3 +17,6 @@ class VectorStoreDeletionError(Exception):
 
 class VectorStoreWriteError(Exception):
     """Raised when writing embedded chunks to the vector store fails."""
+
+class VectorStoreQueryError(Exception):
+    """Raised when a similarity search against the vector store fails."""

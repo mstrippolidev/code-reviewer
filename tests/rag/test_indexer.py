@@ -5,19 +5,23 @@
 from collections.abc import Iterator
 
 from llama_index.core import Document
+from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.schema import BaseNode, TextNode
 from llama_index.core.vector_stores import FilterCondition, MetadataFilter, MetadataFilters
+from llama_index.core.vector_stores.types import VectorStoreQuery, VectorStoreQueryResult
 from llama_index.vector_stores.postgres import PGVectorStore
 import pytest
 import sqlalchemy
 
+from code_reviewer.rag.embedding.base import EmbeddingInterface
 from code_reviewer.rag.errors import (
     FileEmbeddingError,
     RepoOwnerRequiredError,
     VectorStoreDeletionError,
+    VectorStoreQueryError,
     VectorStoreWriteError,
 )
-from code_reviewer.rag.indexer import LlamaIndexRagManager, RepoData
+from code_reviewer.rag.indexer import LlamaIndexRagManager, RepoData, SimilarChunk
 from code_reviewer.rag.vector_store import create_vector_store_instance
 
 INTEGRATION_TEST_SCHEMA = "code_reviewer_test"
@@ -78,6 +82,61 @@ class _RecordingPipeline(_StubPipeline):
 
 def _build_manager(pipeline: _StubPipeline, vector_store: _RecordingVectorStore) -> LlamaIndexRagManager:
     return LlamaIndexRagManager(vector_store=vector_store, embedding=None, pipeline=pipeline)
+
+
+class _FakeEmbeddingModel(BaseEmbedding):
+    def _get_query_embedding(self, query: str) -> list[float]:
+        return [0.1, 0.2]
+
+    def _get_text_embedding(self, text: str) -> list[float]:
+        return [0.1, 0.2]
+
+    async def _aget_query_embedding(self, query: str) -> list[float]:
+        return [0.1, 0.2]
+
+
+class _FakeEmbeddingProvider(EmbeddingInterface):
+    def create_embedding_model(self) -> BaseEmbedding:
+        return _FakeEmbeddingModel()
+
+    @property
+    def embed_dim(self) -> int:
+        return 2
+
+
+class _QueryableVectorStore:
+    """Fake vector store satisfying the surface VectorStoreIndex.as_retriever()
+    needs, recording the query it received and returning a canned result."""
+
+    stores_text = True
+    is_embedding_query = True
+
+    def __init__(self, result: VectorStoreQueryResult | None = None, query_error: Exception | None = None) -> None:
+        self._result = result or VectorStoreQueryResult(nodes=[], similarities=[], ids=[])
+        self._query_error = query_error
+        self.received_query: VectorStoreQuery | None = None
+
+    def query(self, query: VectorStoreQuery, **kwargs: object) -> VectorStoreQueryResult:
+        self.received_query = query
+        if self._query_error is not None:
+            raise self._query_error
+        return self._result
+
+    def add(self, nodes: list[BaseNode]) -> list[str]:
+        return []
+
+    def delete(self, ref_doc_id: str, **kwargs: object) -> None:
+        pass
+
+    @property
+    def client(self) -> None:
+        return None
+
+
+def _build_manager_for_find_similar(vector_store: _QueryableVectorStore) -> LlamaIndexRagManager:
+    return LlamaIndexRagManager(
+        vector_store=vector_store, embedding=_FakeEmbeddingProvider(), pipeline=_StubPipeline()
+    )
 
 
 def test_index_file_with_no_owner_id_raises_repo_owner_required_error() -> None:
@@ -221,6 +280,62 @@ def test_delete_repo_when_vector_store_raises_wraps_in_vector_store_deletion_err
         manager.delete_repo("repo-1")
 
 
+def test_find_similar_scopes_the_query_to_repo_id_and_owner_id() -> None:
+    """Verify the query sent to the vector store filters on repo_id AND
+    owner_id, not repo_id alone."""
+    vector_store = _QueryableVectorStore()
+    manager = _build_manager_for_find_similar(vector_store)
+    repo_data = RepoData(repo_id="repo-1", commit_sha="sha-1", owner_id="owner-1")
+
+    manager.find_similar(repo_data, "def add(a, b): return a + b")
+
+    expected_filters = MetadataFilters(
+        filters=[
+            MetadataFilter(key="repo_id", value="repo-1"),
+            MetadataFilter(key="owner_id", value="owner-1"),
+        ],
+        condition=FilterCondition.AND,
+    )
+    assert vector_store.received_query.filters == expected_filters
+
+
+def test_find_similar_passes_top_k_as_similarity_top_k() -> None:
+    """Verify a custom top_k reaches the vector store as similarity_top_k."""
+    vector_store = _QueryableVectorStore()
+    manager = _build_manager_for_find_similar(vector_store)
+    repo_data = RepoData(repo_id="repo-1", commit_sha="sha-1", owner_id="owner-1")
+
+    manager.find_similar(repo_data, "def add(a, b): return a + b", top_k=8)
+
+    assert vector_store.received_query.similarity_top_k == 8
+
+
+def test_find_similar_maps_query_results_to_similar_chunks() -> None:
+    """Verify each returned node becomes a SimilarChunk with its file_path,
+    text, and score."""
+    node = TextNode(text="def add(a, b): return a + b", metadata={"file_path": "math_ops.py"})
+    result = VectorStoreQueryResult(nodes=[node], similarities=[0.87], ids=[node.node_id])
+    vector_store = _QueryableVectorStore(result=result)
+    manager = _build_manager_for_find_similar(vector_store)
+    repo_data = RepoData(repo_id="repo-1", commit_sha="sha-1", owner_id="owner-1")
+
+    chunks = manager.find_similar(repo_data, "def add(a, b): return a + b")
+
+    assert chunks == [
+        SimilarChunk(file_path="math_ops.py", text="def add(a, b): return a + b", score=0.87)
+    ]
+
+
+def test_find_similar_when_vector_store_raises_wraps_in_vector_store_query_error() -> None:
+    """Verify a failed query surfaces as VectorStoreQueryError."""
+    vector_store = _QueryableVectorStore(query_error=RuntimeError("connection reset"))
+    manager = _build_manager_for_find_similar(vector_store)
+    repo_data = RepoData(repo_id="repo-1", commit_sha="sha-1", owner_id="owner-1")
+
+    with pytest.raises(VectorStoreQueryError):
+        manager.find_similar(repo_data, "def add(a, b): return a + b")
+
+
 @pytest.fixture
 def integration_vector_store() -> Iterator[PGVectorStore]:
     """Real PGVectorStore pointed at an isolated test schema, never the
@@ -292,3 +407,33 @@ def test_index_file_replaces_rather_than_duplicates_existing_chunks(
         ).scalar()
 
     assert stored_row_count == 1
+
+
+@pytest.mark.db
+@pytest.mark.llm
+def test_find_similar_returns_the_indexed_chunk_for_matching_repo_and_owner(
+    integration_manager: LlamaIndexRagManager,
+) -> None:
+    """Verify find_similar's real embedding + query path returns a chunk
+    indexed under the same repo_id and owner_id."""
+    repo_data = RepoData(repo_id=INTEGRATION_TEST_REPO_ID, commit_sha="abc123", owner_id="owner-1")
+    integration_manager.index_file(repo_data, "math_ops.py", "def add(a, b):\n    return a + b\n")
+
+    chunks = integration_manager.find_similar(repo_data, "def add(a, b):\n    return a + b\n")
+
+    assert any(chunk.file_path == "math_ops.py" for chunk in chunks)
+
+
+@pytest.mark.db
+@pytest.mark.llm
+def test_find_similar_excludes_chunks_indexed_under_a_different_owner_id(
+    integration_manager: LlamaIndexRagManager,
+) -> None:
+    """Verify owner_id is enforced as a query filter, not just repo_id."""
+    indexed_repo_data = RepoData(repo_id=INTEGRATION_TEST_REPO_ID, commit_sha="abc123", owner_id="owner-1")
+    integration_manager.index_file(indexed_repo_data, "math_ops.py", "def add(a, b):\n    return a + b\n")
+    other_owner_repo_data = RepoData(repo_id=INTEGRATION_TEST_REPO_ID, commit_sha="abc123", owner_id="owner-2")
+
+    chunks = integration_manager.find_similar(other_owner_repo_data, "def add(a, b):\n    return a + b\n")
+
+    assert chunks == []
