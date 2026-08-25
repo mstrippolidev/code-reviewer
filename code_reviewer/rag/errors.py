@@ -20,3 +20,23 @@ class VectorStoreWriteError(Exception):
 
 class VectorStoreQueryError(Exception):
     """Raised when a similarity search against the vector store fails."""
+
+
+class StructuralHashError(Exception):
+    """Raised when a code chunk cannot be parsed to compute its structural hash."""
+
+
+class StructuralIndexChunkingError(Exception):
+    """Raised when a file cannot be split into chunks for structural hashing."""
+
+
+class StructuralIndexWriteError(Exception):
+    """Raised when writing structural hashes to the index fails."""
+
+
+class StructuralIndexDeletionError(Exception):
+    """Raised when removing existing structural hashes from the index fails."""
+
+
+class StructuralIndexQueryError(Exception):
+    """Raised when an exact-hash lookup against the structural index fails."""

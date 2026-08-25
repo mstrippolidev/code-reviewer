@@ -11,7 +11,7 @@ from code_reviewer.rag.embedding.ollama import OllamaEmbeddingProvider
 settings = get_settings()
 
 
-def _build_connection_url(drivername: str) -> URL:
+def build_connection_url(drivername: str) -> URL:
     """Build a connection URL via SQLAlchemy's URL object rather than a raw
     f-string, so reserved characters in the password (e.g. '@') are encoded
     correctly instead of corrupting the host/credential split.
@@ -45,8 +45,8 @@ def create_vector_store_instance(
     """
     embedding = embedding or OllamaEmbeddingProvider()
     return PGVectorStore.from_params(
-        connection_string=_build_connection_url("postgresql+psycopg2"),
-        async_connection_string=_build_connection_url("postgresql+asyncpg"),
+        connection_string=build_connection_url("postgresql+psycopg2"),
+        async_connection_string=build_connection_url("postgresql+asyncpg"),
         table_name="code_embeddings",
         schema_name=schema_name,
         embed_dim=embedding.embed_dim,

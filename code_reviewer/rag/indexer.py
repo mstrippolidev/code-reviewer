@@ -22,6 +22,7 @@ from code_reviewer.rag.errors import (
     VectorStoreQueryError,
     VectorStoreWriteError,
 )
+from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.rag.vector_store import create_vector_store_instance
 
 logger = logging.getLogger(__name__)
@@ -31,15 +32,6 @@ class _DocumentPipeline(Protocol):
     """Contract for whatever splits and embeds documents into storable nodes."""
 
     def run(self, documents: list[Document]) -> list[BaseNode]: ...
-
-
-@dataclass
-class RepoData:
-    """Scoping and provenance shared by every file indexed from one commit of a repo."""
-
-    repo_id: str
-    commit_sha: str
-    owner_id: str | None = None
 
 
 @dataclass
