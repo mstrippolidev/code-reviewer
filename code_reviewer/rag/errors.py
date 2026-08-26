@@ -40,3 +40,11 @@ class StructuralIndexDeletionError(Exception):
 
 class StructuralIndexQueryError(Exception):
     """Raised when an exact-hash lookup against the structural index fails."""
+
+
+class DryMatchingChunkingError(Exception):
+    """Raised when a file cannot be split into chunks for duplicate matching."""
+
+
+class ChunkExplanationError(Exception):
+    """Raised when generating a code chunk's short explanation fails."""

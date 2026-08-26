@@ -17,7 +17,7 @@ from code_reviewer.rag.errors import (
     StructuralIndexWriteError,
 )
 from code_reviewer.rag.repo_data import RepoData
-from code_reviewer.rag.structural_clone import compute_structural_hash
+from code_reviewer.rag.structural_hash import compute_structural_hash
 from code_reviewer.rag.vector_store import build_connection_url
 
 
@@ -51,7 +51,7 @@ def _build_table(metadata: MetaData) -> Table:
     )
 
 
-class StructuralCloneIndex:
+class StructuralHashStore:
     """Keeps one repo's per-function structural hashes in sync with its
     current file content, for exact-match Type-1/2/3 clone lookups.
     """

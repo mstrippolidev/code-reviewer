@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     ollama_base_url: str
     ollama_llm_model: str
     ollama_embed_model: str
+    ollama_code_embed_model: str
 
     openrouter_api_key: str
     openrouter_model: str
