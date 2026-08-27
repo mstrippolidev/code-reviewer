@@ -10,7 +10,7 @@ from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.vector_stores.postgres import PGVectorStore
 
 from code_reviewer.rag.embedding.base import EmbeddingInterface
-from code_reviewer.rag.embedding.ollama import OllamaEmbeddingProvider
+from code_reviewer.rag.embedding.ollama_code import OllamaCodeEmbeddingProvider
 from code_reviewer.rag.vector_store import create_vector_store_instance
 
 
@@ -83,13 +83,13 @@ def test_create_vector_store_instance_indexes_repo_id_and_owner_id() -> None:
     }
 
 
-def test_create_vector_store_instance_defaults_to_ollama_embedding_provider() -> None:
+def test_create_vector_store_instance_defaults_to_ollama_code_embedding_provider() -> None:
     """Verify omitting the embedding argument falls back to the local
-    Ollama provider rather than requiring every caller to supply one.
+    code-embedding provider rather than requiring every caller to supply one.
     """
     vector_store = create_vector_store_instance()
 
-    assert vector_store.embed_dim == OllamaEmbeddingProvider().embed_dim
+    assert vector_store.embed_dim == OllamaCodeEmbeddingProvider().embed_dim
 
 
 @pytest.mark.db
