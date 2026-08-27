@@ -5,7 +5,7 @@
 import pytest
 
 from code_reviewer.rag.errors import StructuralHashError
-from code_reviewer.rag.structural_clone import compute_structural_hash
+from code_reviewer.rag.structural_hash import compute_structural_hash
 
 
 def test_identical_code_produces_the_same_hash() -> None:

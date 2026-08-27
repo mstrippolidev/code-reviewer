@@ -4,7 +4,7 @@
 """
 from code_reviewer.rag.indexer import LlamaIndexRagManager
 from code_reviewer.rag.repo_data import RepoData
-from code_reviewer.rag.structural_index import StructuralCloneIndex
+from code_reviewer.rag.structural_hash_store import StructuralHashStore
 
 
 class RagFileSync:
@@ -13,7 +13,7 @@ class RagFileSync:
     forget the other.
     """
 
-    def __init__(self, embedding_index: LlamaIndexRagManager, structural_index: StructuralCloneIndex) -> None:
+    def __init__(self, embedding_index: LlamaIndexRagManager, structural_index: StructuralHashStore) -> None:
         self._embedding_index = embedding_index
         self._structural_index = structural_index
 
