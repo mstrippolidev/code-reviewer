@@ -6,7 +6,7 @@ from sqlalchemy.engine import URL
 
 from code_reviewer.config.settings import get_settings
 from code_reviewer.rag.embedding.base import EmbeddingInterface
-from code_reviewer.rag.embedding.ollama import OllamaEmbeddingProvider
+from code_reviewer.rag.embedding.ollama_code import OllamaCodeEmbeddingProvider
 
 settings = get_settings()
 
@@ -43,7 +43,7 @@ def create_vector_store_instance(
         A PGVectorStore connected to the given schema, with repo_id and
         owner_id indexed for tenant-scoped filtering.
     """
-    embedding = embedding or OllamaEmbeddingProvider()
+    embedding = embedding or OllamaCodeEmbeddingProvider()
     return PGVectorStore.from_params(
         connection_string=build_connection_url("postgresql+psycopg2"),
         async_connection_string=build_connection_url("postgresql+asyncpg"),

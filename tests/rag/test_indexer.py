@@ -6,6 +6,7 @@ from collections.abc import Iterator
 
 from llama_index.core import Document
 from llama_index.core.base.embeddings.base import BaseEmbedding
+from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.schema import BaseNode, TextNode
 from llama_index.core.vector_stores import FilterCondition, MetadataFilter, MetadataFilters
 from llama_index.core.vector_stores.types import VectorStoreQuery, VectorStoreQueryResult
@@ -13,7 +14,11 @@ from llama_index.vector_stores.postgres import PGVectorStore
 import pytest
 import sqlalchemy
 
+from code_reviewer.agents.llm.base import LLMInterface
+from code_reviewer.rag.chunk_explainer import ChunkExplainer
+from code_reviewer.rag.custom_transformation import ExplainedChunkSplitter
 from code_reviewer.rag.embedding.base import EmbeddingInterface
+from code_reviewer.rag.embedding.ollama_code import OllamaCodeEmbeddingProvider
 from code_reviewer.rag.errors import (
     FileEmbeddingError,
     RepoOwnerRequiredError,
@@ -104,6 +109,14 @@ class _FakeEmbeddingProvider(EmbeddingInterface):
         return 2
 
 
+class _FakeChunkExplainer:
+    """Fake in place of ChunkExplainer: returns code unchanged, so
+    find_similar's unit tests stay fast and don't reach a real LLM."""
+
+    def explain(self, code: str) -> str:
+        return code
+
+
 class _QueryableVectorStore:
     """Fake vector store satisfying the surface VectorStoreIndex.as_retriever()
     needs, recording the query it received and returning a canned result."""
@@ -135,7 +148,10 @@ class _QueryableVectorStore:
 
 def _build_manager_for_find_similar(vector_store: _QueryableVectorStore) -> LlamaIndexRagManager:
     return LlamaIndexRagManager(
-        vector_store=vector_store, embedding=_FakeEmbeddingProvider(), pipeline=_StubPipeline()
+        vector_store=vector_store,
+        embedding=_FakeEmbeddingProvider(),
+        explainer=_FakeChunkExplainer(),
+        pipeline=_StubPipeline(),
     )
 
 
@@ -312,8 +328,11 @@ def test_find_similar_passes_top_k_as_similarity_top_k() -> None:
 
 def test_find_similar_maps_query_results_to_similar_chunks() -> None:
     """Verify each returned node becomes a SimilarChunk with its file_path,
-    text, and score."""
-    node = TextNode(text="def add(a, b): return a + b", metadata={"file_path": "math_ops.py"})
+    chunk_name, line range, text, and score."""
+    node = TextNode(
+        text="def add(a, b): return a + b",
+        metadata={"file_path": "math_ops.py", "chunk_name": "add", "start_line": 1, "end_line": 1},
+    )
     result = VectorStoreQueryResult(nodes=[node], similarities=[0.87], ids=[node.node_id])
     vector_store = _QueryableVectorStore(result=result)
     manager = _build_manager_for_find_similar(vector_store)
@@ -322,7 +341,14 @@ def test_find_similar_maps_query_results_to_similar_chunks() -> None:
     chunks = manager.find_similar(repo_data, "def add(a, b): return a + b")
 
     assert chunks == [
-        SimilarChunk(file_path="math_ops.py", text="def add(a, b): return a + b", score=0.87)
+        SimilarChunk(
+            file_path="math_ops.py",
+            chunk_name="add",
+            start_line=1,
+            end_line=1,
+            text="def add(a, b): return a + b",
+            score=0.87,
+        )
     ]
 
 
@@ -354,10 +380,17 @@ def integration_vector_store() -> Iterator[PGVectorStore]:
 
 
 @pytest.fixture
-def integration_manager(integration_vector_store: PGVectorStore) -> LlamaIndexRagManager:
-    """Real LlamaIndexRagManager — real CodeSplitter, real Ollama embedding,
-    real Postgres — built against the isolated test schema."""
-    return LlamaIndexRagManager(vector_store=integration_vector_store)
+def integration_manager(integration_vector_store: PGVectorStore, small_llm: LLMInterface) -> LlamaIndexRagManager:
+    """Real LlamaIndexRagManager — real ExplainedChunkSplitter and real
+    find_similar query explaining (both backed by small_llm, so
+    --llm-provider selects their backend), real Ollama code embedding, real
+    Postgres — built against the isolated test schema."""
+    embedding = OllamaCodeEmbeddingProvider()
+    explainer = ChunkExplainer(llm=small_llm)
+    pipeline = IngestionPipeline(transformations=[ExplainedChunkSplitter(explainer), embedding.create_embedding_model()])
+    return LlamaIndexRagManager(
+        vector_store=integration_vector_store, embedding=embedding, explainer=explainer, pipeline=pipeline
+    )
 
 
 @pytest.mark.db

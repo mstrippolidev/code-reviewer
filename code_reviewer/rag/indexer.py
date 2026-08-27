@@ -1,5 +1,8 @@
 """
     Keeps one repo's indexed code corpus in sync with LlamaIndex + pgvector.
+    Owns every embedding in the system, at both index time and query time:
+    callers pass raw code in and out, and never handle a vector or an
+    explanation themselves.
 """
 import logging
 from dataclasses import dataclass
@@ -8,13 +11,14 @@ from typing import Any, Protocol
 
 from llama_index.core import Document, VectorStoreIndex
 from llama_index.core.ingestion import IngestionPipeline
-from llama_index.core.node_parser.text.code import CodeSplitter
 from llama_index.core.schema import BaseNode
 from llama_index.core.vector_stores import FilterCondition, MetadataFilter, MetadataFilters
 from llama_index.core.vector_stores.types import BasePydanticVectorStore
 
+from code_reviewer.rag.chunk_explainer import ChunkExplainer
+from code_reviewer.rag.custom_transformation import ExplainedChunkSplitter
 from code_reviewer.rag.embedding.base import EmbeddingInterface
-from code_reviewer.rag.embedding.ollama import OllamaEmbeddingProvider
+from code_reviewer.rag.embedding.ollama_code import OllamaCodeEmbeddingProvider
 from code_reviewer.rag.errors import (
     FileEmbeddingError,
     RepoOwnerRequiredError,
@@ -39,6 +43,9 @@ class SimilarChunk:
     """One indexed chunk returned by find_similar."""
 
     file_path: str
+    chunk_name: str
+    start_line: int
+    end_line: int
     text: str
     score: float
 
@@ -46,16 +53,15 @@ class SimilarChunk:
 class LlamaIndexRagManager:
     """Keeps one repo's indexed code corpus in sync with its current file content."""
 
-    DEFAULT_LANGUAGE: str = "python"
-    DEFAULT_CHUNK_LINES: int = 60
-
     def __init__(
         self,
         vector_store: BasePydanticVectorStore | None = None,
         embedding: EmbeddingInterface | None = None,
+        explainer: ChunkExplainer | None = None,
         pipeline: _DocumentPipeline | None = None,
     ) -> None:
-        self._embedding = embedding or OllamaEmbeddingProvider()
+        self._embedding = embedding or OllamaCodeEmbeddingProvider()
+        self._explainer = explainer or ChunkExplainer()
         self._vector_store = vector_store or create_vector_store_instance(embedding=self._embedding)
         self._pipeline = pipeline or self._build_default_pipeline()
         self._index: VectorStoreIndex | None = None
@@ -72,8 +78,8 @@ class LlamaIndexRagManager:
 
     def _build_default_pipeline(self) -> IngestionPipeline:
         """Build the real split-and-embed pipeline used outside of tests."""
-        code_splitter = CodeSplitter(language=self.DEFAULT_LANGUAGE, chunk_lines=self.DEFAULT_CHUNK_LINES)
-        return IngestionPipeline(transformations=[code_splitter, self._embedding.create_embedding_model()])
+        explained_chunk_splitter = ExplainedChunkSplitter(self._explainer)
+        return IngestionPipeline(transformations=[explained_chunk_splitter, self._embedding.create_embedding_model()])
 
     def index_file(self, repo_data: RepoData, file_path: str, content: str) -> None:
         """Replace one file's indexed chunks with freshly embedded ones from its current content.
@@ -168,24 +174,38 @@ class LlamaIndexRagManager:
             logger.exception("Failed to delete all chunks for repo %r", repo_id)
             raise VectorStoreDeletionError(f"Failed to delete chunks for repo {repo_id!r}") from error
 
-    def find_similar(self, repo_data: RepoData, query: str, top_k: int = 5) -> list[SimilarChunk]:
-        """Find the top_k indexed chunks most similar to query, scoped to repo_data's repo/owner.
+    def find_similar(self, repo_data: RepoData, code: str, top_k: int = 5) -> list[SimilarChunk]:
+        """Find the top_k indexed chunks whose behavior is most similar to
+        code, scoped to repo_data's repo/owner.
+
+        code is explained before embedding, since every indexed chunk was
+        embedded as an explanation rather than as raw code — embedding code
+        directly here would compare it against explanations in a shared
+        vector space neither representation was meant to occupy alone.
 
         Raises:
-            VectorStoreQueryError: If embedding the query or querying the
-                vector store fails.
+            ChunkExplanationError: If explaining code fails.
+            VectorStoreQueryError: If querying the vector store fails.
         """
+        explanation = self._explainer.explain(code)
         retriever = self._get_index().as_retriever(
             similarity_top_k=top_k,
             filters=self._scope_filters(repo_data.repo_id, owner_id=repo_data.owner_id),
         )
         try:
-            nodes = retriever.retrieve(query)
+            nodes = retriever.retrieve(explanation)
         except Exception as error:
             logger.exception("Similarity search failed for repo %r", repo_data.repo_id)
             raise VectorStoreQueryError(f"Similarity search failed for repo {repo_data.repo_id!r}") from error
 
         return [
-            SimilarChunk(file_path=node.node.metadata["file_path"], text=node.node.get_content(), score=node.get_score())
+            SimilarChunk(
+                file_path=node.node.metadata["file_path"],
+                chunk_name=node.node.metadata["chunk_name"],
+                start_line=node.node.metadata["start_line"],
+                end_line=node.node.metadata["end_line"],
+                text=node.node.get_content(),
+                score=node.get_score(),
+            )
             for node in nodes
         ]
