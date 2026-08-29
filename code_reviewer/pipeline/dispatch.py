@@ -12,6 +12,8 @@ from code_reviewer.agents.registry import AgentsContainer
 from code_reviewer.config.settings import get_settings
 from code_reviewer.pipeline.code_splitter.interface import CodeChunk, CodeSplitterInterface
 from code_reviewer.pipeline.code_splitter.python import PythonCodeSplit
+from code_reviewer.rag.dry_evidence import DryEvidence
+from code_reviewer.rag.dry_matching import ChunkHistoryMatch, CrossHistoryDuplicateFinder
 from code_reviewer.schemas.paired import Pairing
 from code_reviewer.schemas.review import AgentOutput, AgentReviewEntry, CodeKey, Incident, Priority, SizeStatus
 from code_reviewer.schemas.submission import PreparedFile
@@ -44,6 +46,7 @@ def review_file(
     _apply_cmplx_soft_limit_incident(chunk_entries, prepared_file)
     entries += chunk_entries
     entries.append(_run_tcase_agent(prepared_file, agents_container.tcase_agent))
+    entries.append(_run_dry_agent(agents_container, prepared_file))
     return entries
 
 
@@ -113,6 +116,34 @@ def _run_tcase_agent(prepared_file: PreparedFile, tcase_agent: CoverageGapAgent)
     pairing = Pairing(source_file=prepared_file.source_file, test_files=prepared_file.test_files)
     content = pairing.get_content()
     return tcase_agent.execute_agent(content, prepared_file.source_file.file_path).review[0]
+
+
+def _run_dry_agent(agents_container: AgentsContainer, prepared_file: PreparedFile) -> AgentReviewEntry:
+    """Builds this file's duplication evidence and reviews it — or, when
+    there's no evidence at all, returns a clean result without spending an
+    LLM call, the same way every other agent short-circuits on nothing to say."""
+    file_path = prepared_file.source_file.file_path
+    evidence = DryEvidence(
+        file_path=file_path,
+        file_content=prepared_file.source_file.content,
+        intra_pr_groups=prepared_file.intra_pr_duplicates,
+        history_matches=_gather_dry_history_matches(agents_container, prepared_file),
+    )
+    if not evidence.has_matches():
+        return AgentReviewEntry(file_path=file_path, code_key=CodeKey.DRY, incidents=[])
+    return agents_container.dry_agent.execute_agent(evidence.format(), file_path).review[0]
+
+
+def _gather_dry_history_matches(agents_container: AgentsContainer, prepared_file: PreparedFile) -> list[ChunkHistoryMatch]:
+    """Looks up what this file duplicates in the repo's indexed history —
+    skipped entirely for a standalone review with no repo context, the
+    same fallback ARCH/COUP's evidence hop already uses."""
+    if prepared_file.repo_data is None:
+        return []
+    finder = CrossHistoryDuplicateFinder(
+        agents_container.structural_hash_store, agents_container.rag_manager, prepared_file.repo_data
+    )
+    return finder.find(prepared_file.source_file.file_path, prepared_file.source_file.content)
 
 
 def _offset_incidents(incidents: list[Incident], start_line: int) -> list[Incident]:
@@ -208,6 +239,7 @@ def review_file_runnable(
         {agent.get_agent_key().value: _file_agent_branch(agent) for agent in agents_container.file_agents}
         | {agent.get_agent_key().value: _chunk_agent_branch(agent, splitter) for agent in agents_container.chunk_agents}
         | {"TCASE": _tcase_branch(agents_container.tcase_agent, pairing.get_content())}
+        | {"DRY": _dry_branch(agents_container, prepared_file)}
     )
     config = {"max_concurrency": get_settings().max_dispatch_concurrency}
     results = RunnableParallel(branches).invoke(context, config=config)
@@ -236,6 +268,12 @@ def _tcase_branch(agent: CoverageGapAgent, pairing_content: str) -> RunnableLamb
     """Builds a branch that runs TCASE against its own paired content,
     ignoring the shared context's raw source code."""
     return RunnableLambda(lambda ctx: agent.execute_agent(pairing_content, ctx["file_path"]))
+
+
+def _dry_branch(agents_container: AgentsContainer, prepared_file: PreparedFile) -> RunnableLambda:
+    """Builds a branch that runs DRY against its own assembled evidence,
+    ignoring the shared context's raw source code."""
+    return RunnableLambda(lambda ctx: _run_dry_agent(agents_container, prepared_file))
 
 
 def _unpack_runnable_results(results: dict[str, AgentOutput | AgentReviewEntry]) -> list[AgentReviewEntry]:
