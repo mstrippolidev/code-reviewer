@@ -225,7 +225,13 @@ def test_chunk_with_only_a_semantic_match_is_returned(structural_hash_store: Str
     """Verify a chunk with no exact structural match but a semantic candidate still surfaces."""
     repo_data = RepoData(repo_id="repo-1", commit_sha="sha-1", owner_id="owner-1")
     semantic_match = SimilarChunk(
-        file_path="legacy/totals.py", chunk_name="total", start_line=1, end_line=3, text=LOOP_BASED_SUM, score=0.91
+        file_path="legacy/totals.py",
+        chunk_name="total",
+        start_line=1,
+        end_line=3,
+        text=LOOP_BASED_SUM,
+        score=0.91,
+        code=LOOP_BASED_SUM,
     )
     finder = CrossHistoryDuplicateFinder(structural_hash_store, _FakeEmbeddingIndex([semantic_match]), repo_data)
 
@@ -250,7 +256,9 @@ def test_chunk_with_no_structural_or_semantic_match_returns_no_results(
 def test_semantic_self_match_is_excluded(structural_hash_store: StructuralHashStore) -> None:
     """Verify a chunk's own previously-indexed self isn't reported as a semantic duplicate of itself."""
     repo_data = RepoData(repo_id="repo-1", commit_sha="sha-1", owner_id="owner-1")
-    self_match = SimilarChunk(file_path="a.py", chunk_name="add", start_line=1, end_line=2, text=ADD_FUNCTION, score=1.0)
+    self_match = SimilarChunk(
+        file_path="a.py", chunk_name="add", start_line=1, end_line=2, text=ADD_FUNCTION, score=1.0, code=ADD_FUNCTION
+    )
     finder = CrossHistoryDuplicateFinder(structural_hash_store, _FakeEmbeddingIndex([self_match]), repo_data)
 
     history_matches = finder.find("a.py", ADD_FUNCTION)
@@ -265,7 +273,13 @@ def test_chunk_with_both_structural_and_semantic_matches_returns_both(
     repo_data = RepoData(repo_id="repo-1", commit_sha="sha-1", owner_id="owner-1")
     structural_hash_store.index_file(repo_data, "legacy/math_ops.py", ADD_FUNCTION)
     semantic_match = SimilarChunk(
-        file_path="legacy/totals.py", chunk_name="total", start_line=1, end_line=3, text=LOOP_BASED_SUM, score=0.9
+        file_path="legacy/totals.py",
+        chunk_name="total",
+        start_line=1,
+        end_line=3,
+        text=LOOP_BASED_SUM,
+        score=0.9,
+        code=LOOP_BASED_SUM,
     )
     finder = CrossHistoryDuplicateFinder(structural_hash_store, _FakeEmbeddingIndex([semantic_match]), repo_data)
 

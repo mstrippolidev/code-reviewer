@@ -48,6 +48,20 @@ class SimilarChunk:
     end_line: int
     text: str
     score: float
+    code: str
+
+
+@dataclass
+class FileChunk:
+    """One indexed chunk of a specific file, from get_file_chunks' exact
+    lookup rather than a similarity search — so it carries no score."""
+
+    file_path: str
+    chunk_name: str
+    start_line: int
+    end_line: int
+    text: str
+    code: str
 
 
 class LlamaIndexRagManager:
@@ -206,6 +220,34 @@ class LlamaIndexRagManager:
                 end_line=node.node.metadata["end_line"],
                 text=node.node.get_content(),
                 score=node.get_score(),
+                code=node.node.metadata.get("code", ""),
+            )
+            for node in nodes
+        ]
+
+    def get_file_chunks(self, repo_id: str, owner_id: str | None, file_path: str) -> list[FileChunk]:
+        """Exact lookup of one file's indexed content, for the multi-hop
+        evidence pass. Not a similarity search — the caller already knows
+        precisely which file it needs to read, so this filters the vector
+        store's metadata directly instead of running it through the ANN index.
+
+        Raises:
+            VectorStoreQueryError: If the lookup fails.
+        """
+        try:
+            nodes = self._vector_store.get_nodes(filters=self._scope_filters(repo_id, file_path, owner_id))
+        except Exception as error:
+            logger.exception("Failed to look up chunks for %r in repo %r", file_path, repo_id)
+            raise VectorStoreQueryError(f"Failed to look up chunks for {file_path!r}") from error
+
+        return [
+            FileChunk(
+                file_path=node.metadata["file_path"],
+                chunk_name=node.metadata["chunk_name"],
+                start_line=node.metadata["start_line"],
+                end_line=node.metadata["end_line"],
+                text=node.get_content(),
+                code=node.metadata.get("code", ""),
             )
             for node in nodes
         ]

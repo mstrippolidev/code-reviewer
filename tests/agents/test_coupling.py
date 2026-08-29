@@ -5,9 +5,14 @@
     a FileSizeAwareAgentBase agent, same as SOLID2/COH, so it isn't marked
     with pytest.mark.llm like the rest of this file.
 """
+from unittest.mock import Mock
+
 import pytest
 
+from code_reviewer.agents.base import FileReviewMeta, ReviewContext
 from code_reviewer.agents.coupling import CouplingAgent
+from code_reviewer.agents.cross_file_evidence_tool import GetFileChunksTool
+from code_reviewer.rag.indexer import LlamaIndexRagManager
 from code_reviewer.schemas.review import CodeKey, Priority, SizeStatus
 from tests.helpers import load_fixture
 
@@ -142,7 +147,7 @@ def test_hard_limit_exceeded_short_circuits_without_an_llm_call(coup_agent: Coup
     code = "x\n" * 900
 
     result = coup_agent.execute_agent(
-        code, file_path="huge_file.py", size_status=SizeStatus.HARD_LIMIT_EXCEEDED
+        code, file_path="huge_file.py", review_meta=FileReviewMeta(size_status=SizeStatus.HARD_LIMIT_EXCEEDED)
     )
 
     entry = result.review[0]
@@ -155,13 +160,41 @@ def test_hard_limit_exceeded_short_circuits_without_an_llm_call(coup_agent: Coup
 def test_normal_size_status_does_not_short_circuit(coup_agent: CouplingAgent, monkeypatch: pytest.MonkeyPatch) -> None:
     invoked = {}
 
-    def fake_invoke(self, code: str):
+    def fake_invoke(self, code: str, repo_data=None):
         invoked["called"] = True
         raise AssertionError("stop before a real LLM call")
 
     monkeypatch.setattr(CouplingAgent, "_invoke", fake_invoke)
 
     with pytest.raises(AssertionError, match="stop before a real LLM call"):
-        coup_agent.execute_agent("x = 1", file_path="tiny.py", size_status=SizeStatus.NORMAL)
+        coup_agent.execute_agent(
+            "x = 1", file_path="tiny.py", review_meta=FileReviewMeta(size_status=SizeStatus.NORMAL)
+        )
 
     assert invoked["called"] is True
+
+
+def test_without_rag_manager_no_tool_is_wired(small_llm) -> None:
+    """Verify a COUP agent built with no rag_manager behaves exactly as
+    before — no tool, no context schema."""
+    agent = CouplingAgent(llm=small_llm)
+
+    assert agent._build_tools() is None
+    assert agent._context_schema() is None
+    assert agent._recursion_limit() == 4
+
+
+def test_with_rag_manager_the_evidence_tool_is_wired(small_llm) -> None:
+    """Verify a COUP agent built with a rag_manager gets the evidence
+    tool, a matching context schema, and extra recursion headroom for
+    the tool round-trip."""
+    rag_manager = Mock(spec=LlamaIndexRagManager)
+    agent = CouplingAgent(llm=small_llm, rag_manager=rag_manager)
+
+    tools = agent._build_tools()
+
+    assert len(tools) == 1
+    assert isinstance(tools[0], GetFileChunksTool)
+    assert tools[0].rag_manager is rag_manager
+    assert agent._context_schema() is ReviewContext
+    assert agent._recursion_limit() > 4

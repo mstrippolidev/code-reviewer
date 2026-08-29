@@ -3,13 +3,16 @@
 """
 
 import logging
+from dataclasses import dataclass
 
 from langchain.agents import create_agent
+from langchain_core.tools import BaseTool
 
 from code_reviewer.agents.llm.base import LLMInterface
 from code_reviewer.agents.llm.middleware import retry_model, calculate_rating
 from code_reviewer.agents.llm.ollama import OllamaLLM
 from code_reviewer.config.settings import get_settings
+from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.schemas.review import (
     AgentOutput,
     AgentReviewEntry,
@@ -24,6 +27,26 @@ logger = logging.getLogger(__name__)
 
 class AgentInvocationError(Exception):
     """Raised when an agent's LLM call fails or its output cannot be validated."""
+
+
+@dataclass(frozen=True)
+class ReviewContext:
+    """Immutable per-invocation repo scoping, injected into a bound tool's
+    ToolRuntime.context — never something the model can see or set itself."""
+
+    repo_id: str | None = None
+    owner_id: str | None = None
+
+
+@dataclass(frozen=True)
+class FileReviewMeta:
+    """Size and repo-scoping metadata for one file-agent review call,
+    bundled so FileSizeAwareAgentBase.execute_agent stays within this
+    project's 3-parameter limit as agents need more than raw code and
+    file_path to work with."""
+
+    size_status: SizeStatus = SizeStatus.NORMAL
+    repo_data: RepoData | None = None
 
 
 class AgentBase:
@@ -49,9 +72,11 @@ class AgentBase:
         llm_factory = llm if llm is not None else OllamaLLM()
         self._agent = create_agent(
             model=llm_factory.create_raw_model(),
+            tools=self._build_tools(),
             system_prompt=self._system_prompt,
             middleware=[retry_model, calculate_rating],
             response_format=llm_factory.build_response_format(AgentOutput),
+            context_schema=self._context_schema(),
         )
 
     def get_agent_key(self) -> CodeKey:
@@ -61,6 +86,25 @@ class AgentBase:
     def get_system_prompt(self) -> str:
         """Returns this agent's review instructions."""
         return self._system_prompt
+
+    def _build_tools(self) -> list[BaseTool] | None:
+        """Tools this agent's model can call mid-review. Empty for every
+        agent except the ones needing a cross-file evidence hop (ARCH,
+        COUP) — override in a subclass that sets its own dependencies
+        before calling super().__init__()."""
+        return None
+
+    def _recursion_limit(self) -> int:
+        """Graph step budget for one invocation. Higher for agents whose
+        _build_tools() returns something, since a tool round-trip costs
+        extra model/tool steps beyond a single structured-output call."""
+        return 4
+
+    def _context_schema(self) -> type | None:
+        """Shape of this agent's immutable per-invocation context, injected
+        into a bound tool's ToolRuntime.context. None for every agent
+        except the ones needing a cross-file evidence hop (ARCH, COUP)."""
+        return None
 
     def execute_agent_batch(self, chunks: list[str], file_path: str | None = None) -> list[AgentOutput]:
         """Review each given chunk and return this agent's structured
@@ -107,7 +151,9 @@ class AgentBase:
                 f"Agent {self._code_agent} failed to review the given code."
             ) from error
 
-    def execute_agent(self, code: str, file_path: str | None = None) -> AgentOutput:
+    def execute_agent(
+        self, code: str, file_path: str | None = None, repo_data: RepoData | None = None
+    ) -> AgentOutput:
         """Review the given code and return this agent's structured findings.
 
         Args:
@@ -115,6 +161,9 @@ class AgentBase:
             file_path: Path of the file being reviewed, relative to the repo
                 root. Only meaningful for PR or whole-file reviews — leave
                 as None when reviewing a standalone snippet with no file.
+            repo_data: Repo scoping for this file's submission, used only by
+                agents whose _build_tools()/_context_schema() need it (ARCH,
+                COUP). None for a standalone review with no repo context.
 
         Returns:
             This agent's structured review of the given code.
@@ -123,11 +172,11 @@ class AgentBase:
             AgentInvocationError: If the LLM call fails or its output
                 cannot be validated against AgentOutput.
         """
-        result = self._invoke(code)
+        result = self._invoke(code, repo_data)
         self._set_file_path_and_code_key(result, file_path)
         return result
 
-    def _invoke(self, code: str) -> AgentOutput:
+    def _invoke(self, code: str, repo_data: RepoData | None = None) -> AgentOutput:
         """Run this agent's prompt against the given source code and return its review.
 
         Args:
@@ -148,9 +197,12 @@ class AgentBase:
                 }
             ]
         }
-        config = {"recursion_limit": 4}
+        config = {"recursion_limit": self._recursion_limit()}
+        invoke_kwargs: dict[str, object] = {"config": config}
+        if repo_data is not None:
+            invoke_kwargs["context"] = ReviewContext(repo_id=repo_data.repo_id, owner_id=repo_data.owner_id)
         try:
-            return self._agent.invoke(messages, config=config)["structured_response"]
+            return self._agent.invoke(messages, **invoke_kwargs)["structured_response"]
         except Exception as error:
             logger.error("Agent %s failed to review the given code.", self._code_agent)
             raise AgentInvocationError(
@@ -192,7 +244,7 @@ class FileSizeAwareAgentBase(AgentBase):
         self,
         code: str,
         file_path: str | None = None,
-        size_status: SizeStatus = SizeStatus.NORMAL,
+        review_meta: FileReviewMeta | None = None,
     ) -> AgentOutput:
         """Review the given code, short-circuiting to a fixed rating-0
         result instead of an LLM call when the file exceeds the hard limit.
@@ -201,16 +253,18 @@ class FileSizeAwareAgentBase(AgentBase):
             code: The full file content to review.
             file_path: Path of the file being reviewed, relative to the
                 repo root.
-            size_status: This file's size classification. Only
-                HARD_LIMIT_EXCEEDED changes behavior.
+            review_meta: This file's size classification and (for the
+                ARCH/COUP evidence hop) repo scoping. Only
+                HARD_LIMIT_EXCEEDED changes behavior here.
 
         Returns:
             This agent's structured review of the given code, or the fixed
             hard-limit result when size_status is HARD_LIMIT_EXCEEDED.
         """
-        if size_status == SizeStatus.HARD_LIMIT_EXCEEDED:
+        review_meta = review_meta or FileReviewMeta()
+        if review_meta.size_status == SizeStatus.HARD_LIMIT_EXCEEDED:
             return self._hard_limit_result(code, file_path)
-        return super().execute_agent(code, file_path)
+        return super().execute_agent(code, file_path, review_meta.repo_data)
 
     def _hard_limit_result(self, code: str, file_path: str | None) -> AgentOutput:
         """Builds the fixed rating-0 result for a file too large for

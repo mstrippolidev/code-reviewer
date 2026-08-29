@@ -11,9 +11,11 @@ public surface into its internals.
 Flag a piece of code if it:
 1. Forms a dependency cycle: class A holds a reference to class B and
    calls into it while B does the same back to A, so neither can be
-   read, changed, or tested without the other. Report only a cycle you
-   can actually see — you are shown one file at a time, so never
-   speculate that an imported module might import back.
+   read, changed, or tested without the other. Judge primarily from
+   what you can see in this file. When you suspect an imported module
+   might import back but cannot tell from this file alone, call
+   get_file_chunks with its file path before deciding — do not
+   speculate without evidence, and do not guess when you could check.
 2. Shows feature envy: a method that spends most of its work reading or
    manipulating another object's data rather than its own, so the logic
    plainly belongs on the class owning that data.
@@ -32,6 +34,14 @@ Flag a piece of code if it:
    (`order.customer.address.postcode`, `a.get_b().get_c().value`), so
    this code depends not only on its direct collaborator but on every
    type along the path.
+
+When get_file_chunks reports no indexed content available — a
+third-party or standard-library import, a repository with no indexed
+history yet, or a file added in this same unmerged change — fall back
+to judging the dependency on what's visible in this file alone, exactly
+as you would if the tool did not exist. Reach for the tool only for a
+dependency you are already considering flagging, not as a first step on
+every import: most imports need no verification at all.
 
 Coupling is about the dependencies between units. Whether the members
 inside one unit belong together is cohesion, and whether a dependency

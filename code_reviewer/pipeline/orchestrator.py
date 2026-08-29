@@ -12,6 +12,7 @@ from code_reviewer.pipeline.file_size import run_file_size_guard
 from code_reviewer.pipeline.pr_file_selection import select_pr_files
 from code_reviewer.pipeline.raw_character_guard import run_raw_character_guard
 from code_reviewer.pipeline.test_file_pairing import pair_source_files_with_tests
+from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.schemas.review import AgentReviewEntry, SizeStatus, SkippedFile
 from code_reviewer.schemas.submission import PreparedFile, SubmittedFile
 
@@ -23,7 +24,7 @@ _SKIP_REASONS = {
 
 
 def review_submission(
-    files: list[SubmittedFile], agents_container: AgentsContainer
+    files: list[SubmittedFile], agents_container: AgentsContainer, repo_data: RepoData | None = None
 ) -> tuple[list[AgentReviewEntry], list[SkippedFile]]:
     """Runs the full pipeline end to end: guards, dispatch, per prepared
     file — the single entry point from a raw submission to agent results.
@@ -32,12 +33,16 @@ def review_submission(
         files: Every file in the submission, source and test alike.
         agents_container: The complete set of built agents, grouped for
             dispatch. Built once by the caller and reused across requests.
+        repo_data: Scoping for this submission's repo, shared by every file
+            in it. None for a standalone review with no repo context, in
+            which case ARCH/COUP's evidence hop falls back to single-file
+            judgment.
 
     Returns:
         Every AgentReviewEntry produced across every prepared file, and
         every file skipped along the way with its reason.
     """
-    prepared_files, skipped_files = prepare_files_for_pipeline(files)
+    prepared_files, skipped_files = prepare_files_for_pipeline(files, repo_data)
     entries = [
         entry
         for prepared_file in prepared_files
@@ -46,12 +51,17 @@ def review_submission(
     return entries, skipped_files
 
 
-def prepare_files_for_pipeline(files: list[SubmittedFile]) -> tuple[list[PreparedFile], list[SkippedFile]]:
+def prepare_files_for_pipeline(
+    files: list[SubmittedFile], repo_data: RepoData | None = None
+) -> tuple[list[PreparedFile], list[SkippedFile]]:
     """Runs PR selection, test pairing, and the per-file guards, returning
     every file that's ready for agent dispatch.
 
     Args:
         files: Every file in the submission, source and test alike.
+        repo_data: Scoping for this submission's repo, stamped onto every
+            resulting PreparedFile. None for a standalone review with no
+            repo context.
 
     Returns:
         Files that passed every guard, paired with their screened test files
@@ -74,6 +84,7 @@ def prepare_files_for_pipeline(files: list[SubmittedFile]) -> tuple[list[Prepare
                 source_file=pairing.source_file,
                 test_files=screened_test_files,
                 size_status=size_status,
+                repo_data=repo_data,
             ))
 
     return prepared_files, skipped_files

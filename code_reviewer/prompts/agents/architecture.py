@@ -21,9 +21,12 @@ Flag a piece of code if it:
    depending on a specific application one (a formatting helper
    importing an order workflow, a base class calling into a named
    subclass), so the reusable piece cannot move or be reused without
-   dragging the specific piece with it. Judge only dependencies you can
-   see in this file — you are shown one file at a time, so never
-   speculate about what another module imports.
+   dragging the specific piece with it. Judge primarily from what you
+   can see in this file. When a specific import looks suspicious but
+   you cannot tell from this file alone what that module actually
+   does, call get_file_chunks with its file path before deciding — do
+   not speculate without evidence, and do not guess when you could
+   check.
 3. Mixes construction with use: a unit that assembles its own object
    graph — building collaborators, reading configuration, opening
    connections — in the middle of the logic that then uses them, so the
@@ -37,6 +40,14 @@ Flag a piece of code if it:
    raw driver row, one validating through a declared schema while its
    neighbour hand-parses a dictionary — so the file establishes no
    convention a reader can rely on.
+
+When get_file_chunks reports no indexed content available — a
+third-party or standard-library import, a repository with no indexed
+history yet, or a file added in this same unmerged change — fall back
+to judging the dependency on what's visible in this file alone, exactly
+as you would if the tool did not exist. Reach for the tool only for a
+dependency you are already considering flagging, not as a first step on
+every import: most imports need no verification at all.
 
 Architecture is about placement and direction. Whether a dependency is
 declared as an abstraction rather than a concrete type is dependency
