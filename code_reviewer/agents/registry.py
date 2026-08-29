@@ -18,6 +18,7 @@ from code_reviewer.agents.naming import NamingAgent
 from code_reviewer.agents.solid_1 import SolidSrpOcpAgent
 from code_reviewer.agents.solid_2 import SolidLspDipAgent
 from code_reviewer.agents.testability import TestabilityAgent
+from code_reviewer.rag.indexer import LlamaIndexRagManager
 
 
 @dataclass(frozen=True)
@@ -29,23 +30,29 @@ class AgentsContainer:
     tcase_agent: CoverageGapAgent
 
 
-def build_agent_roster(llm: LLMInterface | None = None) -> AgentsContainer:
+def build_agent_roster(
+    llm: LLMInterface | None = None, rag_manager: LlamaIndexRagManager | None = None
+) -> AgentsContainer:
     """Builds one instance of every agent, grouped for dispatch.
 
     Args:
         llm: Provider every agent is built against. Defaults to each
             agent's own default (a local OllamaLLM()) when not given.
+        rag_manager: Shared RAG dependency ARCH/COUP use for their
+            cross-file evidence hop. Defaults to a real LlamaIndexRagManager()
+            when not given — same pattern as llm's own default.
 
     Returns:
-        An AgentsContainer holding all 13 built agents. Meant to be built
+        An AgentsContainer holding all 14 built agents. Meant to be built
         once and reused for the app's lifetime, never rebuilt per request.
     """
+    rag_manager = rag_manager or LlamaIndexRagManager()
     file_agents = [
         SolidSrpOcpAgent(llm),
         SolidLspDipAgent(llm),
         CohesionAgent(llm),
-        CouplingAgent(llm),
-        ArchitectureAgent(llm),
+        CouplingAgent(llm, rag_manager),
+        ArchitectureAgent(llm, rag_manager),
         BoundariesAgent(llm),
     ]
     chunk_agents = [

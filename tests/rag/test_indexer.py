@@ -26,7 +26,7 @@ from code_reviewer.rag.errors import (
     VectorStoreQueryError,
     VectorStoreWriteError,
 )
-from code_reviewer.rag.indexer import LlamaIndexRagManager, RepoData, SimilarChunk
+from code_reviewer.rag.indexer import FileChunk, LlamaIndexRagManager, RepoData, SimilarChunk
 from code_reviewer.rag.vector_store import create_vector_store_instance
 
 INTEGRATION_TEST_SCHEMA = "code_reviewer_test"
@@ -153,6 +153,23 @@ def _build_manager_for_find_similar(vector_store: _QueryableVectorStore) -> Llam
         explainer=_FakeChunkExplainer(),
         pipeline=_StubPipeline(),
     )
+
+
+class _GettableVectorStore:
+    """Fake vector store satisfying get_file_chunks' needs: records the
+    filters it received and returns a canned list of nodes, with no query
+    embedding involved."""
+
+    def __init__(self, nodes: list[BaseNode] | None = None, error: Exception | None = None) -> None:
+        self._nodes = nodes if nodes is not None else []
+        self._error = error
+        self.received_filters: MetadataFilters | None = None
+
+    def get_nodes(self, filters: MetadataFilters) -> list[BaseNode]:
+        self.received_filters = filters
+        if self._error is not None:
+            raise self._error
+        return self._nodes
 
 
 def test_index_file_with_no_owner_id_raises_repo_owner_required_error() -> None:
@@ -328,10 +345,16 @@ def test_find_similar_passes_top_k_as_similarity_top_k() -> None:
 
 def test_find_similar_maps_query_results_to_similar_chunks() -> None:
     """Verify each returned node becomes a SimilarChunk with its file_path,
-    chunk_name, line range, text, and score."""
+    chunk_name, line range, text, score, and code."""
     node = TextNode(
         text="def add(a, b): return a + b",
-        metadata={"file_path": "math_ops.py", "chunk_name": "add", "start_line": 1, "end_line": 1},
+        metadata={
+            "file_path": "math_ops.py",
+            "chunk_name": "add",
+            "start_line": 1,
+            "end_line": 1,
+            "code": "def add(a, b):\n    return a + b",
+        },
     )
     result = VectorStoreQueryResult(nodes=[node], similarities=[0.87], ids=[node.node_id])
     vector_store = _QueryableVectorStore(result=result)
@@ -348,8 +371,26 @@ def test_find_similar_maps_query_results_to_similar_chunks() -> None:
             end_line=1,
             text="def add(a, b): return a + b",
             score=0.87,
+            code="def add(a, b):\n    return a + b",
         )
     ]
+
+
+def test_find_similar_defaults_code_to_empty_string_when_metadata_has_none() -> None:
+    """Verify a chunk indexed before the code metadata field existed still
+    maps cleanly, instead of raising a KeyError."""
+    node = TextNode(
+        text="def add(a, b): return a + b",
+        metadata={"file_path": "math_ops.py", "chunk_name": "add", "start_line": 1, "end_line": 1},
+    )
+    result = VectorStoreQueryResult(nodes=[node], similarities=[0.87], ids=[node.node_id])
+    vector_store = _QueryableVectorStore(result=result)
+    manager = _build_manager_for_find_similar(vector_store)
+    repo_data = RepoData(repo_id="repo-1", commit_sha="sha-1", owner_id="owner-1")
+
+    chunks = manager.find_similar(repo_data, "def add(a, b): return a + b")
+
+    assert chunks[0].code == ""
 
 
 def test_find_similar_when_vector_store_raises_wraps_in_vector_store_query_error() -> None:
@@ -360,6 +401,65 @@ def test_find_similar_when_vector_store_raises_wraps_in_vector_store_query_error
 
     with pytest.raises(VectorStoreQueryError):
         manager.find_similar(repo_data, "def add(a, b): return a + b")
+
+
+def test_get_file_chunks_scopes_the_query_to_repo_id_owner_id_and_file_path() -> None:
+    """Verify the filter sent to the vector store narrows to the exact
+    (repo_id, owner_id, file_path) triple, not repo_id alone."""
+    vector_store = _GettableVectorStore()
+    manager = _build_manager(_StubPipeline(), vector_store)
+
+    manager.get_file_chunks("repo-1", "owner-1", "math_ops.py")
+
+    expected_filters = MetadataFilters(
+        filters=[
+            MetadataFilter(key="repo_id", value="repo-1"),
+            MetadataFilter(key="file_path", value="math_ops.py"),
+            MetadataFilter(key="owner_id", value="owner-1"),
+        ],
+        condition=FilterCondition.AND,
+    )
+    assert vector_store.received_filters == expected_filters
+
+
+def test_get_file_chunks_maps_nodes_to_file_chunks() -> None:
+    """Verify each returned node becomes a FileChunk with its file_path,
+    chunk_name, line range, explanation text, and code — no score."""
+    node = TextNode(
+        text="Adds two numbers and returns the sum.",
+        metadata={
+            "file_path": "math_ops.py",
+            "chunk_name": "add",
+            "start_line": 1,
+            "end_line": 2,
+            "code": "def add(a, b):\n    return a + b",
+        },
+    )
+    vector_store = _GettableVectorStore(nodes=[node])
+    manager = _build_manager(_StubPipeline(), vector_store)
+
+    chunks = manager.get_file_chunks("repo-1", "owner-1", "math_ops.py")
+
+    assert chunks == [
+        FileChunk(
+            file_path="math_ops.py",
+            chunk_name="add",
+            start_line=1,
+            end_line=2,
+            text="Adds two numbers and returns the sum.",
+            code="def add(a, b):\n    return a + b",
+        )
+    ]
+
+
+def test_get_file_chunks_when_vector_store_raises_wraps_in_vector_store_query_error() -> None:
+    """Verify a failed lookup surfaces as VectorStoreQueryError, not a raw
+    SQLAlchemy/psycopg exception."""
+    vector_store = _GettableVectorStore(error=RuntimeError("connection reset"))
+    manager = _build_manager(_StubPipeline(), vector_store)
+
+    with pytest.raises(VectorStoreQueryError):
+        manager.get_file_chunks("repo-1", "owner-1", "math_ops.py")
 
 
 @pytest.fixture
@@ -470,3 +570,44 @@ def test_find_similar_excludes_chunks_indexed_under_a_different_owner_id(
     chunks = integration_manager.find_similar(other_owner_repo_data, "def add(a, b):\n    return a + b\n")
 
     assert chunks == []
+
+
+@pytest.mark.db
+@pytest.mark.llm
+def test_find_similar_returns_the_original_code_alongside_a_real_explanation(
+    integration_manager: LlamaIndexRagManager,
+) -> None:
+    """Verify the real explain-then-embed pipeline round-trips the raw code
+    unmodified through metadata, while text stays a genuine LLM explanation
+    (not the raw code itself, which would mean the pipeline silently skipped
+    explaining and stored the wrong representation)."""
+    source = "def add(a, b):\n    return a + b\n"
+    repo_data = RepoData(repo_id=INTEGRATION_TEST_REPO_ID, commit_sha="abc123", owner_id="owner-1")
+    integration_manager.index_file(repo_data, "math_ops.py", source)
+
+    chunks = integration_manager.find_similar(repo_data, source)
+
+    match = next(chunk for chunk in chunks if chunk.file_path == "math_ops.py")
+    assert match.code.strip() == source.strip()
+    assert len(match.text.strip()) > 0
+    assert match.text.strip() != match.code.strip()
+
+
+@pytest.mark.db
+@pytest.mark.llm
+def test_get_file_chunks_returns_the_original_code_and_a_real_explanation(
+    integration_manager: LlamaIndexRagManager,
+) -> None:
+    """Verify get_file_chunks' exact lookup surfaces the same real code +
+    explanation pair that find_similar sees, via a metadata filter rather
+    than a similarity search."""
+    source = "def add(a, b):\n    return a + b\n"
+    repo_data = RepoData(repo_id=INTEGRATION_TEST_REPO_ID, commit_sha="abc123", owner_id="owner-1")
+    integration_manager.index_file(repo_data, "math_ops.py", source)
+
+    chunks = integration_manager.get_file_chunks(repo_data.repo_id, repo_data.owner_id, "math_ops.py")
+
+    assert len(chunks) == 1
+    assert chunks[0].code.strip() == source.strip()
+    assert len(chunks[0].text.strip()) > 0
+    assert chunks[0].text.strip() != chunks[0].code.strip()

@@ -9,8 +9,10 @@ from typing import Callable
 
 import pytest
 
+from code_reviewer.agents.base import FileReviewMeta
 from code_reviewer.agents.registry import AgentsContainer
 from code_reviewer.pipeline.dispatch import review_file, review_file_runnable
+from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.schemas.review import AgentOutput, AgentReviewEntry, CodeKey, Incident, Priority, SizeStatus
 from code_reviewer.schemas.submission import PreparedFile, SubmittedFile
 
@@ -32,8 +34,10 @@ class FakeAgent:
     def get_agent_key(self) -> CodeKey:
         return self._code_key
 
-    def execute_agent(self, code: str, file_path: str | None = None, size_status: SizeStatus | None = None) -> AgentOutput:
-        self.execute_agent_calls.append((code, file_path, size_status))
+    def execute_agent(
+        self, code: str, file_path: str | None = None, review_meta: FileReviewMeta | None = None
+    ) -> AgentOutput:
+        self.execute_agent_calls.append((code, file_path, review_meta))
         entry = AgentReviewEntry(
             file_path=file_path, code_key=self._code_key, rating=self._rating, incidents=list(self._incidents)
         )
@@ -82,11 +86,14 @@ def container(file_agent: FakeAgent, cmplx_agent: FakeAgent, var_agent: FakeAgen
     )
 
 
-def _prepared_file(size_status: SizeStatus = SizeStatus.NORMAL, content: str = "x = 1\n") -> PreparedFile:
+def _prepared_file(
+    size_status: SizeStatus = SizeStatus.NORMAL, content: str = "x = 1\n", repo_data: RepoData | None = None
+) -> PreparedFile:
     return PreparedFile(
         source_file=SubmittedFile(file_path="f.py", content=content),
         test_files=[],
         size_status=size_status,
+        repo_data=repo_data,
     )
 
 
@@ -110,7 +117,39 @@ def test_file_agent_receives_full_content_and_size_status(
 
     dispatch(prepared, container)
 
-    assert file_agent.execute_agent_calls == [("x = 1\n", "f.py", SizeStatus.HARD_LIMIT_EXCEEDED)]
+    assert file_agent.execute_agent_calls == [
+        ("x = 1\n", "f.py", FileReviewMeta(size_status=SizeStatus.HARD_LIMIT_EXCEEDED, repo_data=None))
+    ]
+
+
+@DISPATCH_FUNCTIONS
+def test_file_agent_receives_repo_data_for_the_evidence_hop(
+    dispatch: DispatchFn, container: AgentsContainer, file_agent: FakeAgent
+) -> None:
+    """Verify repo scoping reaches file agents (ARCH/COUP's tool depends on
+    it) via PreparedFile.repo_data, without any dispatch function needing
+    a new parameter of its own."""
+    repo_data = RepoData(repo_id="repo-1", commit_sha="sha-1", owner_id="owner-1")
+    prepared = _prepared_file(repo_data=repo_data)
+
+    dispatch(prepared, container)
+
+    review_meta = file_agent.execute_agent_calls[0][2]
+    assert review_meta.repo_data == repo_data
+
+
+@DISPATCH_FUNCTIONS
+def test_file_agent_receives_no_repo_data_for_a_standalone_review(
+    dispatch: DispatchFn, container: AgentsContainer, file_agent: FakeAgent
+) -> None:
+    """Verify a submission with no repo context (repo_data=None) leaves
+    file agents with repo_data=None too, triggering the tool's fallback."""
+    prepared = _prepared_file()
+
+    dispatch(prepared, container)
+
+    review_meta = file_agent.execute_agent_calls[0][2]
+    assert review_meta.repo_data is None
 
 
 @DISPATCH_FUNCTIONS

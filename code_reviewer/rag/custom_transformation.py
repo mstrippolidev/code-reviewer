@@ -36,5 +36,7 @@ class ExplainedChunkSplitter(TransformComponent):
                 "chunk_type": chunk.chunk_type,
                 "start_line": chunk.start_line,
                 "end_line": chunk.end_line,
+                "code": chunk.code,
             },
+            excluded_embed_metadata_keys=["code"],
         )

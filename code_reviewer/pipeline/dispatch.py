@@ -5,7 +5,7 @@
 """
 from langchain_core.runnables import RunnableLambda, RunnableParallel
 
-from code_reviewer.agents.base import AgentBase, FileSizeAwareAgentBase
+from code_reviewer.agents.base import AgentBase, FileReviewMeta, FileSizeAwareAgentBase
 from code_reviewer.agents.coverage_gap import CoverageGapAgent
 from code_reviewer.agents.llm.middleware import PRIORITY_DISCOUNTS
 from code_reviewer.agents.registry import AgentsContainer
@@ -52,10 +52,8 @@ def _run_file_agents(
 ) -> list[AgentReviewEntry]:
     """Runs every file agent once, on the whole file, every size band."""
     source = prepared_file.source_file
-    return [
-        agent.execute_agent(source.content, source.file_path, prepared_file.size_status).review[0]
-        for agent in file_agents
-    ]
+    review_meta = FileReviewMeta(size_status=prepared_file.size_status, repo_data=prepared_file.repo_data)
+    return [agent.execute_agent(source.content, source.file_path, review_meta).review[0] for agent in file_agents]
 
 
 def _run_chunk_agent(
@@ -204,6 +202,7 @@ def review_file_runnable(
         "code": prepared_file.source_file.content,
         "file_path": prepared_file.source_file.file_path,
         "size_status": prepared_file.size_status,
+        "repo_data": prepared_file.repo_data,
     }
     branches = (
         {agent.get_agent_key().value: _file_agent_branch(agent) for agent in agents_container.file_agents}
@@ -219,7 +218,13 @@ def review_file_runnable(
 
 def _file_agent_branch(agent: FileSizeAwareAgentBase) -> RunnableLambda:
     """Builds a branch that runs one file agent against the shared context."""
-    return RunnableLambda(lambda ctx: agent.execute_agent(ctx["code"], ctx["file_path"], ctx["size_status"]))
+    return RunnableLambda(
+        lambda ctx: agent.execute_agent(
+            ctx["code"],
+            ctx["file_path"],
+            FileReviewMeta(size_status=ctx["size_status"], repo_data=ctx.get("repo_data")),
+        )
+    )
 
 
 def _chunk_agent_branch(agent: AgentBase, splitter: CodeSplitterInterface) -> RunnableLambda:
