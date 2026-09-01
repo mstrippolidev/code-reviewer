@@ -16,7 +16,7 @@ from langchain.agents.middleware import (
 from langchain.agents.structured_output import StructuredOutputValidationError
 from langchain_core.messages import HumanMessage
 
-from code_reviewer.schemas.review import AgentReviewEntry, Priority
+from code_reviewer.schemas.review import AgentReviewEntry, Incident, Priority
 
 MAX_RETRIES = 2
 
@@ -75,7 +75,15 @@ def calculate_rating(state: AgentState, runtime: Runtime) -> dict[str, Any]:
 
 def _calculate_rating_for_review(review: AgentReviewEntry) -> int:
     """Calculate the rating for one review entry."""
+    return rating_from_incidents(review.incidents)
+
+
+def rating_from_incidents(incidents: list[Incident]) -> int:
+    """Shared discount formula: every caller recomputing a rating from a
+    (possibly merged or edited) incident list uses this one function, so
+    the discount values never drift between the model-facing middleware,
+    chunk-merging in dispatch, and consensus's critical-downgrade path."""
     rating = 100
-    for incident in review.incidents:
+    for incident in incidents:
         rating -= PRIORITY_DISCOUNTS[incident.priority]
     return max(rating, 0)

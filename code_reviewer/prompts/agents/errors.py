@@ -2,7 +2,12 @@
     System prompt for the ERR agent: error handling and dead code.
 """
 
-ERR_AGENT_SYSTEM_PROMPT = """
+ERR_CRITICAL_CRITERION = """a swallowed exception or silent failure on a path
+with real, hard-to-reverse consequences if it fails silently — money movement,
+an authentication/authorization check, a write other systems will trust as
+having happened"""
+
+ERR_AGENT_SYSTEM_PROMPT = f"""
 You are an error-handling reviewer. Your only job is to check whether
 failures in the given code are surfaced clearly and intentionally, so a
 caller can never mistake a silent failure for success.
@@ -40,11 +45,8 @@ priority low — report it rather than suppress it, just at the lower
 confidence this review can vouch for it.
 
 For each issue you flag, report one incident with:
-- priority: "critical" only for a swallowed exception or silent failure on
-  a path with real, hard-to-reverse consequences if it fails silently —
-  money movement, an authentication/authorization check, a write other
-  systems will trust as having happened. This is rare; if unsure between
-  critical and high, choose high. "high" for a swallowed exception or a
+- priority: "critical" only for {ERR_CRITICAL_CRITERION}. This is rare; if
+  unsure between critical and high, choose high. "high" for a swallowed exception or a
   return-based error signal on a path callers are likely to rely on,
   without that irreversible-consequence risk; "medium" for a generic
   exception type used as a catch-all, or dead code that could mislead a

@@ -7,7 +7,7 @@ from langchain_core.runnables import RunnableLambda, RunnableParallel
 
 from code_reviewer.agents.base import AgentBase, FileReviewMeta, FileSizeAwareAgentBase
 from code_reviewer.agents.coverage_gap import CoverageGapAgent
-from code_reviewer.agents.llm.middleware import PRIORITY_DISCOUNTS
+from code_reviewer.agents.llm.middleware import rating_from_incidents
 from code_reviewer.agents.registry import AgentsContainer
 from code_reviewer.config.settings import get_settings
 from code_reviewer.pipeline.code_splitter.interface import CodeChunk, CodeSplitterInterface
@@ -106,7 +106,7 @@ def _run_chunked_agent(agent: AgentBase, file_path: str, chunks: list[CodeChunk]
         file_path=file_path,
         code_key=agent.get_agent_key(),
         incidents=incidents,
-        rating=_rating_from_incidents(incidents),
+        rating=rating_from_incidents(incidents),
     )
 
 
@@ -169,15 +169,6 @@ def _parse_line_range(line_position: str) -> tuple[int, int]:
     return int(start_text), int(end_text)
 
 
-def _rating_from_incidents(incidents: list[Incident]) -> int:
-    """Computes one rating over a merged incident list, using the same
-    discount formula every individual agent call already applies."""
-    rating = 100
-    for incident in incidents:
-        rating -= PRIORITY_DISCOUNTS[incident.priority]
-    return max(rating, 0)
-
-
 def _apply_cmplx_soft_limit_incident(entries: list[AgentReviewEntry], prepared_file: PreparedFile) -> None:
     """Appends CMPLX's file-size incident when the file is in the soft
     limit band — a line-count threshold, not a judgment call, so it's
@@ -190,7 +181,7 @@ def _apply_cmplx_soft_limit_incident(entries: list[AgentReviewEntry], prepared_f
     if cmplx_entry is None:
         return
     cmplx_entry.incidents.append(_soft_limit_incident(prepared_file.source_file.content))
-    cmplx_entry.rating = _rating_from_incidents(cmplx_entry.incidents)
+    cmplx_entry.rating = rating_from_incidents(cmplx_entry.incidents)
 
 
 def _soft_limit_incident(content: str) -> Incident:

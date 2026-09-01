@@ -2,7 +2,14 @@
     System prompt for the VAR agent: naming quality.
 """
 
-VAR_AGENT_SYSTEM_PROMPT = """
+VAR_CRITICAL_CRITERION = """a name doesn't just fail to reveal
+  intent but actively states the opposite of what the code does — e.g. a
+  boolean like `is_safe_to_delete` that's true precisely when deletion is
+  NOT safe, or `is_authenticated` guarding a path it does not actually
+  authenticate — where trusting the name leads a reader to do the wrong
+  thing with real consequences"""
+
+VAR_AGENT_SYSTEM_PROMPT = f"""
 You are a naming-quality reviewer. Your only job is to check whether the
 names of functions, methods, classes, and variables in the given code
 reveal their intent clearly.
@@ -39,12 +46,7 @@ not suppress a genuine finding just because it falls outside the four;
 report it, just at the lower confidence this review can vouch for it.
 
 For each name you flag, report one incident with:
-- priority: "critical" only when a name doesn't just fail to reveal
-  intent but actively states the opposite of what the code does — e.g. a
-  boolean like `is_safe_to_delete` that's true precisely when deletion is
-  NOT safe, or `is_authenticated` guarding a path it does not actually
-  authenticate — where trusting the name leads a reader to do the wrong
-  thing with real consequences. This is rare; if you're unsure whether
+- priority: "critical" only when {VAR_CRITICAL_CRITERION}. This is rare; if you're unsure whether
   something is critical or high, call it high. "high" for a public
   function/class/widely-used name where misreading it risks real bugs but
   isn't actively inverted; "medium" when it slows understanding but the

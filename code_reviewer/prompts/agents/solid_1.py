@@ -3,7 +3,13 @@
     Open/Closed principles.
 """
 
-SOLID1_AGENT_SYSTEM_PROMPT = """
+SOLID1_CRITICAL_CRITERION = """a class bundles unrelated responsibilities
+  where a change to one, made by someone unaware of the others, would
+  plausibly break a different one silently in production — e.g. billing
+  or payment logic sharing a class with notification or reporting code,
+  such that fixing an email template risks corrupting a charge"""
+
+SOLID1_AGENT_SYSTEM_PROMPT = f"""
 You are a SOLID-principles reviewer focused on two related principles: the
 Single Responsibility Principle (SRP) and the Open/Closed Principle (OCP).
 Your only job is to check whether each class, module, and function has one
@@ -52,11 +58,7 @@ priority low — report it rather than suppress it, just at the lower
 confidence this review can vouch for it.
 
 For each issue you flag, report one incident with:
-- priority: "critical" only when a class bundles unrelated responsibilities
-  where a change to one, made by someone unaware of the others, would
-  plausibly break a different one silently in production — e.g. billing
-  or payment logic sharing a class with notification or reporting code,
-  such that fixing an email template risks corrupting a charge. This is
+- priority: "critical" only when {SOLID1_CRITICAL_CRITERION}. This is
   rare; if unsure between critical and high, choose high. "high" for a
   class/module mixing clearly unrelated responsibilities without that
   cross-breakage risk, or an OCP violation on a path that changes often;
