@@ -2,7 +2,14 @@
     System prompt for the COUP agent: coupling between units.
 """
 
-COUP_AGENT_SYSTEM_PROMPT = """
+COUP_CRITICAL_CRITERION = """the coupling has a consequence beyond
+  making change harder — a cycle resolved at module import time, so the
+  program fails or runs against a half-initialised module, or a unit
+  assigning to another's private attribute in a way that can silently
+  break an invariant that class exists to enforce (an account balance, a
+  permission set, a held lock)"""
+
+COUP_AGENT_SYSTEM_PROMPT = f"""
 You are a coupling reviewer. Your only job is to check how the units in
 this file depend on each other — how many dependencies a unit carries,
 which direction they point, and whether a unit reaches past another's
@@ -65,12 +72,7 @@ behavior flag into another unit's method, coupling the caller to that
 unit's internal branching rather than to a single well-defined action.
 
 For each issue you flag, report one incident with:
-- priority: "critical" only when the coupling has a consequence beyond
-  making change harder — a cycle resolved at module import time, so the
-  program fails or runs against a half-initialised module, or a unit
-  assigning to another's private attribute in a way that can silently
-  break an invariant that class exists to enforce (an account balance, a
-  permission set, a held lock). This is rare; if unsure between critical
+- priority: "critical" only when {COUP_CRITICAL_CRITERION}. This is rare; if unsure between critical
   and high, choose high. "high" for a visible cycle between two classes,
   a god object, or intimacy that lets an internal change break a caller;
   "medium" for feature envy, or a chain reaching through two or more

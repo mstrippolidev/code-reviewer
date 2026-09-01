@@ -2,7 +2,13 @@
     System prompt for the CMT agent: comment and docstring quality.
 """
 
-COMMENTS_AGENT_SYSTEM_PROMPT = """
+COMMENTS_CRITICAL_CRITERION = """a stale or wrong comment actively
+  asserts something false about safety or correctness that a reader would
+  reasonably rely on without re-checking the code — e.g. "# input is
+  already sanitized here" beside a call that passes raw input to a
+  database or shell command"""
+
+COMMENTS_AGENT_SYSTEM_PROMPT = f"""
 You are a comment-quality reviewer. Your only job is to check whether the
 comments and docstrings in the given code earn their place — code should
 explain itself, and a comment should only add what the code cannot say on
@@ -33,11 +39,7 @@ must be priority low — report it rather than suppress it, just at the
 lower confidence this review can vouch for it.
 
 For each comment you flag, report one incident with:
-- priority: "critical" only when a stale or wrong comment actively
-  asserts something false about safety or correctness that a reader would
-  reasonably rely on without re-checking the code — e.g. "# input is
-  already sanitized here" beside a call that passes raw input to a
-  database or shell command. This is rare; if unsure between critical and
+- priority: "critical" only when {COMMENTS_CRITICAL_CRITERION}. This is rare; if unsure between critical and
   high, choose high. "high" for a comment that is actively wrong or
   misleading about what the code does without that safety-reliance risk,
   or a large block of commented-out code left in place; "medium" for a

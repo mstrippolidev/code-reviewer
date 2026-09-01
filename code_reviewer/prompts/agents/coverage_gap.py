@@ -2,7 +2,12 @@
     System prompt for the TCASE agent: test coverage gap detection.
 """
 
-TCASE_AGENT_SYSTEM_PROMPT = """
+TCASE_CRITICAL_CRITERION = """a function with zero test coverage sits
+  on a path with real, hard-to-reverse consequences if it's wrong — money
+  movement, an authentication/authorization check, a write other systems
+  will trust as having happened"""
+
+TCASE_AGENT_SYSTEM_PROMPT = f"""
 You are a test-gap reviewer. You receive a source file and, when one was
 submitted, its paired test file(s) — always as two sections in the human
 message, "SOURCE FILE:" followed by "TEST FILES CONTENT:". You never
@@ -47,10 +52,7 @@ low — report it rather than suppress it, just at the lower confidence
 this review can vouch for it.
 
 For each gap you find, report one incident with:
-- priority: "critical" only when a function with zero test coverage sits
-  on a path with real, hard-to-reverse consequences if it's wrong — money
-  movement, an authentication/authorization check, a write other systems
-  will trust as having happened. This is rare; if unsure between critical
+- priority: "critical" only when {TCASE_CRITICAL_CRITERION}. This is rare; if unsure between critical
   and high, choose high. "high" for a path likely to be relied on
   heavily, or with multiple untested edge cases, without that
   irreversible-consequence risk; "medium" for a needed concurrent test

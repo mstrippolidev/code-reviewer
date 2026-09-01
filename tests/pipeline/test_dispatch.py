@@ -8,15 +8,31 @@
 from typing import Callable
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.pool import StaticPool
 
 from code_reviewer.agents.base import FileReviewMeta
 from code_reviewer.agents.registry import AgentsContainer
 from code_reviewer.pipeline.dispatch import review_file, review_file_runnable
+from code_reviewer.rag.indexer import SimilarChunk
 from code_reviewer.rag.repo_data import RepoData
+from code_reviewer.rag.structural_hash_store import LocatedChunk, StructuralHashStore, StructuralMatch
 from code_reviewer.schemas.review import AgentOutput, AgentReviewEntry, CodeKey, Incident, Priority, SizeStatus
 from code_reviewer.schemas.submission import PreparedFile, SubmittedFile
 
 SOURCE_WITH_TWO_FUNCTIONS = "def foo():\n    return 1\n\n\ndef bar():\n    return 2\n"
+ADD_FUNCTION = "def add(a, b):\n    return a + b\n"
+
+
+class FakeEmbeddingIndex:
+    """Stands in for LlamaIndexRagManager: returns a canned list of
+    semantic matches, never a real vector search."""
+
+    def __init__(self, matches: list[SimilarChunk] | None = None) -> None:
+        self._matches = matches if matches is not None else []
+
+    def find_similar(self, repo_data: RepoData, code: str, top_k: int = 5) -> list[SimilarChunk]:
+        return self._matches
 
 
 class FakeAgent:
@@ -78,22 +94,58 @@ def tcase_agent() -> FakeAgent:
 
 
 @pytest.fixture
-def container(file_agent: FakeAgent, cmplx_agent: FakeAgent, var_agent: FakeAgent, tcase_agent: FakeAgent) -> AgentsContainer:
+def dry_agent() -> FakeAgent:
+    return FakeAgent(CodeKey.DRY)
+
+
+@pytest.fixture
+def structural_hash_store() -> StructuralHashStore:
+    """A fresh in-memory SQLite-backed store, isolated per test. StaticPool
+    keeps every thread on the same connection — review_file_runnable
+    dispatches DRY's branch on a worker thread, and SQLite's default
+    per-thread pooling would otherwise hand that thread its own empty
+    in-memory database, invisible to whatever this fixture indexed."""
+    engine = create_engine("sqlite:///:memory:", poolclass=StaticPool, connect_args={"check_same_thread": False})
+    return StructuralHashStore(engine=engine, schema_name=None)
+
+
+@pytest.fixture
+def rag_manager() -> FakeEmbeddingIndex:
+    return FakeEmbeddingIndex()
+
+
+@pytest.fixture
+def container(
+    file_agent: FakeAgent,
+    cmplx_agent: FakeAgent,
+    var_agent: FakeAgent,
+    tcase_agent: FakeAgent,
+    dry_agent: FakeAgent,
+    rag_manager: FakeEmbeddingIndex,
+    structural_hash_store: StructuralHashStore,
+) -> AgentsContainer:
     return AgentsContainer(
         file_agents=[file_agent],
         chunk_agents=[cmplx_agent, var_agent],
         tcase_agent=tcase_agent,
+        dry_agent=dry_agent,
+        rag_manager=rag_manager,
+        structural_hash_store=structural_hash_store,
     )
 
 
 def _prepared_file(
-    size_status: SizeStatus = SizeStatus.NORMAL, content: str = "x = 1\n", repo_data: RepoData | None = None
+    size_status: SizeStatus = SizeStatus.NORMAL,
+    content: str = "x = 1\n",
+    repo_data: RepoData | None = None,
+    intra_pr_duplicates: list[list[LocatedChunk]] | None = None,
 ) -> PreparedFile:
     return PreparedFile(
         source_file=SubmittedFile(file_path="f.py", content=content),
         test_files=[],
         size_status=size_status,
         repo_data=repo_data,
+        intra_pr_duplicates=intra_pr_duplicates or [],
     )
 
 
@@ -105,8 +157,10 @@ DISPATCH_FUNCTIONS = pytest.mark.parametrize("dispatch", [review_file, review_fi
 def test_returns_one_entry_per_agent_for_a_normal_size_file(dispatch: DispatchFn, container: AgentsContainer) -> None:
     entries = dispatch(_prepared_file(), container)
 
-    assert {entry.code_key for entry in entries} == {CodeKey.COH, CodeKey.CMPLX, CodeKey.VAR, CodeKey.TCASE}
-    assert len(entries) == 4
+    assert {entry.code_key for entry in entries} == {
+        CodeKey.COH, CodeKey.CMPLX, CodeKey.VAR, CodeKey.TCASE, CodeKey.DRY
+    }
+    assert len(entries) == 5
 
 
 @DISPATCH_FUNCTIONS
@@ -253,6 +307,70 @@ def test_tcase_is_never_chunked_even_at_hard_limit(
 
     assert len(tcase_agent.execute_agent_calls) == 1
     assert tcase_agent.execute_agent_batch_calls == []
+
+
+@DISPATCH_FUNCTIONS
+def test_dry_short_circuits_with_no_evidence(dispatch: DispatchFn, container: AgentsContainer, dry_agent: FakeAgent) -> None:
+    """Verify DRY skips the LLM call entirely when there's nothing to report."""
+    entries = dispatch(_prepared_file(), container)
+
+    dry_entry = next(entry for entry in entries if entry.code_key == CodeKey.DRY)
+    assert dry_entry.rating == 100
+    assert dry_entry.incidents == []
+    assert dry_agent.execute_agent_calls == []
+
+
+@DISPATCH_FUNCTIONS
+def test_dry_is_called_with_intra_pr_evidence_when_present(
+    dispatch: DispatchFn, container: AgentsContainer, dry_agent: FakeAgent
+) -> None:
+    """Verify a non-empty intra_pr_duplicates on the PreparedFile reaches DRY as formatted evidence text."""
+    group = [
+        LocatedChunk(StructuralMatch(file_path="f.py", chunk_name="foo", start_line=1, end_line=2), "def foo():\n    return 1"),
+        LocatedChunk(StructuralMatch(file_path="other.py", chunk_name="bar", start_line=5, end_line=6), "def bar():\n    return 1"),
+    ]
+    prepared = _prepared_file(intra_pr_duplicates=[group])
+
+    dispatch(prepared, container)
+
+    assert len(dry_agent.execute_agent_calls) == 1
+    content, file_path, _ = dry_agent.execute_agent_calls[0]
+    assert file_path == "f.py"
+    assert "DUPLICATE GROUPS WITHIN THIS PR" in content
+
+
+@DISPATCH_FUNCTIONS
+def test_dry_is_called_with_cross_history_evidence_when_repo_data_present(
+    dispatch: DispatchFn,
+    container: AgentsContainer,
+    dry_agent: FakeAgent,
+    structural_hash_store: StructuralHashStore,
+) -> None:
+    """Verify a repo-scoped review checks the indexed history and reaches DRY when a structural match exists."""
+    repo_data = RepoData(repo_id="repo-1", commit_sha="sha-1", owner_id="owner-1")
+    structural_hash_store.index_file(repo_data, "legacy/math_ops.py", ADD_FUNCTION)
+    prepared = _prepared_file(content=ADD_FUNCTION, repo_data=repo_data)
+
+    dispatch(prepared, container)
+
+    assert len(dry_agent.execute_agent_calls) == 1
+    content, _, _ = dry_agent.execute_agent_calls[0]
+    assert "DUPLICATES AGAINST ALREADY-INDEXED REPO HISTORY" in content
+
+
+@DISPATCH_FUNCTIONS
+def test_dry_skips_cross_history_lookup_for_a_standalone_review(
+    dispatch: DispatchFn, container: AgentsContainer, dry_agent: FakeAgent
+) -> None:
+    """Verify no repo_data means no history lookup is even attempted — same
+    fallback ARCH/COUP's evidence hop already uses."""
+    prepared = _prepared_file(content=ADD_FUNCTION, repo_data=None)
+
+    entries = dispatch(prepared, container)
+
+    dry_entry = next(entry for entry in entries if entry.code_key == CodeKey.DRY)
+    assert dry_entry.rating == 100
+    assert dry_agent.execute_agent_calls == []
 
 
 def _comparable(entries: list[AgentReviewEntry]) -> list[tuple]:

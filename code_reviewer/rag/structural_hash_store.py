@@ -31,6 +31,18 @@ class StructuralMatch:
     end_line: int
 
 
+@dataclass
+class LocatedChunk:
+    """One duplicate location together with its own code. Lives here,
+    beside StructuralMatch, rather than in rag/dry_evidence.py — that
+    module pulls in dry_matching.py, and schemas/submission.py (which
+    needs this type for PreparedFile) would otherwise form an import
+    cycle through it."""
+
+    match: StructuralMatch
+    code: str
+
+
 def _build_default_engine() -> Engine:
     return create_engine(build_connection_url("postgresql+psycopg2"))
 

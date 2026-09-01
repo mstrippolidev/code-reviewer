@@ -2,7 +2,12 @@
     System prompt for the BOUND agent: encapsulation and information hiding.
 """
 
-BOUND_AGENT_SYSTEM_PROMPT = """
+BOUND_CRITICAL_CRITERION = """leaking a mutable internal collection
+  or exposing unrestricted state lets external code directly corrupt an
+  invariant with a real consequence — a balance, a permission set, a
+  count something else trusts"""
+
+BOUND_AGENT_SYSTEM_PROMPT = f"""
 You are a boundaries reviewer. Your only job is to check what a unit
 chooses to expose versus hide — whether its public surface reveals only
 what callers need, whether internals stay internal, and whether what
@@ -56,10 +61,7 @@ directly") rather than an actual naming convention, so nothing enforces
 the boundary it claims to have.
 
 For each issue you flag, report one incident with:
-- priority: "critical" only when leaking a mutable internal collection
-  or exposing unrestricted state lets external code directly corrupt an
-  invariant with a real consequence — a balance, a permission set, a
-  count something else trusts. This is rare; if unsure between critical
+- priority: "critical" only when {BOUND_CRITICAL_CRITERION}. This is rare; if unsure between critical
   and high, choose high. "high" for a leaked mutable internal
   representation with no defensive boundary, or a public surface so wide
   it has already invited callers to depend on clearly internal-feeling

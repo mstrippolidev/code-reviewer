@@ -3,7 +3,13 @@
     Segregation, and Dependency Inversion principles.
 """
 
-SOLID2_AGENT_SYSTEM_PROMPT = """
+SOLID2_CRITICAL_CRITERION = """an LSP violation where an override silently
+defeats a security- or correctness-critical check while still looking like a
+valid implementation — e.g. an `is_allowed()` or `validate()` override that
+always returns success regardless of input, silently bypassing every caller
+that trusts the parent's contract"""
+
+SOLID2_AGENT_SYSTEM_PROMPT = f"""
 You are a SOLID-principles reviewer focused on three related contracts: the
 Liskov Substitution Principle (LSP), the Interface Segregation Principle
 (ISP), and the Dependency Inversion Principle (DIP). Your only job is to
@@ -52,12 +58,8 @@ must be priority low — report it rather than suppress it, just at the
 lower confidence this review can vouch for it.
 
 For each issue you flag, report one incident with:
-- priority: "critical" only for an LSP violation where an override
-  silently defeats a security- or correctness-critical check while still
-  looking like a valid implementation — e.g. an `is_allowed()` or
-  `validate()` override that always returns success regardless of input,
-  silently bypassing every caller that trusts the parent's contract. This
-  is rare; if unsure between critical and high, choose high. "high" for
+- priority: "critical" only for {SOLID2_CRITICAL_CRITERION}. This is rare;
+  if unsure between critical and high, choose high. "high" for
   an LSP violation a caller could actually trip over without that
   security-bypass risk, or a DIP violation that blocks testing the class
   in isolation; "medium" for an ISP violation forcing a meaningless

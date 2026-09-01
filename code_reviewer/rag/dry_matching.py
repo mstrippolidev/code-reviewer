@@ -72,6 +72,10 @@ _NamedChunkLocationT = TypeVar("_NamedChunkLocationT", bound=_NamedChunkLocation
 class CrossHistoryDuplicateFinder:
     """Finds a file's chunks that duplicate content already indexed in the
     repo's history, by exact structural hash and by semantic similarity.
+
+    REVIEW 26/08 good, for each chunk of code in one repo, look for the
+    structural match and the semantic match.
+    store what it find structural or semantic.
     """
 
     def __init__(

@@ -12,6 +12,7 @@ from code_reviewer.agents.llm.base import LLMInterface
 from code_reviewer.agents.llm.middleware import retry_model, calculate_rating
 from code_reviewer.agents.llm.ollama import OllamaLLM
 from code_reviewer.config.settings import get_settings
+from code_reviewer.consensus.critical_confirmation import CriticalConfirmation
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.schemas.review import (
     AgentOutput,
@@ -74,7 +75,7 @@ class AgentBase:
             model=llm_factory.create_raw_model(),
             tools=self._build_tools(),
             system_prompt=self._system_prompt,
-            middleware=[retry_model, calculate_rating],
+            middleware=[retry_model, calculate_rating, CriticalConfirmation(code_agent)],
             response_format=llm_factory.build_response_format(AgentOutput),
             context_schema=self._context_schema(),
         )

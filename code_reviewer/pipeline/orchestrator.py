@@ -3,6 +3,8 @@
     It orchestrates the intake screen, file selection, and per-file pipeline run and
     call the agents for each.
 """
+import logging
+
 from code_reviewer.agents.registry import AgentsContainer
 from code_reviewer.guardrails.errors import IntakeRejectedError
 from code_reviewer.guardrails.intake_screen import run_intake_screen
@@ -12,9 +14,15 @@ from code_reviewer.pipeline.file_size import run_file_size_guard
 from code_reviewer.pipeline.pr_file_selection import select_pr_files
 from code_reviewer.pipeline.raw_character_guard import run_raw_character_guard
 from code_reviewer.pipeline.test_file_pairing import pair_source_files_with_tests
+from code_reviewer.rag.dry_evidence import attach_code, groups_for_file
+from code_reviewer.rag.dry_matching import find_intra_pr_duplicates
+from code_reviewer.rag.errors import DryMatchingChunkingError
 from code_reviewer.rag.repo_data import RepoData
+from code_reviewer.rag.structural_hash_store import LocatedChunk
 from code_reviewer.schemas.review import AgentReviewEntry, SizeStatus, SkippedFile
 from code_reviewer.schemas.submission import PreparedFile, SubmittedFile
+
+logger = logging.getLogger(__name__)
 
 _SKIP_REASONS = {
     SubmissionTooLargeError: "raw_character_limit_exceeded",
@@ -69,6 +77,7 @@ def prepare_files_for_pipeline(
         test, each with a reason.
     """
     selected_files, skipped_files, test_files = select_pr_files(files)
+    intra_pr_groups = _intra_pr_duplicate_groups(selected_files)
     pairings = pair_source_files_with_tests(selected_files, test_files)
     prepared_files = []
 
@@ -85,9 +94,21 @@ def prepare_files_for_pipeline(
                 test_files=screened_test_files,
                 size_status=size_status,
                 repo_data=repo_data,
+                intra_pr_duplicates=groups_for_file(intra_pr_groups, pairing.source_file.file_path),
             ))
 
     return prepared_files, skipped_files
+
+def _intra_pr_duplicate_groups(selected_files: list[SubmittedFile]) -> list[list[LocatedChunk]]:
+    """Computed once for the whole PR rather than per file, since a
+    duplicate group can span files a single file's own pipeline pass never
+    otherwise sees together. Degrades to no evidence rather than failing
+    the whole submission if any one file can't be chunked."""
+    try:
+        return attach_code(selected_files, find_intra_pr_duplicates(selected_files))
+    except DryMatchingChunkingError:
+        logger.warning("Skipping intra-PR duplicate detection: a file could not be chunked.")
+        return []
 
 def _run_source_file_guards(content: str) -> SizeStatus:
     """Runs the three per-file guards in cost-ascending order, returning
