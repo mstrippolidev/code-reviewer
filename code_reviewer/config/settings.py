@@ -56,16 +56,9 @@ class Settings(BaseSettings):
     max_batch_concurrency: int = 4
     max_dispatch_concurrency: int = 4
 
-    critical_confirmation_models: str = ""
+    exemplar_relevance_floor: float = 0.6
+    exemplar_top_k: int = 2
 
-
-    def critical_confirmation_panel(self) -> list[str]:
-        """The judge panel's model ids, in configured order.
-
-        Kept as one comma-separated env var rather than three named ones so
-        the panel's size stays a configuration choice, not a schema change.
-        """
-        return [model.strip() for model in self.critical_confirmation_models.split(",") if model.strip()]
 
 
 @lru_cache

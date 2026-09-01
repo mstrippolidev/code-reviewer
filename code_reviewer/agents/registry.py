@@ -19,7 +19,10 @@ from code_reviewer.agents.naming import NamingAgent
 from code_reviewer.agents.solid_1 import SolidSrpOcpAgent
 from code_reviewer.agents.solid_2 import SolidLspDipAgent
 from code_reviewer.agents.testability import TestabilityAgent
+from code_reviewer.rag.exemplar_injection import ExemplarCorpora
+from code_reviewer.rag.exemplars import ExemplarStore
 from code_reviewer.rag.indexer import LlamaIndexRagManager
+from code_reviewer.rag.shared_exemplars import SharedExemplarStore
 from code_reviewer.rag.structural_hash_store import StructuralHashStore
 
 
@@ -33,12 +36,16 @@ class AgentsContainer:
     dry_agent: DryAgent
     rag_manager: LlamaIndexRagManager
     structural_hash_store: StructuralHashStore
+    exemplar_store: ExemplarStore | None = None
+    shared_exemplar_store: SharedExemplarStore | None = None
 
 
 def build_agent_roster(
     llm: LLMInterface | None = None,
     rag_manager: LlamaIndexRagManager | None = None,
     structural_hash_store: StructuralHashStore | None = None,
+    exemplar_store: ExemplarStore | None = None,
+    shared_exemplar_store: SharedExemplarStore | None = None,
 ) -> AgentsContainer:
     """Builds one instance of every agent, grouped for dispatch.
 
@@ -53,6 +60,9 @@ def build_agent_roster(
             cross-history exact-match pass. Defaults to a real
             StructuralHashStore() when not given, same pattern as
             rag_manager's own default.
+        exemplar_store: Per-repo corpus of known-good code the 2.0-weight
+            agents draw few-shot context from. Defaults to a real ExemplarStore() when
+            not given, same pattern as rag_manager's own default.
 
     Returns:
         An AgentsContainer holding all 14 built agents. Meant to be built
@@ -60,11 +70,14 @@ def build_agent_roster(
     """
     rag_manager = rag_manager or LlamaIndexRagManager()
     structural_hash_store = structural_hash_store or StructuralHashStore()
+    exemplar_store = exemplar_store or ExemplarStore()
+    shared_exemplar_store = shared_exemplar_store or SharedExemplarStore()
+    corpora = ExemplarCorpora(repo=exemplar_store, shared=shared_exemplar_store)
     file_agents = [
-        SolidSrpOcpAgent(llm),
-        SolidLspDipAgent(llm),
-        CohesionAgent(llm),
-        CouplingAgent(llm, rag_manager),
+        SolidSrpOcpAgent(llm, corpora),
+        SolidLspDipAgent(llm, corpora),
+        CohesionAgent(llm, corpora),
+        CouplingAgent(llm, rag_manager, corpora),
         ArchitectureAgent(llm, rag_manager),
         BoundariesAgent(llm),
     ]
@@ -86,4 +99,6 @@ def build_agent_roster(
         dry_agent=dry_agent,
         rag_manager=rag_manager,
         structural_hash_store=structural_hash_store,
+        exemplar_store=exemplar_store,
+        shared_exemplar_store=shared_exemplar_store,
     )
