@@ -29,6 +29,7 @@ def build_connection_url(drivername: str) -> URL:
 def create_vector_store_instance(
     embedding: EmbeddingInterface | None = None,
     schema_name: str = "code_reviewer",
+    table_name: str = "code_embeddings",
 ) -> PGVectorStore:
     """Build the PGVectorStore the RAG layer reads and writes through.
 
@@ -38,6 +39,9 @@ def create_vector_store_instance(
         schema_name: Postgres schema to connect to. Defaults to the
             production "code_reviewer" schema; integration tests override
             this to an isolated schema so they never touch real data.
+        table_name: Table to read and write. The exemplar corpus uses its
+            own table so a good-code reference can never surface as a
+            duplicate candidate in DRY's own similarity search.
 
     Returns:
         A PGVectorStore connected to the given schema, with repo_id and
@@ -47,7 +51,7 @@ def create_vector_store_instance(
     return PGVectorStore.from_params(
         connection_string=build_connection_url("postgresql+psycopg2"),
         async_connection_string=build_connection_url("postgresql+asyncpg"),
-        table_name="code_embeddings",
+        table_name=table_name,
         schema_name=schema_name,
         embed_dim=embedding.embed_dim,
         indexed_metadata_keys={("repo_id", "text"), ("owner_id", "text")},

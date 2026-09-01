@@ -6,13 +6,13 @@ import logging
 from dataclasses import dataclass
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import AgentMiddleware
 from langchain_core.tools import BaseTool
 
 from code_reviewer.agents.llm.base import LLMInterface
 from code_reviewer.agents.llm.middleware import retry_model, calculate_rating
 from code_reviewer.agents.llm.ollama import OllamaLLM
 from code_reviewer.config.settings import get_settings
-from code_reviewer.consensus.critical_confirmation import CriticalConfirmation
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.schemas.review import (
     AgentOutput,
@@ -75,7 +75,7 @@ class AgentBase:
             model=llm_factory.create_raw_model(),
             tools=self._build_tools(),
             system_prompt=self._system_prompt,
-            middleware=[retry_model, calculate_rating, CriticalConfirmation(code_agent)],
+            middleware=[retry_model, *self._extra_middleware(), calculate_rating],
             response_format=llm_factory.build_response_format(AgentOutput),
             context_schema=self._context_schema(),
         )
@@ -94,6 +94,12 @@ class AgentBase:
         COUP) — override in a subclass that sets its own dependencies
         before calling super().__init__()."""
         return None
+
+    def _extra_middleware(self) -> list[AgentMiddleware]:
+        """Middleware this agent needs beyond the shared retry and rating
+        steps. Empty for every agent except the ones given an exemplar
+        corpus to draw few-shot context from."""
+        return []
 
     def _recursion_limit(self) -> int:
         """Graph step budget for one invocation. Higher for agents whose
