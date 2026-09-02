@@ -22,6 +22,17 @@ class ChunkSplitter(TransformComponent):
         chunks = PythonCodeSplit().split_code(node.get_content())
         return [self._as_node(node, chunk) for chunk in chunks]
 
+    def _as_node(self, source: BaseNode, chunk: CodeChunk) -> TextNode:
+        """Metadata is stored for filtering and retrieval only. A query is
+        embedded as bare text, so anything metadata adds to a stored vector
+        is a difference the query can never match."""
+        metadata = self._chunk_metadata(source, chunk)
+        return TextNode(
+            text=self._embedded_text(chunk),
+            metadata=metadata,
+            excluded_embed_metadata_keys=list(metadata),
+        )
+
     def _chunk_metadata(self, source: BaseNode, chunk: CodeChunk) -> dict[str, Any]:
         return {
             **source.metadata,
@@ -31,7 +42,7 @@ class ChunkSplitter(TransformComponent):
             "end_line": chunk.end_line,
         }
 
-    def _as_node(self, source: BaseNode, chunk: CodeChunk) -> TextNode:
+    def _embedded_text(self, chunk: CodeChunk) -> str:
         raise NotImplementedError
 
 
@@ -39,8 +50,8 @@ class CodeChunkSplitter(ChunkSplitter):
     """Embeds each chunk as the code itself, for a corpus where a match
     should follow the code's own shape."""
 
-    def _as_node(self, source: BaseNode, chunk: CodeChunk) -> TextNode:
-        return TextNode(text=chunk.code, metadata=self._chunk_metadata(source, chunk))
+    def _embedded_text(self, chunk: CodeChunk) -> str:
+        return chunk.code
 
 
 class ExplainedChunkSplitter(ChunkSplitter):
@@ -51,9 +62,8 @@ class ExplainedChunkSplitter(ChunkSplitter):
         super().__init__()
         self._explainer = explainer or ChunkExplainer()
 
-    def _as_node(self, source: BaseNode, chunk: CodeChunk) -> TextNode:
-        return TextNode(
-            text=self._explainer.explain(chunk.code),
-            metadata={**self._chunk_metadata(source, chunk), "code": chunk.code},
-            excluded_embed_metadata_keys=["code"],
-        )
+    def _embedded_text(self, chunk: CodeChunk) -> str:
+        return self._explainer.explain(chunk.code)
+
+    def _chunk_metadata(self, source: BaseNode, chunk: CodeChunk) -> dict[str, Any]:
+        return {**super()._chunk_metadata(source, chunk), "code": chunk.code}
