@@ -48,3 +48,7 @@ class DryMatchingChunkingError(Exception):
 
 class ChunkExplanationError(Exception):
     """Raised when generating a code chunk's short explanation fails."""
+
+
+class UnsupportedExemplarPrincipleError(Exception):
+    """Raised when promoting a candidate for a principle whose exemplars no agent retrieves."""
