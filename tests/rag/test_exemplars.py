@@ -5,22 +5,9 @@
 import pytest
 
 from code_reviewer.rag.errors import RepoOwnerRequiredError
-from code_reviewer.rag.exemplars import ExemplarQuery, ExemplarSource, ExemplarStore
+from code_reviewer.rag.exemplars import ExemplarSource, ExemplarStore
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.schemas.review import CodeKey
-
-
-class FakeVectorStore:
-    def __init__(self) -> None:
-        self.added: list = []
-
-    def add(self, nodes: list) -> None:
-        self.added.extend(nodes)
-
-
-@pytest.fixture
-def store() -> ExemplarStore:
-    return ExemplarStore(vector_store=FakeVectorStore(), embedding=None, explainer=object())
 
 
 def _store_without_dependencies() -> ExemplarStore:

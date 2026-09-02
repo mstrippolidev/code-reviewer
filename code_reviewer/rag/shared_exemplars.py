@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from llama_index.core.vector_stores import FilterCondition, MetadataFilters
+from llama_index.core.vector_stores import (
+    FilterCondition,
+    FilterOperator,
+    MetadataFilter,
+    MetadataFilters,
+)
 
 from code_reviewer.rag.errors import VectorStoreQueryError
 from code_reviewer.rag.exemplars import Exemplar, ExemplarSource, ExemplarStoreBase
@@ -58,9 +63,21 @@ class SharedExemplarStore(ExemplarStoreBase):
             VectorStoreQueryError: If the lookup fails.
         """
         try:
-            return not self._vector_store.get_nodes()
+            return not self._vector_store.get_nodes(filters=self._any_code_key_filter())
         except Exception as error:
             raise VectorStoreQueryError("Failed to inspect the shared exemplar corpus") from error
+
+    def _any_code_key_filter(self) -> MetadataFilters:
+        return MetadataFilters(
+            filters=[
+                MetadataFilter(
+                    key="code_key",
+                    operator=FilterOperator.IN,
+                    value=[code_key.value for code_key in CodeKey],
+                )
+            ],
+            condition=FilterCondition.AND,
+        )
 
     def find_exemplars(self, query: SharedExemplarQuery, top_k: int = 3) -> list[Exemplar]:
         """Retrieve curated good code for one principle, unscoped by repo.

@@ -16,9 +16,13 @@ class OllamaCodeEmbeddingProvider(EmbeddingInterface):
     """Builds the code-specific embedding client backed by a local Ollama instance."""
 
     def create_embedding_model(self) -> BaseEmbedding:
+        """Ollama truncates an over-long input silently rather than raising,
+        so num_ctx must exceed the largest text embedded on either side of a
+        comparison."""
         return OllamaEmbedding(
             model_name=settings.ollama_code_embed_model,
             base_url=settings.ollama_base_url,
+            ollama_additional_kwargs={"num_ctx": settings.ollama_embed_num_ctx},
         )
 
     @property

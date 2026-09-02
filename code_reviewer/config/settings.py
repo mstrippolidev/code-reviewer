@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     ollama_llm_model: str
     ollama_embed_model: str
     ollama_code_embed_model: str
+    ollama_embed_num_ctx: int = 8192
 
     openrouter_api_key: str
     openrouter_model: str
@@ -56,7 +57,7 @@ class Settings(BaseSettings):
     max_batch_concurrency: int = 4
     max_dispatch_concurrency: int = 4
 
-    exemplar_relevance_floor: float = 0.6
+    exemplar_relevance_floor: float = 0.5
     exemplar_top_k: int = 2
 
 
