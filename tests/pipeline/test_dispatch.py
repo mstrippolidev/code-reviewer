@@ -14,6 +14,7 @@ from sqlalchemy.pool import StaticPool
 from code_reviewer.agents.base import FileReviewMeta
 from code_reviewer.agents.registry import AgentsContainer
 from code_reviewer.pipeline.dispatch import review_file, review_file_runnable
+from code_reviewer.rag.code_similarity_index import CodeMatch, LexicalMatch
 from code_reviewer.rag.indexer import SimilarChunk
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.rag.structural_hash_store import LocatedChunk, StructuralHashStore, StructuralMatch
@@ -33,6 +34,21 @@ class FakeEmbeddingIndex:
 
     def find_similar(self, repo_data: RepoData, code: str, top_k: int = 5) -> list[SimilarChunk]:
         return self._matches
+
+
+class FakeCodeSimilarityIndex:
+    """Stands in for CodeSimilarityIndex: returns canned lists of raw-code
+    and lexical matches, never a real search."""
+
+    def __init__(self, code_matches: list[CodeMatch] | None = None, lexical_matches: list[LexicalMatch] | None = None) -> None:
+        self._code_matches = code_matches if code_matches is not None else []
+        self._lexical_matches = lexical_matches if lexical_matches is not None else []
+
+    def find_similar(self, repo_data: RepoData, code: str, top_k: int = 5) -> list[CodeMatch]:
+        return self._code_matches
+
+    def find_lexical_matches(self, repo_data: RepoData, code: str, top_k: int = 5) -> list[LexicalMatch]:
+        return self._lexical_matches
 
 
 class FakeAgent:
@@ -115,6 +131,11 @@ def rag_manager() -> FakeEmbeddingIndex:
 
 
 @pytest.fixture
+def code_similarity_index() -> FakeCodeSimilarityIndex:
+    return FakeCodeSimilarityIndex()
+
+
+@pytest.fixture
 def container(
     file_agent: FakeAgent,
     cmplx_agent: FakeAgent,
@@ -123,6 +144,7 @@ def container(
     dry_agent: FakeAgent,
     rag_manager: FakeEmbeddingIndex,
     structural_hash_store: StructuralHashStore,
+    code_similarity_index: FakeCodeSimilarityIndex,
 ) -> AgentsContainer:
     return AgentsContainer(
         file_agents=[file_agent],
@@ -131,6 +153,7 @@ def container(
         dry_agent=dry_agent,
         rag_manager=rag_manager,
         structural_hash_store=structural_hash_store,
+        code_similarity_index=code_similarity_index,
     )
 
 

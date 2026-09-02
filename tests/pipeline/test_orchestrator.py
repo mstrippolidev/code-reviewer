@@ -12,6 +12,7 @@ from code_reviewer.agents.registry import AgentsContainer
 from code_reviewer.config.settings import get_settings
 from code_reviewer.pipeline import orchestrator
 from code_reviewer.pipeline.orchestrator import review_submission
+from code_reviewer.rag.code_similarity_index import CodeMatch, LexicalMatch
 from code_reviewer.rag.indexer import SimilarChunk
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.rag.structural_hash_store import StructuralHashStore
@@ -23,6 +24,16 @@ class FakeEmbeddingIndex:
     """Stands in for LlamaIndexRagManager: returns no semantic matches, never a real vector search."""
 
     def find_similar(self, repo_data: RepoData, code: str, top_k: int = 5) -> list[SimilarChunk]:
+        return []
+
+
+class FakeCodeSimilarityIndex:
+    """Stands in for CodeSimilarityIndex: returns no raw-code or lexical matches, never a real search."""
+
+    def find_similar(self, repo_data: RepoData, code: str, top_k: int = 5) -> list[CodeMatch]:
+        return []
+
+    def find_lexical_matches(self, repo_data: RepoData, code: str, top_k: int = 5) -> list[LexicalMatch]:
         return []
 
 
@@ -55,6 +66,7 @@ def container() -> AgentsContainer:
         dry_agent=FakeAgent(CodeKey.DRY),
         rag_manager=FakeEmbeddingIndex(),
         structural_hash_store=StructuralHashStore(engine=engine, schema_name=None),
+        code_similarity_index=FakeCodeSimilarityIndex(),
     )
 
 

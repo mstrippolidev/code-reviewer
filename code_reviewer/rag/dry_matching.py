@@ -1,18 +1,25 @@
 """
     DRY's duplicate-detection facade. This module is the only place that
     knows how to turn "a file changed in this PR" into per-chunk duplicate
-    evidence — it composes two lower-level rag/ primitives that know nothing
+    evidence — it composes lower-level rag/ primitives that know nothing
     about DRY, PRs, or files: StructuralHashStore's exact structural-hash
-    lookup (Type 1-3 clones) and LlamaIndexRagManager's embedding-similarity
-    search (Type-4 clones). agents/dry.py (not yet built) is the intended
-    caller of this module's public functions.
+    lookup (Type 1-3 clones), LlamaIndexRagManager's explanation-embedding
+    search (Type-4 clones whose auto-generated summaries converge), and
+    CodeSimilarityIndex's two routes over the same stored code — dense
+    (catches Type-4 near-misses whose summaries diverged instead) and BM25
+    (catches copy-paste-with-edits via shared identifiers/calls). All four
+    buckets are recall devices, unioned rather than score-fused: nothing
+    here decides which candidate is a real duplicate, that is the
+    downstream re-ranker and judge's job. agents/dry.py (not yet built) is
+    the intended caller of this module's public functions.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, TypeVar
 
 from code_reviewer.pipeline.code_splitter.errors import CodeChunkingError
 from code_reviewer.pipeline.code_splitter.interface import CodeChunk
 from code_reviewer.pipeline.code_splitter.python import PythonCodeSplit
+from code_reviewer.rag.code_similarity_index import CodeMatch, CodeSimilarityIndex, LexicalMatch
 from code_reviewer.rag.errors import DryMatchingChunkingError
 from code_reviewer.rag.indexer import LlamaIndexRagManager, SimilarChunk
 from code_reviewer.rag.repo_data import RepoData
@@ -21,6 +28,8 @@ from code_reviewer.rag.structural_hash_store import StructuralHashStore, Structu
 from code_reviewer.schemas.submission import SubmittedFile
 
 SEMANTIC_MATCH_TOP_K = 3
+CODE_MATCH_TOP_K = 3
+LEXICAL_MATCH_TOP_K = 3
 
 
 def find_intra_pr_duplicates(files: list[SubmittedFile]) -> list[list[StructuralMatch]]:
@@ -48,19 +57,24 @@ def _group_pr_chunks_by_hash(files: list[SubmittedFile]) -> dict[str, list[Struc
 @dataclass
 class ChunkHistoryMatch:
     """One of this file's own chunks, paired with the indexed-history
-    locations that duplicate it. Structural and semantic matches are kept
-    separate since their confidence differs: a structural match is an exact
-    clone, a semantic match is only a similarity candidate.
+    locations that duplicate it. Each bucket is kept separate since its
+    confidence differs: a structural match is an exact clone; the other
+    three are similarity candidates found by different signals (LLM
+    explanation, raw code, shared vocabulary) and are never fused into one
+    score — a candidate several buckets agree on is stronger evidence than
+    one bucket alone, which only a re-ranker downstream can tell apart.
     """
 
     chunk: StructuralMatch
     structural_matches: list[StructuralMatch]
     semantic_matches: list[SimilarChunk]
+    code_matches: list[CodeMatch] = field(default_factory=list)
+    lexical_matches: list[LexicalMatch] = field(default_factory=list)
 
 
 class _NamedChunkLocation(Protocol):
-    """Contract shared by StructuralMatch and SimilarChunk: enough to tell
-    whether a match is the chunk's own previously-indexed self."""
+    """Contract shared by every match type: enough to tell whether a match
+    is the chunk's own previously-indexed self."""
 
     file_path: str
     chunk_name: str
@@ -69,23 +83,26 @@ class _NamedChunkLocation(Protocol):
 _NamedChunkLocationT = TypeVar("_NamedChunkLocationT", bound=_NamedChunkLocation)
 
 
+@dataclass
+class DuplicateEvidenceSources:
+    """Bundles every store CrossHistoryDuplicateFinder queries, so adding
+    another recall bucket never grows its constructor past the project's
+    3-parameter limit (the same pattern ExemplarCorpora uses for COUP)."""
+
+    structural_hash_store: StructuralHashStore
+    embedding_index: LlamaIndexRagManager
+    code_similarity_index: CodeSimilarityIndex
+
+
 class CrossHistoryDuplicateFinder:
     """Finds a file's chunks that duplicate content already indexed in the
-    repo's history, by exact structural hash and by semantic similarity.
-
-    REVIEW 26/08 good, for each chunk of code in one repo, look for the
-    structural match and the semantic match.
-    store what it find structural or semantic.
+    repo's history, across four independent recall signals: exact
+    structural hash, explanation-embedding similarity, raw-code embedding
+    similarity, and BM25 keyword overlap.
     """
 
-    def __init__(
-        self,
-        structural_hash_store: StructuralHashStore,
-        embedding_index: LlamaIndexRagManager,
-        repo_data: RepoData,
-    ) -> None:
-        self._structural_hash_store = structural_hash_store
-        self._embedding_index = embedding_index
+    def __init__(self, evidence_sources: DuplicateEvidenceSources, repo_data: RepoData) -> None:
+        self._sources = evidence_sources
         self._repo_data = repo_data
 
     def find(self, file_path: str, content: str) -> list[ChunkHistoryMatch]:
@@ -103,21 +120,37 @@ class CrossHistoryDuplicateFinder:
         chunk_location = _as_match(file_path, chunk)
         structural_matches = self._structural_matches(chunk_location, chunk)
         semantic_matches = self._semantic_matches(chunk_location, chunk)
-        if not structural_matches and not semantic_matches:
+        code_matches = self._code_matches(chunk_location, chunk)
+        lexical_matches = self._lexical_matches(chunk_location, chunk)
+        if not any([structural_matches, semantic_matches, code_matches, lexical_matches]):
             return None
         return ChunkHistoryMatch(
-            chunk=chunk_location, structural_matches=structural_matches, semantic_matches=semantic_matches
+            chunk=chunk_location,
+            structural_matches=structural_matches,
+            semantic_matches=semantic_matches,
+            code_matches=code_matches,
+            lexical_matches=lexical_matches,
         )
 
     def _structural_matches(self, chunk_location: StructuralMatch, chunk: CodeChunk) -> list[StructuralMatch]:
         structural_hash = compute_structural_hash(chunk.code)
-        matches = self._structural_hash_store.find_by_hash(
+        matches = self._sources.structural_hash_store.find_by_hash(
             self._repo_data.repo_id, self._repo_data.owner_id, structural_hash
         )
         return _exclude_self_match(matches, chunk_location)
 
     def _semantic_matches(self, chunk_location: StructuralMatch, chunk: CodeChunk) -> list[SimilarChunk]:
-        matches = self._embedding_index.find_similar(self._repo_data, chunk.code, top_k=SEMANTIC_MATCH_TOP_K)
+        matches = self._sources.embedding_index.find_similar(self._repo_data, chunk.code, top_k=SEMANTIC_MATCH_TOP_K)
+        return _exclude_self_match(matches, chunk_location)
+
+    def _code_matches(self, chunk_location: StructuralMatch, chunk: CodeChunk) -> list[CodeMatch]:
+        matches = self._sources.code_similarity_index.find_similar(self._repo_data, chunk.code, top_k=CODE_MATCH_TOP_K)
+        return _exclude_self_match(matches, chunk_location)
+
+    def _lexical_matches(self, chunk_location: StructuralMatch, chunk: CodeChunk) -> list[LexicalMatch]:
+        matches = self._sources.code_similarity_index.find_lexical_matches(
+            self._repo_data, chunk.code, top_k=LEXICAL_MATCH_TOP_K
+        )
         return _exclude_self_match(matches, chunk_location)
 
 

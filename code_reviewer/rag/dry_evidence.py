@@ -7,6 +7,7 @@
 from dataclasses import dataclass
 from typing import Protocol
 
+from code_reviewer.rag.code_similarity_index import CodeMatch, LexicalMatch
 from code_reviewer.rag.dry_matching import ChunkHistoryMatch
 from code_reviewer.rag.indexer import SimilarChunk
 from code_reviewer.rag.structural_hash_store import LocatedChunk, StructuralMatch
@@ -105,7 +106,15 @@ class DryEvidence:
         own_snippet = _extract_snippet(self.file_content, own)
         lines = [f"Chunk {_format_location(own)} in this file:", _format_snippet(own_snippet)]
         lines += self._format_structural_matches(history_match.structural_matches)
-        lines += self._format_semantic_matches(history_match.semantic_matches)
+        lines += self._format_scored_matches(
+            "Similar-behavior matches already indexed (not exact clones):", "similarity", history_match.semantic_matches
+        )
+        lines += self._format_scored_matches(
+            "Similar raw-code matches already indexed (behaviorally uncertain):", "similarity", history_match.code_matches
+        )
+        lines += self._format_scored_matches(
+            "Matches sharing distinctive vocabulary already indexed (keyword overlap):", "bm25", history_match.lexical_matches
+        )
         return "\n".join(lines)
 
     def _format_structural_matches(self, matches: list[StructuralMatch]) -> list[str]:
@@ -114,13 +123,19 @@ class DryEvidence:
             return []
         return ["Exact structural matches already indexed:"] + [f"- {_format_location(match)}" for match in matches]
 
-    def _format_semantic_matches(self, matches: list[SimilarChunk]) -> list[str]:
-        """Renders similar-behavior matches: location, code, and similarity score."""
+    def _format_scored_matches(
+        self, header: str, score_label: str, matches: list[SimilarChunk] | list[CodeMatch] | list[LexicalMatch]
+    ) -> list[str]:
+        """Renders any similarity-candidate bucket: location, code, and
+        score. Shared across the semantic, raw-code, and lexical buckets,
+        since all three carry the same (location, code, score) shape and
+        differ only in what produced the score — score_label names that for
+        the reader, since a cosine similarity and a BM25 score are not the
+        same kind of number."""
         if not matches:
             return []
-        header = ["Similar-behavior matches already indexed (not exact clones):"]
         entries = [
-            f"- {_format_location(match, f'similarity={match.score:.2f}')}\n{_format_snippet(match.code)}"
+            f"- {_format_location(match, f'{score_label}={match.score:.2f}')}\n{_format_snippet(match.code)}"
             for match in matches
         ]
-        return header + entries
+        return [header] + entries

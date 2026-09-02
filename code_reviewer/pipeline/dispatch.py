@@ -13,7 +13,7 @@ from code_reviewer.config.settings import get_settings
 from code_reviewer.pipeline.code_splitter.interface import CodeChunk, CodeSplitterInterface
 from code_reviewer.pipeline.code_splitter.python import PythonCodeSplit
 from code_reviewer.rag.dry_evidence import DryEvidence
-from code_reviewer.rag.dry_matching import ChunkHistoryMatch, CrossHistoryDuplicateFinder
+from code_reviewer.rag.dry_matching import ChunkHistoryMatch, CrossHistoryDuplicateFinder, DuplicateEvidenceSources
 from code_reviewer.schemas.paired import Pairing
 from code_reviewer.schemas.review import AgentOutput, AgentReviewEntry, CodeKey, Incident, Priority, SizeStatus
 from code_reviewer.schemas.submission import PreparedFile
@@ -140,9 +140,12 @@ def _gather_dry_history_matches(agents_container: AgentsContainer, prepared_file
     same fallback ARCH/COUP's evidence hop already uses."""
     if prepared_file.repo_data is None:
         return []
-    finder = CrossHistoryDuplicateFinder(
-        agents_container.structural_hash_store, agents_container.rag_manager, prepared_file.repo_data
+    evidence_sources = DuplicateEvidenceSources(
+        structural_hash_store=agents_container.structural_hash_store,
+        embedding_index=agents_container.rag_manager,
+        code_similarity_index=agents_container.code_similarity_index,
     )
+    finder = CrossHistoryDuplicateFinder(evidence_sources, prepared_file.repo_data)
     return finder.find(prepared_file.source_file.file_path, prepared_file.source_file.content)
 
 
