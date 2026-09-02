@@ -70,6 +70,22 @@ class ExemplarStoreBase:
         """
         self._store_nodes(self._embed_document(Document(text=source.code, metadata=metadata)))
 
+    def _embed_document(self, document: Document) -> list[BaseNode]:
+        try:
+            return self._pipeline.run(documents=[document])
+        except Exception as error:
+            logger.exception("Failed to embed exemplar from %s", document.metadata["file_path"])
+            raise FileEmbeddingError(
+                f"Could not embed exemplar from {document.metadata['file_path']!r}"
+            ) from error
+
+    def _store_nodes(self, nodes: list[BaseNode]) -> None:
+        try:
+            self._vector_store.add(nodes)
+        except Exception as error:
+            logger.exception("Failed to write %d exemplar chunk(s)", len(nodes))
+            raise VectorStoreWriteError("Failed to write exemplar chunks to the vector store") from error
+
     def _find(self, query: Any, filters: MetadataFilters, top_k: int) -> list[Exemplar]:
         """Raises:
             VectorStoreQueryError: If querying the vector store fails.
@@ -82,6 +98,23 @@ class ExemplarStoreBase:
             raise VectorStoreQueryError("Exemplar search failed") from error
         found = [self._as_exemplar(node) for node in nodes]
         return [exemplar for exemplar in found if exemplar.score >= query.relevance_floor]
+
+    def _get_index(self) -> VectorStoreIndex:
+        if self._index is None:
+            self._index = VectorStoreIndex.from_vector_store(
+                vector_store=self._vector_store,
+                embed_model=self._embedding.create_embedding_model(),
+            )
+        return self._index
+
+    def _as_exemplar(self, node: Any) -> Exemplar:
+        return Exemplar(
+            code_key=CodeKey(node.node.metadata["code_key"]),
+            file_path=node.node.metadata["file_path"],
+            chunk_name=node.node.metadata["chunk_name"],
+            code=node.node.get_content(),
+            score=node.get_score(),
+        )
 
     def _code_key_filter(self, code_key: CodeKey) -> MetadataFilter:
         return MetadataFilter(key="code_key", value=code_key.value)
@@ -122,22 +155,6 @@ class ExemplarStore(ExemplarStoreBase):
             "indexed_at": datetime.now(UTC),
         }
 
-    def _embed_document(self, document: Document) -> list[BaseNode]:
-        try:
-            return self._pipeline.run(documents=[document])
-        except Exception as error:
-            logger.exception("Failed to embed exemplar from %s", document.metadata["file_path"])
-            raise FileEmbeddingError(
-                f"Could not embed exemplar from {document.metadata['file_path']!r}"
-            ) from error
-
-    def _store_nodes(self, nodes: list[BaseNode]) -> None:
-        try:
-            self._vector_store.add(nodes)
-        except Exception as error:
-            logger.exception("Failed to write %d exemplar chunk(s)", len(nodes))
-            raise VectorStoreWriteError("Failed to write exemplar chunks to the vector store") from error
-
     def find_exemplars(self, query: "ExemplarQuery", top_k: int = 3) -> list[Exemplar]:
         """Retrieve the most similar known-good code for one principle.
 
@@ -162,23 +179,6 @@ class ExemplarStore(ExemplarStoreBase):
             VectorStoreQueryError: If querying the vector store fails.
         """
         return self._find(query, self._scope_filters(query.repo_data, query.code_key), top_k)
-
-    def _as_exemplar(self, node: Any) -> Exemplar:
-        return Exemplar(
-            code_key=CodeKey(node.node.metadata["code_key"]),
-            file_path=node.node.metadata["file_path"],
-            chunk_name=node.node.metadata["chunk_name"],
-            code=node.node.get_content(),
-            score=node.get_score(),
-        )
-
-    def _get_index(self) -> VectorStoreIndex:
-        if self._index is None:
-            self._index = VectorStoreIndex.from_vector_store(
-                vector_store=self._vector_store,
-                embed_model=self._embedding.create_embedding_model(),
-            )
-        return self._index
 
     def _scope_filters(self, repo_data: RepoData, code_key: CodeKey) -> MetadataFilters:
         """Every exemplar is stored with an owner_id, so a lookup without one
