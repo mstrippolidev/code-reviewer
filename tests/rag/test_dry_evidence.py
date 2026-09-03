@@ -3,6 +3,7 @@
     narrowing groups to one file, and formatting the final evidence report
     DRY's LLM reads. Pure data transforms — no LLM, no database.
 """
+from code_reviewer.rag.code_similarity_index import CodeMatch, LexicalMatch
 from code_reviewer.rag.dry_evidence import DryEvidence, attach_code, groups_for_file
 from code_reviewer.rag.dry_matching import ChunkHistoryMatch
 from code_reviewer.rag.indexer import SimilarChunk
@@ -175,4 +176,42 @@ def test_format_shows_semantic_matches_with_code_and_similarity_score() -> None:
 
     assert "Similar-behavior matches already indexed (not exact clones):" in report
     assert "legacy/totals.py:total (lines 1-3, similarity=0.87)" in report
+    assert "def total(v):\n    return sum(v)" in report
+
+
+def test_format_shows_code_matches_with_code_and_similarity_score() -> None:
+    code_match = CodeMatch(
+        file_path="legacy/totals.py", chunk_name="total", start_line=1, end_line=3, code="def total(v):\n    return sum(v)", score=0.81
+    )
+    history_match = ChunkHistoryMatch(
+        chunk=StructuralMatch(file_path="a.py", chunk_name="add", start_line=2, end_line=3),
+        structural_matches=[],
+        semantic_matches=[],
+        code_matches=[code_match],
+    )
+    evidence = DryEvidence(file_path="a.py", file_content=ADD_FUNCTION, intra_pr_groups=[], history_matches=[history_match])
+
+    report = evidence.format()
+
+    assert "Similar raw-code matches already indexed (behaviorally uncertain):" in report
+    assert "legacy/totals.py:total (lines 1-3, similarity=0.81)" in report
+    assert "def total(v):\n    return sum(v)" in report
+
+
+def test_format_shows_lexical_matches_with_code_and_bm25_score() -> None:
+    lexical_match = LexicalMatch(
+        file_path="legacy/totals.py", chunk_name="total", start_line=1, end_line=3, code="def total(v):\n    return sum(v)", score=4.62
+    )
+    history_match = ChunkHistoryMatch(
+        chunk=StructuralMatch(file_path="a.py", chunk_name="add", start_line=2, end_line=3),
+        structural_matches=[],
+        semantic_matches=[],
+        lexical_matches=[lexical_match],
+    )
+    evidence = DryEvidence(file_path="a.py", file_content=ADD_FUNCTION, intra_pr_groups=[], history_matches=[history_match])
+
+    report = evidence.format()
+
+    assert "Matches sharing distinctive vocabulary already indexed (keyword overlap):" in report
+    assert "legacy/totals.py:total (lines 1-3, bm25=4.62)" in report
     assert "def total(v):\n    return sum(v)" in report

@@ -17,7 +17,9 @@ dependencies = [
     "llama-index-core (>=0.14.23,<0.15.0)",
     "llama-index-vector-stores-postgres (>=0.8.1,<0.9.0)",
     "llama-index-embeddings-ollama (>=0.9.0,<0.10.0)",
-    "tree-sitter-language-pack (>=1.14.3,<2.0.0)"
+    "tree-sitter-language-pack (>=1.14.3,<2.0.0)",
+    "llama-index-retrievers-bm25 (>=0.6.0,<0.7.0)",
+    "sentence-transformers (>=6.0.1,<7.0.0)"
 ]
 
 
@@ -27,6 +29,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not db and not llm'"
 markers = [
     "llm: exercises a real local Ollama model, slower and requires Ollama running",
     "db: exercises a real local Postgres instance, requires the code_reviewer database and schema to already exist",

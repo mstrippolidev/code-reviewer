@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     exemplar_relevance_floor: float = 0.5
     exemplar_top_k: int = 2
 
+    dry_rerank_score_floor: float = 0.5
+
 
 
 @lru_cache
