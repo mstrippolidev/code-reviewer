@@ -36,7 +36,7 @@ def _format_snippet(code: str) -> str:
     return f"```\n{code}\n```"
 
 
-def _extract_snippet(content: str, match: StructuralMatch) -> str:
+def extract_snippet(content: str, match: StructuralMatch) -> str:
     """Reads out just the lines a match points to, from a file's full content."""
     lines = content.splitlines()
     return "\n".join(lines[match.start_line - 1 : match.end_line])
@@ -50,7 +50,7 @@ def attach_code(files: list[SubmittedFile], groups: list[list[StructuralMatch]])
         located_group = []
         for match in group:
             file_content = contents.get(match.file_path, "")
-            code = _extract_snippet(file_content, match)
+            code = extract_snippet(file_content, match)
             located_group.append(LocatedChunk(match, code))
         located_groups.append(located_group)
     return located_groups
@@ -103,7 +103,7 @@ class DryEvidence:
     def _format_history_match(self, history_match: ChunkHistoryMatch) -> str:
         """Renders one chunk from this file, plus everything it duplicates."""
         own = history_match.chunk
-        own_snippet = _extract_snippet(self.file_content, own)
+        own_snippet = extract_snippet(self.file_content, own)
         lines = [f"Chunk {_format_location(own)} in this file:", _format_snippet(own_snippet)]
         lines += self._format_structural_matches(history_match.structural_matches)
         lines += self._format_scored_matches(

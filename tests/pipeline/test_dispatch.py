@@ -16,6 +16,7 @@ from code_reviewer.agents.registry import AgentsContainer
 from code_reviewer.pipeline.dispatch import review_file, review_file_runnable
 from code_reviewer.rag.code_similarity_index import CodeMatch, LexicalMatch
 from code_reviewer.rag.indexer import SimilarChunk
+from code_reviewer.rag.rerank import HistoryMatchReranker
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.rag.structural_hash_store import LocatedChunk, StructuralHashStore, StructuralMatch
 from code_reviewer.schemas.review import AgentOutput, AgentReviewEntry, CodeKey, Incident, Priority, SizeStatus
@@ -49,6 +50,20 @@ class FakeCodeSimilarityIndex:
 
     def find_lexical_matches(self, repo_data: RepoData, code: str, top_k: int = 5) -> list[LexicalMatch]:
         return self._lexical_matches
+
+
+class FakeRerankPostprocessor:
+    """Stands in for the cross-encoder: assigns every candidate the same
+    score, so dispatch tests can control who survives without loading a
+    real model."""
+
+    def __init__(self, score: float = 1.0) -> None:
+        self._score = score
+
+    def postprocess_nodes(self, nodes, query_bundle=None):
+        for node in nodes:
+            node.score = self._score
+        return nodes
 
 
 class FakeAgent:
@@ -136,6 +151,11 @@ def code_similarity_index() -> FakeCodeSimilarityIndex:
 
 
 @pytest.fixture
+def history_match_reranker() -> HistoryMatchReranker:
+    return HistoryMatchReranker(score_floor=0.0, postprocessor=FakeRerankPostprocessor())
+
+
+@pytest.fixture
 def container(
     file_agent: FakeAgent,
     cmplx_agent: FakeAgent,
@@ -145,6 +165,7 @@ def container(
     rag_manager: FakeEmbeddingIndex,
     structural_hash_store: StructuralHashStore,
     code_similarity_index: FakeCodeSimilarityIndex,
+    history_match_reranker: HistoryMatchReranker,
 ) -> AgentsContainer:
     return AgentsContainer(
         file_agents=[file_agent],
@@ -154,6 +175,7 @@ def container(
         rag_manager=rag_manager,
         structural_hash_store=structural_hash_store,
         code_similarity_index=code_similarity_index,
+        history_match_reranker=history_match_reranker,
     )
 
 

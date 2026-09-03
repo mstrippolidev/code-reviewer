@@ -9,9 +9,11 @@
     (catches Type-4 near-misses whose summaries diverged instead) and BM25
     (catches copy-paste-with-edits via shared identifiers/calls). All four
     buckets are recall devices, unioned rather than score-fused: nothing
-    here decides which candidate is a real duplicate, that is the
-    downstream re-ranker and judge's job. agents/dry.py (not yet built) is
-    the intended caller of this module's public functions.
+    here decides which candidate is a real duplicate, that is
+    rag/rerank.py's job, then agents/dry.py's. The three similarity
+    buckets over-fetch (top_k=10 each, ~30 candidates total) on purpose —
+    the wider the candidate set handed to the re-ranker, the more real
+    duplicates survive its precision pass.
 """
 from dataclasses import dataclass, field
 from typing import Protocol, TypeVar
@@ -27,9 +29,9 @@ from code_reviewer.rag.structural_hash import compute_structural_hash
 from code_reviewer.rag.structural_hash_store import StructuralHashStore, StructuralMatch
 from code_reviewer.schemas.submission import SubmittedFile
 
-SEMANTIC_MATCH_TOP_K = 3
-CODE_MATCH_TOP_K = 3
-LEXICAL_MATCH_TOP_K = 3
+SEMANTIC_MATCH_TOP_K = 10
+CODE_MATCH_TOP_K = 10
+LEXICAL_MATCH_TOP_K = 10
 
 
 def find_intra_pr_duplicates(files: list[SubmittedFile]) -> list[list[StructuralMatch]]:

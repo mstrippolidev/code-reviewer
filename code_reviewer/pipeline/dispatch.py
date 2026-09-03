@@ -12,7 +12,7 @@ from code_reviewer.agents.registry import AgentsContainer
 from code_reviewer.config.settings import get_settings
 from code_reviewer.pipeline.code_splitter.interface import CodeChunk, CodeSplitterInterface
 from code_reviewer.pipeline.code_splitter.python import PythonCodeSplit
-from code_reviewer.rag.dry_evidence import DryEvidence
+from code_reviewer.rag.dry_evidence import DryEvidence, extract_snippet
 from code_reviewer.rag.dry_matching import ChunkHistoryMatch, CrossHistoryDuplicateFinder, DuplicateEvidenceSources
 from code_reviewer.schemas.paired import Pairing
 from code_reviewer.schemas.review import AgentOutput, AgentReviewEntry, CodeKey, Incident, Priority, SizeStatus
@@ -137,7 +137,10 @@ def _run_dry_agent(agents_container: AgentsContainer, prepared_file: PreparedFil
 def _gather_dry_history_matches(agents_container: AgentsContainer, prepared_file: PreparedFile) -> list[ChunkHistoryMatch]:
     """Looks up what this file duplicates in the repo's indexed history —
     skipped entirely for a standalone review with no repo context, the
-    same fallback ARCH/COUP's evidence hop already uses."""
+    same fallback ARCH/COUP's evidence hop already uses. Every match's
+    similarity buckets are then re-ranked by relevance to the chunk's own
+    code, so DRY's evidence carries the over-fetched buckets' survivors,
+    not their raw recall."""
     if prepared_file.repo_data is None:
         return []
     evidence_sources = DuplicateEvidenceSources(
@@ -146,7 +149,18 @@ def _gather_dry_history_matches(agents_container: AgentsContainer, prepared_file
         code_similarity_index=agents_container.code_similarity_index,
     )
     finder = CrossHistoryDuplicateFinder(evidence_sources, prepared_file.repo_data)
-    return finder.find(prepared_file.source_file.file_path, prepared_file.source_file.content)
+    content = prepared_file.source_file.content
+    matches = finder.find(prepared_file.source_file.file_path, content)
+    reranker = agents_container.history_match_reranker
+    reranked = [reranker.rerank(extract_snippet(content, match.chunk), match) for match in matches]
+    return [match for match in reranked if _has_evidence(match)]
+
+
+def _has_evidence(match: ChunkHistoryMatch) -> bool:
+    """A chunk whose every bucket the re-ranker emptied out carries nothing
+    for DRY to say, the same standard CrossHistoryDuplicateFinder itself
+    already applies before re-ranking ever runs."""
+    return bool(match.structural_matches or match.semantic_matches or match.code_matches or match.lexical_matches)
 
 
 def _offset_incidents(incidents: list[Incident], start_line: int) -> list[Incident]:

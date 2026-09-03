@@ -19,10 +19,12 @@ from code_reviewer.agents.naming import NamingAgent
 from code_reviewer.agents.solid_1 import SolidSrpOcpAgent
 from code_reviewer.agents.solid_2 import SolidLspDipAgent
 from code_reviewer.agents.testability import TestabilityAgent
+from code_reviewer.config.settings import get_settings
 from code_reviewer.rag.code_similarity_index import CodeSimilarityIndex
 from code_reviewer.rag.exemplar_injection import ExemplarCorpora
 from code_reviewer.rag.exemplars import ExemplarStore
 from code_reviewer.rag.indexer import LlamaIndexRagManager
+from code_reviewer.rag.rerank import HistoryMatchReranker
 from code_reviewer.rag.shared_exemplars import SharedExemplarStore
 from code_reviewer.rag.structural_hash_store import StructuralHashStore
 
@@ -38,6 +40,7 @@ class AgentsContainer:
     rag_manager: LlamaIndexRagManager
     structural_hash_store: StructuralHashStore
     code_similarity_index: CodeSimilarityIndex
+    history_match_reranker: HistoryMatchReranker
     exemplar_store: ExemplarStore | None = None
     shared_exemplar_store: SharedExemplarStore | None = None
 
@@ -47,6 +50,7 @@ def build_agent_roster(
     rag_manager: LlamaIndexRagManager | None = None,
     structural_hash_store: StructuralHashStore | None = None,
     code_similarity_index: CodeSimilarityIndex | None = None,
+    history_match_reranker: HistoryMatchReranker | None = None,
     exemplar_store: ExemplarStore | None = None,
     shared_exemplar_store: SharedExemplarStore | None = None,
 ) -> AgentsContainer:
@@ -67,6 +71,10 @@ def build_agent_roster(
             cross-history raw-code and BM25 passes. Defaults to a real
             CodeSimilarityIndex() when not given, same pattern as
             rag_manager's own default.
+        history_match_reranker: Cross-encoder precision pass over DRY's
+            cross-history candidates, before the DRY agent sees them.
+            Defaults to a real HistoryMatchReranker() when not given, same
+            pattern as rag_manager's own default.
         exemplar_store: Per-repo corpus of known-good code the 2.0-weight
             agents draw few-shot context from. Defaults to a real ExemplarStore() when
             not given, same pattern as rag_manager's own default.
@@ -78,6 +86,9 @@ def build_agent_roster(
     rag_manager = rag_manager or LlamaIndexRagManager()
     structural_hash_store = structural_hash_store or StructuralHashStore()
     code_similarity_index = code_similarity_index or CodeSimilarityIndex()
+    history_match_reranker = history_match_reranker or HistoryMatchReranker(
+        score_floor=get_settings().dry_rerank_score_floor
+    )
     exemplar_store = exemplar_store or ExemplarStore()
     shared_exemplar_store = shared_exemplar_store or SharedExemplarStore()
     corpora = ExemplarCorpora(repo=exemplar_store, shared=shared_exemplar_store)
@@ -108,6 +119,7 @@ def build_agent_roster(
         rag_manager=rag_manager,
         structural_hash_store=structural_hash_store,
         code_similarity_index=code_similarity_index,
+        history_match_reranker=history_match_reranker,
         exemplar_store=exemplar_store,
         shared_exemplar_store=shared_exemplar_store,
     )
