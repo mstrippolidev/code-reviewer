@@ -7,11 +7,18 @@ from dataclasses import dataclass
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.structured_output import ResponseFormat, ToolStrategy
 from langchain_core.tools import BaseTool
 
 from code_reviewer.agents.llm.base import LLMInterface
-from code_reviewer.agents.llm.middleware import retry_model, calculate_rating
+from code_reviewer.agents.llm.middleware import (
+    dedupe_tool_calls,
+    retry_model,
+    calculate_rating,
+    rating_from_incidents,
+)
 from code_reviewer.agents.llm.ollama import OllamaLLM
+from code_reviewer.agents.llm.timeout import call_with_hard_timeout
 from code_reviewer.config.settings import get_settings
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.schemas.review import (
@@ -71,14 +78,44 @@ class AgentBase:
         self._code_agent = code_agent
         self._system_prompt = system_prompt
         llm_factory = llm if llm is not None else OllamaLLM()
+        tools = self._build_tools()
         self._agent = create_agent(
             model=llm_factory.create_raw_model(),
-            tools=self._build_tools(),
+            tools=tools,
             system_prompt=self._system_prompt,
-            middleware=[retry_model, *self._extra_middleware(), calculate_rating],
-            response_format=llm_factory.build_response_format(AgentOutput),
+            middleware=[
+                *self._retry_middleware(tools),
+                *self._tool_loop_guard(tools),
+                *self._extra_middleware(),
+                calculate_rating,
+            ],
+            response_format=self._response_format(llm_factory, tools),
             context_schema=self._context_schema(),
         )
+
+    def _response_format(
+        self, llm_factory: LLMInterface, tools: list[BaseTool] | None
+    ) -> ResponseFormat[AgentOutput]:
+        """A provider's native structured output constrains decoding to the
+        schema, which leaves the model unable to emit a tool call at all —
+        so an agent with tools has to take structured output as a tool
+        call instead, and only a toolless one can use the provider's own."""
+        if tools:
+            return ToolStrategy(AgentOutput)
+        return llm_factory.build_response_format(AgentOutput)
+
+    def _retry_middleware(self, tools: list[BaseTool] | None) -> list[AgentMiddleware]:
+        """retry_model exists to give ProviderStrategy the retry-on-
+        validation-failure behavior ToolStrategy already has natively via
+        handle_errors — stacking both on a tool-carrying agent would just
+        retry the same failure twice."""
+        return [] if tools else [retry_model]
+
+    def _tool_loop_guard(self, tools: list[BaseTool] | None) -> list[AgentMiddleware]:
+        """A model with no reasoning trace can lose track of already having
+        a tool's result and keep re-asking instead of finalizing — this
+        only applies to agents that have tools at all."""
+        return [dedupe_tool_calls] if tools else []
 
     def get_agent_key(self) -> CodeKey:
         """Returns this agent's own CodeKey."""
@@ -151,7 +188,8 @@ class AgentBase:
         payloads = [{"messages": [{"role": "user", "content": code}]} for code in chunks]
         config = {"max_concurrency": get_settings().max_batch_concurrency}
         try:
-            return [result["structured_response"] for result in self._agent.batch(payloads, config=config)]
+            results = call_with_hard_timeout(lambda: self._agent.batch(payloads, config=config))
+            return [result["structured_response"] for result in results]
         except Exception as error:
             logger.error("Agent %s failed to review the given code.", self._code_agent)
             raise AgentInvocationError(
@@ -209,7 +247,8 @@ class AgentBase:
         if repo_data is not None:
             invoke_kwargs["context"] = ReviewContext(repo_id=repo_data.repo_id, owner_id=repo_data.owner_id)
         try:
-            return self._agent.invoke(messages, **invoke_kwargs)["structured_response"]
+            result = call_with_hard_timeout(lambda: self._agent.invoke(messages, **invoke_kwargs))
+            return result["structured_response"]
         except Exception as error:
             logger.error("Agent %s failed to review the given code.", self._code_agent)
             raise AgentInvocationError(
@@ -218,8 +257,29 @@ class AgentBase:
 
     def _set_file_path_and_code_key(self, result: AgentOutput, file_path: str | None) -> None:
         """Stamps result with the caller-known file_path and this agent's own CodeKey."""
+        self._merge_extra_review_entries(result)
         self._set_file_path(result, file_path)
         self._set_code_key(result)
+
+    def _merge_extra_review_entries(self, result: AgentOutput) -> None:
+        """One execute_agent/-batch call reviews exactly one file or chunk,
+        so review must carry exactly one entry — but a tool-carrying agent
+        sometimes adds a second entry for a file it only fetched as
+        evidence. Which entry is "the real one" isn't knowable from the
+        output alone, and every downstream caller reads review[0], so
+        merge rather than pick: a real finding must never be silently
+        dropped by an arbitrary index."""
+        if len(result.review) <= 1:
+            return
+        logger.warning(
+            "Agent %s returned %d review entries for one call; merging into one.",
+            self._code_agent,
+            len(result.review),
+        )
+        incidents = [incident for entry in result.review for incident in entry.incidents]
+        result.review = [
+            AgentReviewEntry(code_key=self._code_agent, incidents=incidents, rating=rating_from_incidents(incidents))
+        ]
 
     def _set_file_path(self, result: AgentOutput, file_path: str | None) -> None:
         """Stamp every review entry with the caller-known file_path.

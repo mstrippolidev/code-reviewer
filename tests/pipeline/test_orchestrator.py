@@ -13,11 +13,12 @@ from code_reviewer.config.settings import get_settings
 from code_reviewer.pipeline import orchestrator
 from code_reviewer.pipeline.orchestrator import review_submission
 from code_reviewer.rag.code_similarity_index import CodeMatch, LexicalMatch
+from code_reviewer.rag.dry_judge import JudgeCandidate
 from code_reviewer.rag.indexer import SimilarChunk
 from code_reviewer.rag.rerank import HistoryMatchReranker
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.rag.structural_hash_store import StructuralHashStore
-from code_reviewer.schemas.review import AgentOutput, AgentReviewEntry, CodeKey, SizeStatus
+from code_reviewer.schemas.review import AgentOutput, AgentReviewEntry, CodeKey, Incident, SizeStatus
 from code_reviewer.schemas.submission import SubmittedFile
 
 
@@ -65,6 +66,14 @@ class FakeAgent:
         return [self.execute_agent(chunk, file_path) for chunk in chunks]
 
 
+class FakeDryJudge:
+    """Stands in for DryJudge — never called by these tests, since none
+    of them give DRY any evidence to judge."""
+
+    def judge(self, query_code: str, candidates: list[JudgeCandidate]) -> list[Incident]:
+        return []
+
+
 @pytest.fixture
 def container() -> AgentsContainer:
     engine = create_engine("sqlite:///:memory:", poolclass=StaticPool, connect_args={"check_same_thread": False})
@@ -72,7 +81,7 @@ def container() -> AgentsContainer:
         file_agents=[FakeAgent(CodeKey.COH)],
         chunk_agents=[FakeAgent(CodeKey.VAR)],
         tcase_agent=FakeAgent(CodeKey.TCASE),
-        dry_agent=FakeAgent(CodeKey.DRY),
+        dry_judge=FakeDryJudge(),
         rag_manager=FakeEmbeddingIndex(),
         structural_hash_store=StructuralHashStore(engine=engine, schema_name=None),
         code_similarity_index=FakeCodeSimilarityIndex(),

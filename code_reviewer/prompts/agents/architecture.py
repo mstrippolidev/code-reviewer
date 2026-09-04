@@ -26,12 +26,7 @@ Flag a piece of code if it:
    depending on a specific application one (a formatting helper
    importing an order workflow, a base class calling into a named
    subclass), so the reusable piece cannot move or be reused without
-   dragging the specific piece with it. Judge primarily from what you
-   can see in this file. When a specific import looks suspicious but
-   you cannot tell from this file alone what that module actually
-   does, call get_file_chunks with its file path before deciding — do
-   not speculate without evidence, and do not guess when you could
-   check.
+   dragging the specific piece with it.
 3. Mixes construction with use: a unit that assembles its own object
    graph — building collaborators, reading configuration, opening
    connections — in the middle of the logic that then uses them, so the
@@ -46,13 +41,31 @@ Flag a piece of code if it:
    neighbour hand-parses a dictionary — so the file establishes no
    convention a reader can rely on.
 
-When get_file_chunks reports no indexed content available — a
-third-party or standard-library import, a repository with no indexed
-history yet, or a file added in this same unmerged change — fall back
-to judging the dependency on what's visible in this file alone, exactly
-as you would if the tool did not exist. Reach for the tool only for a
-dependency you are already considering flagging, not as a first step on
-every import: most imports need no verification at all.
+Verifying a suspicion about another file (applies to all four categories
+above, not only dependency direction): most imports need no check at
+all. But once you are leaning toward flagging one, and your reason
+depends on what that file's code actually does, call get_file_chunks
+before you decide anything — that is the resolution, not an optional
+extra step. Do not guess what the other file does, and do not drop a
+real concern just because you have not checked yet: check first, then
+decide.
+
+Calling the tool always leaves you able to report something: either it
+confirms your suspicion, so you now describe both sides with real
+evidence, or it clears the suspicion, so you report nothing about that
+import. Neither outcome is a reason to have skipped the call.
+
+get_file_chunks reporting no indexed content available is the one
+situation where checking is not possible — a third-party or
+standard-library import, a repository with no indexed history yet, or a
+file added in this same unmerged change. Only then, fall back to judging
+on what's visible in this file alone, and even then, describe only what
+you can actually see — never what you assume the missing file does.
+
+Whatever get_file_chunks returns is evidence for judging THIS file, never
+a second thing to review. Report on exactly one file, the one you were
+given — never add a separate entry for a file you only fetched to verify
+a dependency.
 
 Architecture is about placement and direction. Whether a dependency is
 declared as an abstraction rather than a concrete type is dependency

@@ -12,8 +12,10 @@ from code_reviewer.agents.registry import AgentsContainer
 from code_reviewer.config.settings import get_settings
 from code_reviewer.pipeline.code_splitter.interface import CodeChunk, CodeSplitterInterface
 from code_reviewer.pipeline.code_splitter.python import PythonCodeSplit
-from code_reviewer.rag.dry_evidence import DryEvidence, extract_snippet
+from code_reviewer.pipeline.line_offset import offset_incidents
+from code_reviewer.rag.dry_evidence import extract_snippet
 from code_reviewer.rag.dry_matching import ChunkHistoryMatch, CrossHistoryDuplicateFinder, DuplicateEvidenceSources
+from code_reviewer.rag.dry_review import build_dry_review_entry
 from code_reviewer.schemas.paired import Pairing
 from code_reviewer.schemas.review import AgentOutput, AgentReviewEntry, CodeKey, Incident, Priority, SizeStatus
 from code_reviewer.schemas.submission import PreparedFile
@@ -46,7 +48,7 @@ def review_file(
     _apply_cmplx_soft_limit_incident(chunk_entries, prepared_file)
     entries += chunk_entries
     entries.append(_run_tcase_agent(prepared_file, agents_container.tcase_agent))
-    entries.append(_run_dry_agent(agents_container, prepared_file))
+    entries.append(_run_dry(agents_container, prepared_file))
     return entries
 
 
@@ -101,7 +103,7 @@ def _run_chunked_agent(agent: AgentBase, file_path: str, chunks: list[CodeChunk]
     chunk_str = _get_chunks(chunks)
     results = agent.execute_agent_batch(chunk_str, file_path)
     for i in range(len(chunks)):
-        incidents += _offset_incidents(results[i].review[0].incidents, chunks[i].start_line)
+        incidents += offset_incidents(results[i].review[0].incidents, chunks[i].start_line)
     return AgentReviewEntry(
         file_path=file_path,
         code_key=agent.get_agent_key(),
@@ -118,26 +120,28 @@ def _run_tcase_agent(prepared_file: PreparedFile, tcase_agent: CoverageGapAgent)
     return tcase_agent.execute_agent(content, prepared_file.source_file.file_path).review[0]
 
 
-def _run_dry_agent(agents_container: AgentsContainer, prepared_file: PreparedFile) -> AgentReviewEntry:
-    """Builds this file's duplication evidence and reviews it — or, when
-    there's no evidence at all, returns a clean result without spending an
-    LLM call, the same way every other agent short-circuits on nothing to say."""
+def _run_dry(agents_container: AgentsContainer, prepared_file: PreparedFile) -> AgentReviewEntry:
+    """Exact structural-hash matches need no LLM judgment — the hash
+    already proves the duplicate — so only the fuzzy, re-ranked candidates
+    reach the DRY judge; a file with no evidence of either kind short-
+    circuits to a clean result with no LLM call at all."""
     file_path = prepared_file.source_file.file_path
-    evidence = DryEvidence(
-        file_path=file_path,
-        file_content=prepared_file.source_file.content,
-        intra_pr_groups=prepared_file.intra_pr_duplicates,
-        history_matches=_gather_dry_history_matches(agents_container, prepared_file),
-    )
-    if not evidence.has_matches():
+    intra_pr_groups = prepared_file.intra_pr_duplicates
+    history_matches = _gather_dry_history_matches(agents_container, prepared_file)
+    if not intra_pr_groups and not history_matches:
         return AgentReviewEntry(file_path=file_path, code_key=CodeKey.DRY, incidents=[])
-    return agents_container.dry_agent.execute_agent(evidence.format(), file_path).review[0]
+    return build_dry_review_entry(
+        file_path,
+        prepared_file.source_file.content,
+        intra_pr_groups,
+        history_matches,
+        agents_container.dry_judge,
+    )
 
 
 def _gather_dry_history_matches(agents_container: AgentsContainer, prepared_file: PreparedFile) -> list[ChunkHistoryMatch]:
     """Looks up what this file duplicates in the repo's indexed history —
-    skipped entirely for a standalone review with no repo context, the
-    same fallback ARCH/COUP's evidence hop already uses. Every match's
+    skipped entirely for a standalone review with no repo context, Every match's
     similarity buckets are then re-ranked by relevance to the chunk's own
     code, so DRY's evidence carries the over-fetched buckets' survivors,
     not their raw recall."""
@@ -161,29 +165,6 @@ def _has_evidence(match: ChunkHistoryMatch) -> bool:
     for DRY to say, the same standard CrossHistoryDuplicateFinder itself
     already applies before re-ranking ever runs."""
     return bool(match.structural_matches or match.semantic_matches or match.code_matches or match.lexical_matches)
-
-
-def _offset_incidents(incidents: list[Incident], start_line: int) -> list[Incident]:
-    """Rewrites each incident's line_position from chunk-relative to
-    file-absolute, using the chunk's own start_line in the real file."""
-    return [
-        incident.model_copy(update={"line_position": _offset_line_position(incident.line_position, start_line)})
-        for incident in incidents
-    ]
-
-
-def _offset_line_position(line_position: str, start_line: int) -> str:
-    try:
-        chunk_start, chunk_end = _parse_line_range(line_position)
-    except ValueError:
-        return line_position
-    file_offset = start_line - 1
-    return f"{chunk_start + file_offset}-{chunk_end + file_offset}"
-
-
-def _parse_line_range(line_position: str) -> tuple[int, int]:
-    start_text, end_text = line_position.split("-")
-    return int(start_text), int(end_text)
 
 
 def _apply_cmplx_soft_limit_incident(entries: list[AgentReviewEntry], prepared_file: PreparedFile) -> None:
@@ -281,7 +262,7 @@ def _tcase_branch(agent: CoverageGapAgent, pairing_content: str) -> RunnableLamb
 def _dry_branch(agents_container: AgentsContainer, prepared_file: PreparedFile) -> RunnableLambda:
     """Builds a branch that runs DRY against its own assembled evidence,
     ignoring the shared context's raw source code."""
-    return RunnableLambda(lambda ctx: _run_dry_agent(agents_container, prepared_file))
+    return RunnableLambda(lambda ctx: _run_dry(agents_container, prepared_file))
 
 
 def _unpack_runnable_results(results: dict[str, AgentOutput | AgentReviewEntry]) -> list[AgentReviewEntry]:

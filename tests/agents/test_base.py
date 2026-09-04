@@ -90,3 +90,35 @@ def test_batch_with_empty_chunk_list_returns_empty_results(agent: AgentBase) -> 
     results = agent.execute_agent_batch([], file_path="f.py")
 
     assert results == []
+
+
+def test_multiple_review_entries_are_merged_into_one(agent: AgentBase) -> None:
+    """Regression: a tool-carrying agent can return a separate entry for a
+    file it only fetched as evidence. Every downstream caller reads
+    review[0], so a real finding must never depend on which entry the
+    model happened to order first — merge, don't pick."""
+    fetched_file_entry = AgentReviewEntry(code_key=CodeKey.COUP, incidents=[])
+    reviewed_file_entry = AgentReviewEntry(
+        code_key=CodeKey.COUP,
+        incidents=[
+            {"priority": "high", "line_position": "1-2", "description": "real finding", "advice": "fix it"}
+        ],
+    )
+    output = AgentOutput(review=[fetched_file_entry, reviewed_file_entry])
+    agent._agent.invoke = lambda messages, **kwargs: {"structured_response": output}
+
+    result = agent.execute_agent("code", file_path="reviewed.py")
+
+    assert len(result.review) == 1
+    assert result.review[0].incidents[0].description == "real finding"
+    assert result.review[0].file_path == "reviewed.py"
+
+
+def test_single_review_entry_is_left_untouched(agent: AgentBase) -> None:
+    output = _fake_output(CodeKey.COUP, rating=85)
+    agent._agent.invoke = lambda messages, **kwargs: {"structured_response": output}
+
+    result = agent.execute_agent("code", file_path="reviewed.py")
+
+    assert len(result.review) == 1
+    assert result.review[0].rating == 85

@@ -15,6 +15,7 @@ from code_reviewer.agents.base import FileReviewMeta
 from code_reviewer.agents.registry import AgentsContainer
 from code_reviewer.pipeline.dispatch import review_file, review_file_runnable
 from code_reviewer.rag.code_similarity_index import CodeMatch, LexicalMatch
+from code_reviewer.rag.dry_judge import JudgeCandidate
 from code_reviewer.rag.indexer import SimilarChunk
 from code_reviewer.rag.rerank import HistoryMatchReranker
 from code_reviewer.rag.repo_data import RepoData
@@ -23,7 +24,7 @@ from code_reviewer.schemas.review import AgentOutput, AgentReviewEntry, CodeKey,
 from code_reviewer.schemas.submission import PreparedFile, SubmittedFile
 
 SOURCE_WITH_TWO_FUNCTIONS = "def foo():\n    return 1\n\n\ndef bar():\n    return 2\n"
-ADD_FUNCTION = "def add(a, b):\n    return a + b\n"
+ADD_FUNCTION = "def add(a, b):\n    result = a + b\n    return result\n"
 
 
 class FakeEmbeddingIndex:
@@ -104,6 +105,19 @@ class FakeAgent:
         ]
 
 
+class FakeDryJudge:
+    """Stands in for DryJudge: records what it was asked to judge and
+    returns a canned list of confirmed incidents."""
+
+    def __init__(self, incidents: list[Incident] | None = None) -> None:
+        self._incidents = incidents if incidents is not None else []
+        self.judge_calls: list[tuple[str, list[JudgeCandidate]]] = []
+
+    def judge(self, query_code: str, candidates: list[JudgeCandidate]) -> list[Incident]:
+        self.judge_calls.append((query_code, candidates))
+        return list(self._incidents)
+
+
 @pytest.fixture
 def file_agent() -> FakeAgent:
     return FakeAgent(CodeKey.COH)
@@ -125,8 +139,8 @@ def tcase_agent() -> FakeAgent:
 
 
 @pytest.fixture
-def dry_agent() -> FakeAgent:
-    return FakeAgent(CodeKey.DRY)
+def dry_judge() -> FakeDryJudge:
+    return FakeDryJudge()
 
 
 @pytest.fixture
@@ -161,7 +175,7 @@ def container(
     cmplx_agent: FakeAgent,
     var_agent: FakeAgent,
     tcase_agent: FakeAgent,
-    dry_agent: FakeAgent,
+    dry_judge: FakeDryJudge,
     rag_manager: FakeEmbeddingIndex,
     structural_hash_store: StructuralHashStore,
     code_similarity_index: FakeCodeSimilarityIndex,
@@ -171,7 +185,7 @@ def container(
         file_agents=[file_agent],
         chunk_agents=[cmplx_agent, var_agent],
         tcase_agent=tcase_agent,
-        dry_agent=dry_agent,
+        dry_judge=dry_judge,
         rag_manager=rag_manager,
         structural_hash_store=structural_hash_store,
         code_similarity_index=code_similarity_index,
@@ -355,57 +369,88 @@ def test_tcase_is_never_chunked_even_at_hard_limit(
 
 
 @DISPATCH_FUNCTIONS
-def test_dry_short_circuits_with_no_evidence(dispatch: DispatchFn, container: AgentsContainer, dry_agent: FakeAgent) -> None:
+def test_dry_short_circuits_with_no_evidence(
+    dispatch: DispatchFn, container: AgentsContainer, dry_judge: FakeDryJudge
+) -> None:
     """Verify DRY skips the LLM call entirely when there's nothing to report."""
     entries = dispatch(_prepared_file(), container)
 
     dry_entry = next(entry for entry in entries if entry.code_key == CodeKey.DRY)
     assert dry_entry.rating == 100
     assert dry_entry.incidents == []
-    assert dry_agent.execute_agent_calls == []
+    assert dry_judge.judge_calls == []
 
 
 @DISPATCH_FUNCTIONS
-def test_dry_is_called_with_intra_pr_evidence_when_present(
-    dispatch: DispatchFn, container: AgentsContainer, dry_agent: FakeAgent
-) -> None:
-    """Verify a non-empty intra_pr_duplicates on the PreparedFile reaches DRY as formatted evidence text."""
+def test_dry_templates_intra_pr_evidence_with_no_judge_call(dispatch: DispatchFn, container: AgentsContainer, dry_judge: FakeDryJudge) -> None:
+    """Verify a non-empty intra_pr_duplicates on the PreparedFile is
+    reported directly — an exact structural-hash match needs no LLM judgment."""
     group = [
-        LocatedChunk(StructuralMatch(file_path="f.py", chunk_name="foo", start_line=1, end_line=2), "def foo():\n    return 1"),
-        LocatedChunk(StructuralMatch(file_path="other.py", chunk_name="bar", start_line=5, end_line=6), "def bar():\n    return 1"),
+        LocatedChunk(StructuralMatch(file_path="f.py", chunk_name="foo", start_line=1, end_line=3), ADD_FUNCTION),
+        LocatedChunk(StructuralMatch(file_path="other.py", chunk_name="bar", start_line=5, end_line=7), ADD_FUNCTION),
     ]
-    prepared = _prepared_file(intra_pr_duplicates=[group])
+    prepared = _prepared_file(content=ADD_FUNCTION, intra_pr_duplicates=[group])
 
-    dispatch(prepared, container)
+    entries = dispatch(prepared, container)
 
-    assert len(dry_agent.execute_agent_calls) == 1
-    content, file_path, _ = dry_agent.execute_agent_calls[0]
-    assert file_path == "f.py"
-    assert "DUPLICATE GROUPS WITHIN THIS PR" in content
+    dry_entry = next(entry for entry in entries if entry.code_key == CodeKey.DRY)
+    assert len(dry_entry.incidents) == 1
+    assert dry_entry.incidents[0].line_position == "1-3"
+    assert "other.py:bar (lines 5-7)" in dry_entry.incidents[0].description
+    assert dry_judge.judge_calls == []
 
 
 @DISPATCH_FUNCTIONS
-def test_dry_is_called_with_cross_history_evidence_when_repo_data_present(
+def test_dry_templates_cross_history_structural_evidence_with_no_judge_call(
     dispatch: DispatchFn,
     container: AgentsContainer,
-    dry_agent: FakeAgent,
+    dry_judge: FakeDryJudge,
     structural_hash_store: StructuralHashStore,
 ) -> None:
-    """Verify a repo-scoped review checks the indexed history and reaches DRY when a structural match exists."""
+    """Verify a repo-scoped review checks the indexed history and reports
+    an exact structural match directly, without asking the judge."""
     repo_data = RepoData(repo_id="repo-1", commit_sha="sha-1", owner_id="owner-1")
     structural_hash_store.index_file(repo_data, "legacy/math_ops.py", ADD_FUNCTION)
     prepared = _prepared_file(content=ADD_FUNCTION, repo_data=repo_data)
 
-    dispatch(prepared, container)
+    entries = dispatch(prepared, container)
 
-    assert len(dry_agent.execute_agent_calls) == 1
-    content, _, _ = dry_agent.execute_agent_calls[0]
-    assert "DUPLICATES AGAINST ALREADY-INDEXED REPO HISTORY" in content
+    dry_entry = next(entry for entry in entries if entry.code_key == CodeKey.DRY)
+    assert len(dry_entry.incidents) == 1
+    assert "legacy/math_ops.py:add" in dry_entry.incidents[0].description
+    assert dry_judge.judge_calls == []
+
+
+@DISPATCH_FUNCTIONS
+def test_dry_sends_a_semantic_match_to_the_judge(
+    dispatch: DispatchFn,
+    container: AgentsContainer,
+    dry_judge: FakeDryJudge,
+    rag_manager: FakeEmbeddingIndex,
+) -> None:
+    """Verify a fuzzy (semantic) cross-history candidate reaches the judge
+    rather than being templated, and a confirmed verdict is offset to this
+    file's own absolute line positions."""
+    rag_manager._matches = [
+        SimilarChunk(
+            file_path="legacy/aggregates.py", chunk_name="total", start_line=1, end_line=2, text="t", score=0.9, code="def total(v): ..."
+        )
+    ]
+    repo_data = RepoData(repo_id="repo-1", commit_sha="sha-1", owner_id="owner-1")
+    dry_judge._incidents = [Incident(priority=Priority.MEDIUM, line_position="1-1", description="d", advice="a")]
+    other_function = "def total(values):\n    total = 0\n    return total\n"
+    prepared = _prepared_file(content=other_function, repo_data=repo_data)
+
+    entries = dispatch(prepared, container)
+
+    assert len(dry_judge.judge_calls) == 1
+    dry_entry = next(entry for entry in entries if entry.code_key == CodeKey.DRY)
+    assert dry_entry.incidents[0].line_position == "1-1"
 
 
 @DISPATCH_FUNCTIONS
 def test_dry_skips_cross_history_lookup_for_a_standalone_review(
-    dispatch: DispatchFn, container: AgentsContainer, dry_agent: FakeAgent
+    dispatch: DispatchFn, container: AgentsContainer, dry_judge: FakeDryJudge
 ) -> None:
     """Verify no repo_data means no history lookup is even attempted — same
     fallback ARCH/COUP's evidence hop already uses."""
@@ -415,7 +460,7 @@ def test_dry_skips_cross_history_lookup_for_a_standalone_review(
 
     dry_entry = next(entry for entry in entries if entry.code_key == CodeKey.DRY)
     assert dry_entry.rating == 100
-    assert dry_agent.execute_agent_calls == []
+    assert dry_judge.judge_calls == []
 
 
 def _comparable(entries: list[AgentReviewEntry]) -> list[tuple]:

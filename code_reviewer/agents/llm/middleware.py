@@ -10,13 +10,21 @@ from langchain.agents.middleware import (
     ModelRequest,
     ModelResponse,
     Runtime,
+    ToolCallRequest,
     after_model,
     wrap_model_call,
+    wrap_tool_call,
 )
 from langchain.agents.structured_output import StructuredOutputValidationError
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 
 from code_reviewer.schemas.review import AgentReviewEntry, Incident, Priority
+
+_ALREADY_CALLED_MESSAGE = (
+    "You already called this tool with these exact arguments earlier in "
+    "this review — see the result above. Do not call it again with the "
+    "same arguments; use what you already have to finalize your answer."
+)
 
 MAX_RETRIES = 2
 
@@ -64,10 +72,44 @@ def _append_correction(
     return request.override(messages=[*request.messages, error.ai_message, correction])
 
 
+@wrap_tool_call
+def dedupe_tool_calls(request: ToolCallRequest, handler: Callable) -> ToolMessage:
+    """Short-circuits a tool call that exactly repeats one already in this
+    conversation, instead of re-executing it. A model without a reasoning
+    trace can lose track of having already retrieved something and keep
+    re-asking rather than converging on a final answer — this is a
+    preventive guard against that, not just the recursion_limit backstop."""
+    if _already_called(request):
+        return ToolMessage(content=_ALREADY_CALLED_MESSAGE, tool_call_id=request.tool_call["id"])
+    return handler(request)
+
+
+def _already_called(request: ToolCallRequest) -> bool:
+    """A message carrying the current call is already committed to state
+    by the time this runs, so it has to be excluded by id — otherwise
+    every call would match itself and short-circuit before ever running."""
+    current_id = request.tool_call["id"]
+    current = (request.tool_call["name"], _freeze(request.tool_call["args"]))
+    for message in request.state["messages"]:
+        for call in getattr(message, "tool_calls", None) or []:
+            if call["id"] == current_id:
+                continue
+            if (call["name"], _freeze(call["args"])) == current:
+                return True
+    return False
+
+
+def _freeze(args: dict[str, Any]) -> tuple:
+    return tuple(sorted(args.items()))
+
+
 @after_model
 def calculate_rating(state: AgentState, runtime: Runtime) -> dict[str, Any]:
-    """Calculate the rating for the agent's output."""
-    output = state["structured_response"]
+    """Calculate the rating for the agent's output. A turn that emitted a
+    tool call has no structured output to rate yet."""
+    output = state.get("structured_response")
+    if output is None:
+        return {}
     for review in output.review:
         review.rating = _calculate_rating_for_review(review)
     return {"structured_response": output}

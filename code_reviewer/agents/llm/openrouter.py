@@ -1,6 +1,8 @@
 """
     LLMInterface implementation backed by OpenRouter's hosted API.
 """
+from typing import Any
+
 from langchain.agents.structured_output import ProviderStrategy, ResponseFormat
 
 from code_reviewer.agents.llm.base import LLMInterface, T
@@ -38,6 +40,14 @@ class OpenRouter(LLMInterface[T]):
 
     def _get_api_key(self) -> str | None:
         return settings.openrouter_api_key
+
+    def _get_timeout_kwargs(self) -> dict[str, Any]:
+        """request_timeout is milliseconds here (its own docstring: "Maps
+        to SDK timeout_ms"), unlike every other timeout in this project,
+        which is always seconds — converted here so settings stays in one
+        consistent unit and callers never have to remember this field is
+        the exception."""
+        return {"request_timeout": int(get_settings().llm_call_timeout_seconds * 1000)}
 
     def build_response_format(self, schema: type[T]) -> ResponseFormat[T]:
         """Use provider-native structured output.
