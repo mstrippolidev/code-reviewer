@@ -62,6 +62,8 @@ class Settings(BaseSettings):
 
     dry_rerank_score_floor: float = 0.5
 
+    llm_call_timeout_seconds: float = 60.0
+
 
 
 @lru_cache

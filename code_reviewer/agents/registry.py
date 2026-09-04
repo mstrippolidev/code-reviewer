@@ -12,7 +12,6 @@ from code_reviewer.agents.complexity import ComplexityAgent
 from code_reviewer.agents.concurrency import ConcurrencyAgent
 from code_reviewer.agents.coupling import CouplingAgent
 from code_reviewer.agents.coverage_gap import CoverageGapAgent
-from code_reviewer.agents.dry import DryAgent
 from code_reviewer.agents.errors import ErrorsAgent
 from code_reviewer.agents.llm.base import LLMInterface
 from code_reviewer.agents.naming import NamingAgent
@@ -21,6 +20,7 @@ from code_reviewer.agents.solid_2 import SolidLspDipAgent
 from code_reviewer.agents.testability import TestabilityAgent
 from code_reviewer.config.settings import get_settings
 from code_reviewer.rag.code_similarity_index import CodeSimilarityIndex
+from code_reviewer.rag.dry_judge import DryJudge
 from code_reviewer.rag.exemplar_injection import ExemplarCorpora
 from code_reviewer.rag.exemplars import ExemplarStore
 from code_reviewer.rag.indexer import LlamaIndexRagManager
@@ -36,7 +36,7 @@ class AgentsContainer:
     file_agents: list[FileSizeAwareAgentBase]
     chunk_agents: list[AgentBase]
     tcase_agent: CoverageGapAgent
-    dry_agent: DryAgent
+    dry_judge: DryJudge
     rag_manager: LlamaIndexRagManager
     structural_hash_store: StructuralHashStore
     code_similarity_index: CodeSimilarityIndex
@@ -109,13 +109,13 @@ def build_agent_roster(
         TestabilityAgent(llm),
     ]
     tcase_agent = CoverageGapAgent(llm)
-    dry_agent = DryAgent(llm)
+    dry_judge = DryJudge(llm)
 
     return AgentsContainer(
         file_agents=file_agents,
         chunk_agents=chunk_agents,
         tcase_agent=tcase_agent,
-        dry_agent=dry_agent,
+        dry_judge=dry_judge,
         rag_manager=rag_manager,
         structural_hash_store=structural_hash_store,
         code_similarity_index=code_similarity_index,

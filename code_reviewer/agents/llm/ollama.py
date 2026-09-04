@@ -1,6 +1,8 @@
 """
     LLMInterface implementation backed by a local Ollama instance.
 """
+from typing import Any
+
 from langchain.agents.structured_output import ProviderStrategy, ResponseFormat
 
 from code_reviewer.agents.llm.base import LLMInterface, T
@@ -20,6 +22,12 @@ class OllamaLLM(LLMInterface[T]):
 
     def _get_base_url(self) -> str:
         return settings.ollama_base_url
+
+    def _get_timeout_kwargs(self) -> dict[str, Any]:
+        """Ollama has no top-level timeout field — ChatOllama forwards
+        client_kwargs to the underlying ollama/httpx client instead."""
+        timeout = get_settings().llm_call_timeout_seconds
+        return {"client_kwargs": {"timeout": timeout}}
 
     def build_response_format(self, schema: type[T]) -> ResponseFormat[T]:
         """Use provider-native structured output instead of a tool call.

@@ -18,11 +18,7 @@ public surface into its internals.
 Flag a piece of code if it:
 1. Forms a dependency cycle: class A holds a reference to class B and
    calls into it while B does the same back to A, so neither can be
-   read, changed, or tested without the other. Judge primarily from
-   what you can see in this file. When you suspect an imported module
-   might import back but cannot tell from this file alone, call
-   get_file_chunks with its file path before deciding — do not
-   speculate without evidence, and do not guess when you could check.
+   read, changed, or tested without the other.
 2. Shows feature envy: a method that spends most of its work reading or
    manipulating another object's data rather than its own, so the logic
    plainly belongs on the class owning that data.
@@ -42,13 +38,30 @@ Flag a piece of code if it:
    this code depends not only on its direct collaborator but on every
    type along the path.
 
-When get_file_chunks reports no indexed content available — a
-third-party or standard-library import, a repository with no indexed
-history yet, or a file added in this same unmerged change — fall back
-to judging the dependency on what's visible in this file alone, exactly
-as you would if the tool did not exist. Reach for the tool only for a
-dependency you are already considering flagging, not as a first step on
-every import: most imports need no verification at all.
+Verifying a suspicion about another file (applies to all five categories
+above, not only cycles): most imports need no check at all. But once you
+are leaning toward flagging one, and your reason depends on what that
+file's code actually does, call get_file_chunks before you decide
+anything — that is the resolution, not an optional extra step. Do not
+guess what the other file does, and do not drop a real concern just
+because you have not checked yet: check first, then decide.
+
+Calling the tool always leaves you able to report something: either it
+confirms your suspicion, so you now describe both sides with real
+evidence, or it clears the suspicion, so you report nothing about that
+import. Neither outcome is a reason to have skipped the call.
+
+get_file_chunks reporting no indexed content available is the one
+situation where checking is not possible — a third-party or
+standard-library import, a repository with no indexed history yet, or a
+file added in this same unmerged change. Only then, fall back to judging
+on what's visible in this file alone, and even then, describe only what
+you can actually see — never what you assume the missing file does.
+
+Whatever get_file_chunks returns is evidence for judging THIS file, never
+a second thing to review. Report on exactly one file, the one you were
+given — never add a separate entry for a file you only fetched to verify
+a dependency.
 
 Coupling is about the dependencies between units. Whether the members
 inside one unit belong together is cohesion, and whether a dependency

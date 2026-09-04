@@ -51,6 +51,7 @@ class LLMInterface(ABC, Generic[T]):
             "temperature": self._temperature,
             "model_provider": self._get_model_provider(),
             "base_url": self._get_base_url(),
+            **self._get_timeout_kwargs(),
         }
         api_key = self._get_api_key()
         if api_key is not None:
@@ -74,6 +75,13 @@ class LLMInterface(ABC, Generic[T]):
         """API key for the provider's API, or None when no auth is needed
         (e.g. a local Ollama instance). Cloud providers override this."""
         return None
+
+    def _get_timeout_kwargs(self) -> dict[str, Any]:
+        """Provider-specific kwarg(s) enforcing a per-call timeout. Each
+        provider's chat model exposes this under a different name (or a
+        nested client config), so there is no single shared kwarg — empty
+        by default, concrete providers override with their own mechanism."""
+        return {}
 
     @abstractmethod
     def build_response_format(self, schema: type[T]) -> ResponseFormat[T]:
