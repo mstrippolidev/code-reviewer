@@ -546,8 +546,8 @@ def integration_code_similarity_index(integration_code_vector_store: PGVectorSto
 @pytest.fixture(scope="module")
 def integration_reranker() -> HistoryMatchReranker:
     """Real HistoryMatchReranker: the real cross-encoder model, at the same
-    provisional floor production is configured with."""
-    return HistoryMatchReranker(score_floor=get_settings().dry_rerank_score_floor)
+    provisional max_candidates production is configured with."""
+    return HistoryMatchReranker(max_candidates=get_settings().dry_rerank_max_candidates)
 
 
 @pytest.fixture(scope="module")
@@ -617,24 +617,6 @@ def test_semantic_bucket_finds_a_behaviorally_equivalent_duplicate(
 
 @pytest.mark.db
 @pytest.mark.llm
-def test_rerank_floor_drops_the_unrelated_semantic_candidate(
-    integration_finder: CrossHistoryDuplicateFinder, integration_reranker: HistoryMatchReranker
-) -> None:
-    """Negative: with only a handful of chunks indexed, the bi-encoder's
-    top_k recall returns its closest available candidate for SHOUT_FUNCTION
-    even though nothing behaviorally related is indexed — real evidence for
-    why a precision pass exists at all. Verify the real cross-encoder, at
-    the configured floor, actually drops it."""
-    history_matches = integration_finder.find("new_file.py", SHOUT_FUNCTION)
-    match = next(match for match in history_matches if match.chunk.chunk_name == "shout")
-
-    reranked = integration_reranker.rerank(SHOUT_FUNCTION, match)
-
-    assert reranked.semantic_matches == []
-
-
-@pytest.mark.db
-@pytest.mark.llm
 def test_code_embedding_bucket_finds_a_near_miss_duplicate(integration_finder: CrossHistoryDuplicateFinder) -> None:
     """Positive: LOOP_BASED_SUM is a near-miss of the indexed
     GUARD_CLAUSE_SUM (an inserted early-return guard) — no LLM involved,
@@ -643,22 +625,6 @@ def test_code_embedding_bucket_finds_a_near_miss_duplicate(integration_finder: C
 
     match = next(match for match in history_matches if match.chunk.chunk_name == "total")
     assert any(candidate.file_path == "legacy/safe_totals.py" for candidate in match.code_matches)
-
-
-@pytest.mark.db
-@pytest.mark.llm
-def test_rerank_floor_drops_the_unrelated_code_embedding_candidate(
-    integration_finder: CrossHistoryDuplicateFinder, integration_reranker: HistoryMatchReranker
-) -> None:
-    """Negative: same story as the semantic bucket — dense recall over a
-    tiny corpus still returns its closest candidate for SHOUT_FUNCTION.
-    Verify the real cross-encoder, at the configured floor, drops it."""
-    history_matches = integration_finder.find("new_file.py", SHOUT_FUNCTION)
-    match = next(match for match in history_matches if match.chunk.chunk_name == "shout")
-
-    reranked = integration_reranker.rerank(SHOUT_FUNCTION, match)
-
-    assert reranked.code_matches == []
 
 
 @pytest.mark.db
@@ -675,27 +641,11 @@ def test_lexical_bucket_finds_a_shared_vocabulary_duplicate(integration_finder: 
 
 @pytest.mark.db
 @pytest.mark.llm
-def test_rerank_floor_drops_the_unrelated_lexical_candidate(
+def test_rerank_keeps_the_real_semantic_duplicate(
     integration_finder: CrossHistoryDuplicateFinder, integration_reranker: HistoryMatchReranker
 ) -> None:
-    """Negative: BM25 over a tiny corpus still ranks *something* as the
-    least-bad match for SHOUT_FUNCTION, even sharing no real vocabulary.
-    Verify the real cross-encoder, at the configured floor, drops it."""
-    history_matches = integration_finder.find("new_file.py", SHOUT_FUNCTION)
-    match = next(match for match in history_matches if match.chunk.chunk_name == "shout")
-
-    reranked = integration_reranker.rerank(SHOUT_FUNCTION, match)
-
-    assert reranked.lexical_matches == []
-
-
-@pytest.mark.db
-@pytest.mark.llm
-def test_rerank_floor_keeps_the_real_semantic_duplicate(
-    integration_finder: CrossHistoryDuplicateFinder, integration_reranker: HistoryMatchReranker
-) -> None:
-    """Verify the real cross-encoder, at the configured floor, does not
-    discard a genuine Type-4 duplicate the semantic bucket already found."""
+    """Verify the real cross-encoder ranking does not discard a genuine
+    Type-4 duplicate the semantic bucket already found."""
     history_matches = integration_finder.find("new_file.py", BUILTIN_BASED_SUM)
     match = next(match for match in history_matches if match.chunk.chunk_name == "total")
     assert match.semantic_matches != []
@@ -707,11 +657,11 @@ def test_rerank_floor_keeps_the_real_semantic_duplicate(
 
 @pytest.mark.db
 @pytest.mark.llm
-def test_rerank_floor_keeps_the_real_code_embedding_duplicate(
+def test_rerank_keeps_the_real_code_embedding_duplicate(
     integration_finder: CrossHistoryDuplicateFinder, integration_reranker: HistoryMatchReranker
 ) -> None:
-    """Verify the real cross-encoder, at the configured floor, does not
-    discard the genuine near-miss the code-embedding bucket already found."""
+    """Verify the real cross-encoder ranking does not discard the genuine
+    near-miss the code-embedding bucket already found."""
     history_matches = integration_finder.find("new_file.py", LOOP_BASED_SUM)
     match = next(match for match in history_matches if match.chunk.chunk_name == "total")
     assert match.code_matches != []
@@ -723,12 +673,11 @@ def test_rerank_floor_keeps_the_real_code_embedding_duplicate(
 
 @pytest.mark.db
 @pytest.mark.llm
-def test_rerank_floor_keeps_the_real_lexical_duplicate(
+def test_rerank_keeps_the_real_lexical_duplicate(
     integration_finder: CrossHistoryDuplicateFinder, integration_reranker: HistoryMatchReranker
 ) -> None:
-    """Verify the real cross-encoder, at the configured floor, does not
-    discard the genuine keyword-overlap match the lexical bucket already
-    found."""
+    """Verify the real cross-encoder ranking does not discard the genuine
+    keyword-overlap match the lexical bucket already found."""
     history_matches = integration_finder.find("new_file.py", LOOP_BASED_SUM)
     match = next(match for match in history_matches if match.chunk.chunk_name == "total")
     assert match.lexical_matches != []

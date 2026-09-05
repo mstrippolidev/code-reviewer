@@ -39,12 +39,6 @@ Mark a candidate as a duplicate when:
   in shape does not reflect a genuine difference in requirements — the
   same concept was independently reimplemented rather than reused.
 
-Before marking anything a duplicate, judge whether the two pieces
-represent the same concept that will change together, or whether they
-only look alike today. Two independent concerns that happen to read alike
-right now are not a duplicate — mark is_duplicate false rather than force
-a shared abstraction onto code that will drift apart on its own.
-
 For every candidate you mark as a duplicate, set:
 - priority: "critical" only when the shared logic sits on a security or
   money-handling path, so a fix applied to one copy silently leaves the
