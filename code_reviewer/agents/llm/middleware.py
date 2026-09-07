@@ -5,10 +5,14 @@
 """
 from typing import Any, Callable
 
+import httpx
+import ollama
+import openai
 from langchain.agents.middleware import (
     AgentState,
     ModelRequest,
     ModelResponse,
+    ModelRetryMiddleware,
     Runtime,
     ToolCallRequest,
     after_model,
@@ -70,6 +74,30 @@ def _append_correction(
         "Return a corrected response that fixes this."
     )
     return request.override(messages=[*request.messages, error.ai_message, correction])
+
+
+_TRANSIENT_EXCEPTION_TYPES = (
+    openai.APITimeoutError,
+    openai.APIConnectionError,
+    openai.RateLimitError,
+    openai.InternalServerError,
+    httpx.TimeoutException,
+    httpx.ConnectError,
+    httpx.RemoteProtocolError,
+    TimeoutError,
+    ConnectionError,
+)
+
+_TRANSIENT_OLLAMA_STATUS_CODES = {-1, 429, 500, 502, 503, 504}
+
+
+def _is_transient_llm_error(error: BaseException) -> bool:
+    if isinstance(error, _TRANSIENT_EXCEPTION_TYPES):
+        return True
+    return isinstance(error, ollama.ResponseError) and error.status_code in _TRANSIENT_OLLAMA_STATUS_CODES
+
+
+retry_transient_call = ModelRetryMiddleware(max_retries=2, retry_on=_is_transient_llm_error, on_failure="error")
 
 
 @wrap_tool_call

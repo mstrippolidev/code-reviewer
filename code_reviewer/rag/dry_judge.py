@@ -9,7 +9,7 @@ from typing import Protocol
 from langchain.agents import create_agent
 
 from code_reviewer.agents.llm.base import LLMInterface
-from code_reviewer.agents.llm.middleware import retry_model
+from code_reviewer.agents.llm.middleware import retry_model, retry_transient_call
 from code_reviewer.agents.llm.ollama import OllamaLLM
 from code_reviewer.agents.llm.timeout import call_with_hard_timeout
 from code_reviewer.prompts.rag.dry_judge import DRY_JUDGE_SYSTEM_PROMPT
@@ -53,7 +53,7 @@ class DryJudge:
         self._agent = create_agent(
             model=llm.create_raw_model(),
             system_prompt=DRY_JUDGE_SYSTEM_PROMPT,
-            middleware=[retry_model],
+            middleware=[retry_transient_call, retry_model],
             response_format=llm.build_response_format(DryJudgeOutput),
         )
 

@@ -10,7 +10,7 @@ from langchain_core.runnables import RunnableLambda, RunnableParallel
 from pydantic import BaseModel, Field
 
 from code_reviewer.agents.llm.base import LLMInterface
-from code_reviewer.agents.llm.middleware import retry_model
+from code_reviewer.agents.llm.middleware import retry_model, retry_transient_call
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,7 @@ class Vote:
         agent = create_agent(
             model=voter.create_raw_model(),
             system_prompt=system_prompt,
-            middleware=[retry_model],
+            middleware=[retry_transient_call, retry_model],
             response_format=voter.build_response_format(VoteVerdict),
         )
         return RunnableLambda(

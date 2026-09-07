@@ -8,6 +8,7 @@ import logging
 from code_reviewer.agents.registry import AgentsContainer
 from code_reviewer.guardrails.errors import IntakeRejectedError
 from code_reviewer.guardrails.intake_screen import run_intake_screen
+from code_reviewer.pipeline.aggregator import Aggregator
 from code_reviewer.pipeline.dispatch import review_file_runnable
 from code_reviewer.pipeline.errors import FileTooLargeError, SubmissionTooLargeError
 from code_reviewer.pipeline.file_size import run_file_size_guard
@@ -19,7 +20,7 @@ from code_reviewer.rag.dry_matching import find_intra_pr_duplicates
 from code_reviewer.rag.errors import DryMatchingChunkingError
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.rag.structural_hash_store import LocatedChunk
-from code_reviewer.schemas.review import AgentReviewEntry, SizeStatus, SkippedFile
+from code_reviewer.schemas.review import AggregatorOutput, SizeStatus, SkippedFile
 from code_reviewer.schemas.submission import PreparedFile, SubmittedFile
 
 logger = logging.getLogger(__name__)
@@ -31,11 +32,11 @@ _SKIP_REASONS = {
 }
 
 
-def review_submission(
+def run_pipeline(
     files: list[SubmittedFile], agents_container: AgentsContainer, repo_data: RepoData | None = None
-) -> tuple[list[AgentReviewEntry], list[SkippedFile]]:
-    """Runs the full pipeline end to end: guards, dispatch, per prepared
-    file — the single entry point from a raw submission to agent results.
+) -> AggregatorOutput:
+    """Runs the full pipeline end to end: guards, dispatch, aggregation —
+    the single entry point from a raw submission to the final PR report.
 
     Args:
         files: Every file in the submission, source and test alike.
@@ -47,8 +48,8 @@ def review_submission(
             judgment.
 
     Returns:
-        Every AgentReviewEntry produced across every prepared file, and
-        every file skipped along the way with its reason.
+        The complete PR-level report: one merged entry per reviewed file,
+        plus PR-level meta.
     """
     prepared_files, skipped_files = prepare_files_for_pipeline(files, repo_data)
     entries = [
@@ -56,7 +57,7 @@ def review_submission(
         for prepared_file in prepared_files
         for entry in review_file_runnable(prepared_file, agents_container)
     ]
-    return entries, skipped_files
+    return Aggregator().build_output(entries, prepared_files, skipped_files)
 
 
 def prepare_files_for_pipeline(
