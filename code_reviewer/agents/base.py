@@ -14,6 +14,7 @@ from code_reviewer.agents.llm.base import LLMInterface
 from code_reviewer.agents.llm.middleware import (
     dedupe_tool_calls,
     retry_model,
+    retry_transient_call,
     calculate_rating,
     rating_from_incidents,
 )
@@ -108,8 +109,9 @@ class AgentBase:
         """retry_model exists to give ProviderStrategy the retry-on-
         validation-failure behavior ToolStrategy already has natively via
         handle_errors — stacking both on a tool-carrying agent would just
-        retry the same failure twice."""
-        return [] if tools else [retry_model]
+        retry the same failure twice. retry_transient_call applies either
+        way, since neither strategy retries a rate limit or a timeout."""
+        return [retry_transient_call] if tools else [retry_transient_call, retry_model]
 
     def _tool_loop_guard(self, tools: list[BaseTool] | None) -> list[AgentMiddleware]:
         """A model with no reasoning trace can lose track of already having
