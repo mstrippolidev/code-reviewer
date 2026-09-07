@@ -43,6 +43,10 @@ class JudgeCandidate:
     code: str
 
 
+class DryJudgeLike(Protocol):
+    def judge(self, query_code: str, candidates: list[JudgeCandidate]) -> list[Incident]: ...
+
+
 class DryJudge:
     def __init__(self, llm: LLMInterface | None = None) -> None:
         llm = llm or OllamaLLM()

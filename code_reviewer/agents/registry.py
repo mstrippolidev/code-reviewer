@@ -20,7 +20,8 @@ from code_reviewer.agents.solid_2 import SolidLspDipAgent
 from code_reviewer.agents.testability import TestabilityAgent
 from code_reviewer.config.settings import get_settings
 from code_reviewer.rag.code_similarity_index import CodeSimilarityIndex
-from code_reviewer.rag.dry_judge import DryJudge
+from code_reviewer.rag.dry_judge import DryJudge, DryJudgeLike
+from code_reviewer.rag.dry_judge_split import SizeGuardedDryJudge, SplitConfig
 from code_reviewer.rag.exemplar_injection import ExemplarCorpora
 from code_reviewer.rag.exemplars import ExemplarStore
 from code_reviewer.rag.indexer import LlamaIndexRagManager
@@ -36,7 +37,7 @@ class AgentsContainer:
     file_agents: list[FileSizeAwareAgentBase]
     chunk_agents: list[AgentBase]
     tcase_agent: CoverageGapAgent
-    dry_judge: DryJudge
+    dry_judge: DryJudgeLike
     rag_manager: LlamaIndexRagManager
     structural_hash_store: StructuralHashStore
     code_similarity_index: CodeSimilarityIndex
@@ -71,10 +72,11 @@ def build_agent_roster(
             cross-history raw-code and BM25 passes. Defaults to a real
             CodeSimilarityIndex() when not given, same pattern as
             rag_manager's own default.
-        history_match_reranker: Cross-encoder precision pass over DRY's
-            cross-history candidates, before the DRY agent sees them.
-            Defaults to a real HistoryMatchReranker() when not given, same
-            pattern as rag_manager's own default.
+        history_match_reranker: Cross-encoder relevance-ranking pass over
+            DRY's cross-history candidates, keeping only the top-ranked few
+            before the DRY judge sees them. Defaults to a real
+            HistoryMatchReranker() when not given, same pattern as
+            rag_manager's own default.
         exemplar_store: Per-repo corpus of known-good code the 2.0-weight
             agents draw few-shot context from. Defaults to a real ExemplarStore() when
             not given, same pattern as rag_manager's own default.
@@ -87,7 +89,7 @@ def build_agent_roster(
     structural_hash_store = structural_hash_store or StructuralHashStore()
     code_similarity_index = code_similarity_index or CodeSimilarityIndex()
     history_match_reranker = history_match_reranker or HistoryMatchReranker(
-        score_floor=get_settings().dry_rerank_score_floor
+        max_candidates=get_settings().dry_rerank_max_candidates
     )
     exemplar_store = exemplar_store or ExemplarStore()
     shared_exemplar_store = shared_exemplar_store or SharedExemplarStore()
@@ -109,7 +111,13 @@ def build_agent_roster(
         TestabilityAgent(llm),
     ]
     tcase_agent = CoverageGapAgent(llm)
-    dry_judge = DryJudge(llm)
+    dry_judge: DryJudgeLike = SizeGuardedDryJudge(
+        DryJudge(llm),
+        SplitConfig(
+            max_pair_chars=get_settings().dry_judge_max_pair_chars,
+            overlap_chars=get_settings().dry_judge_split_overlap_chars,
+        ),
+    )
 
     return AgentsContainer(
         file_agents=file_agents,

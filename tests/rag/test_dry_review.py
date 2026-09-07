@@ -193,3 +193,29 @@ def test_rating_reflects_every_incident_source_combined() -> None:
     entry = build_dry_review_entry("billing/totals.py", DISCOUNT_CALCULATION, [group], [history_match], judge)
 
     assert entry.rating == 100 - 15 - 3  # one templated HIGH (-15) + one judged LOW (-3)
+
+
+def test_cross_history_structural_match_needs_no_domain_reasoning_from_the_judge() -> None:
+    """Two functions identical apart from naming, across unrelated business
+    domains, are still caught by the exact structural hash and templated
+    directly — the judge's code-similarity job is never even asked to
+    weigh in on whether the two domains are "the same concept"."""
+    history_match = ChunkHistoryMatch(
+        chunk=StructuralMatch(file_path="orders/validators.py", chunk_name="is_valid_order_quantity", start_line=1, end_line=4),
+        structural_matches=[
+            StructuralMatch(file_path="scoring/validators.py", chunk_name="is_valid_score", start_line=10, end_line=13)
+        ],
+        semantic_matches=[],
+    )
+    judge = FakeDryJudge()
+
+    entry = build_dry_review_entry(
+        "orders/validators.py",
+        "def is_valid_order_quantity(n):\n    if n < 0:\n        return False\n    return n <= 100\n",
+        [],
+        [history_match],
+        judge,
+    )
+
+    assert len(entry.incidents) == 1
+    assert judge.judge_calls == []

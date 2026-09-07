@@ -166,7 +166,7 @@ def code_similarity_index() -> FakeCodeSimilarityIndex:
 
 @pytest.fixture
 def history_match_reranker() -> HistoryMatchReranker:
-    return HistoryMatchReranker(score_floor=0.0, postprocessor=FakeRerankPostprocessor())
+    return HistoryMatchReranker(max_candidates=100, postprocessor=FakeRerankPostprocessor())
 
 
 @pytest.fixture

@@ -85,7 +85,7 @@ def container() -> AgentsContainer:
         rag_manager=FakeEmbeddingIndex(),
         structural_hash_store=StructuralHashStore(engine=engine, schema_name=None),
         code_similarity_index=FakeCodeSimilarityIndex(),
-        history_match_reranker=HistoryMatchReranker(score_floor=0.0, postprocessor=FakeRerankPostprocessor()),
+        history_match_reranker=HistoryMatchReranker(max_candidates=100, postprocessor=FakeRerankPostprocessor()),
     )
 
 
