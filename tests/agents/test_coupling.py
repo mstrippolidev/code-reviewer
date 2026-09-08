@@ -38,6 +38,46 @@ def test_good_coupling_is_not_flagged(coup_agent: CouplingAgent) -> None:
 
 
 @pytest.mark.llm
+def test_public_api_delegation_is_not_flagged_as_feature_envy(coup_agent: CouplingAgent) -> None:
+    """Calling several public methods on a collaborator to orchestrate a
+    workflow is delegation through its declared interface, not this
+    method manipulating another object's data itself."""
+    code = load_fixture("coup/false_positive_public_api_delegation.py")
+
+    result = coup_agent.execute_agent(code, file_path="false_positive_public_api_delegation.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+@pytest.mark.llm
+def test_public_property_access_is_not_flagged_as_intimacy(coup_agent: CouplingAgent) -> None:
+    """Reading a declared public field is not reaching past another
+    unit's private surface."""
+    code = load_fixture("coup/false_positive_public_property_access.py")
+
+    result = coup_agent.execute_agent(code, file_path="false_positive_public_property_access.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+@pytest.mark.llm
+def test_single_hop_access_is_not_flagged_as_chain_navigation(coup_agent: CouplingAgent) -> None:
+    """One direct collaborator, one attribute — there is no chain of
+    intermediate objects to navigate through."""
+    code = load_fixture("coup/false_positive_single_hop_access.py")
+
+    result = coup_agent.execute_agent(code, file_path="false_positive_single_hop_access.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+@pytest.mark.llm
 def test_circular_dependency_violation_is_flagged(coup_agent: CouplingAgent) -> None:
     code = load_fixture("coup/circular_dependency_violation.py")
 

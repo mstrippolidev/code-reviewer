@@ -37,6 +37,30 @@ def test_good_complexity_is_not_flagged(complexity_agent: ComplexityAgent) -> No
     assert entry.rating == 100
 
 
+def test_two_level_nesting_is_not_flagged(complexity_agent: ComplexityAgent) -> None:
+    """Two levels is the boundary itself, not a violation of item 1's
+    'more than 2 levels deep'."""
+    code = load_fixture("complexity/false_positive_two_level_nesting.py")
+
+    result = complexity_agent.execute_agent(code, file_path="false_positive_two_level_nesting.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+def test_three_part_condition_is_not_flagged(complexity_agent: ComplexityAgent) -> None:
+    """Three parts is the boundary itself, not a violation of item 2's
+    'more than 3 parts'."""
+    code = load_fixture("complexity/false_positive_three_part_condition.py")
+
+    result = complexity_agent.execute_agent(code, file_path="false_positive_three_part_condition.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
 def test_deeply_nested_conditionals_are_flagged(complexity_agent: ComplexityAgent) -> None:
     code = load_fixture("complexity/deeply_nested_conditionals.py")
 

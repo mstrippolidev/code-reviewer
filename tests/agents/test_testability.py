@@ -30,6 +30,42 @@ def test_good_testability_is_not_flagged(test_agent: TestabilityAgent) -> None:
     assert entry.rating == 100
 
 
+def test_internal_value_object_is_not_flagged_as_hard_coded_dependency(test_agent: TestabilityAgent) -> None:
+    """A private field building a plain immutable value object has
+    nothing a unit test would ever need to fake or stub."""
+    code = load_fixture("test/false_positive_internal_value_object.py")
+
+    result = test_agent.execute_agent(code, file_path="false_positive_internal_value_object.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+def test_immutable_module_constant_is_not_flagged_as_hidden_global_state(test_agent: TestabilityAgent) -> None:
+    """A constant that is never written to gives every test the same
+    value every time, with nothing to isolate between runs."""
+    code = load_fixture("test/false_positive_immutable_module_constant.py")
+
+    result = test_agent.execute_agent(code, file_path="false_positive_immutable_module_constant.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+def test_trivial_staticmethod_is_not_flagged_as_hidden_logic(test_agent: TestabilityAgent) -> None:
+    """A one-line pure formula needs no injection point to be exercised
+    in isolation — item 3 targets non-trivial branching logic."""
+    code = load_fixture("test/false_positive_trivial_staticmethod.py")
+
+    result = test_agent.execute_agent(code, file_path="false_positive_trivial_staticmethod.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
 def test_hardcoded_dependency_violation_is_flagged(test_agent: TestabilityAgent) -> None:
     code = load_fixture("test/hardcoded_dependency_violation.py")
 

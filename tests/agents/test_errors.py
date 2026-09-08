@@ -89,6 +89,31 @@ def test_idiomatic_optional_return_is_not_flagged(errors_agent: ErrorsAgent) -> 
     assert entry.rating == 100
 
 
+def test_narrow_exception_with_fallback_is_not_flagged(errors_agent: ErrorsAgent) -> None:
+    """Catching one named, expected exception and returning a deliberate
+    fallback is not the bare-except/log-and-continue pattern item 4
+    targets."""
+    code = load_fixture("errors/false_positive_narrow_exception_with_fallback.py")
+
+    result = errors_agent.execute_agent(code, file_path="false_positive_narrow_exception_with_fallback.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+def test_guard_clause_early_return_is_not_flagged(errors_agent: ErrorsAgent) -> None:
+    """Returning early on an empty batch is a legitimate no-op, not a
+    failure signal item 1 targets."""
+    code = load_fixture("errors/false_positive_guard_clause_early_return.py")
+
+    result = errors_agent.execute_agent(code, file_path="false_positive_guard_clause_early_return.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
 def test_high_priority_scenario_is_flagged_high(errors_agent: ErrorsAgent) -> None:
     code = load_fixture("errors/priority_high.py")
 

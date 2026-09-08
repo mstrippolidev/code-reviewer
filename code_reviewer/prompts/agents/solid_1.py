@@ -55,7 +55,12 @@ judge with confidence, and they are what critical, high, or medium
 priority are reserved for. If you notice a real SRP/OCP-adjacent problem
 that doesn't fit any of them, you may still report it, but it must be
 priority low — report it rather than suppress it, just at the lower
-confidence this review can vouch for it.
+confidence this review can vouch for it. One example of this weaker,
+still-real kind of finding: a class whose methods must be called in a
+specific order to work correctly (e.g. `configure()` before `generate()`),
+with nothing in the code enforcing or even documenting that order — an
+implicit, unenforced second responsibility (getting its own setup right)
+riding along on top of the class's main job.
 
 For each issue you flag, report one incident with:
 - priority: "critical" only when {SOLID1_CRITICAL_CRITERION}. This is

@@ -38,6 +38,7 @@ class Settings(BaseSettings):
 
     openrouter_api_key: str
     openrouter_model: str
+    openrouter_judge_models: str = ""
 
     pg_host: str
     pg_port: int

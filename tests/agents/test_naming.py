@@ -47,6 +47,30 @@ def test_similar_but_distinct_names_are_not_flagged(naming_agent: NamingAgent) -
     assert entry.rating == 100
 
 
+def test_unexpressible_comment_is_not_flagged(naming_agent: NamingAgent) -> None:
+    """The comment states a business rule no identifier could carry, not
+    a unit or qualifier the name omitted."""
+    code = load_fixture("naming/false_positive_unexpressible_comment.py")
+
+    result = naming_agent.execute_agent(code, file_path="false_positive_unexpressible_comment.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+def test_different_concepts_with_different_verbs_are_not_flagged(naming_agent: NamingAgent) -> None:
+    """fetch_user and get_cached_region name two genuinely different
+    operations, not the same concept named two inconsistent ways."""
+    code = load_fixture("naming/false_positive_different_concepts_different_verbs.py")
+
+    result = naming_agent.execute_agent(code, file_path="false_positive_different_concepts_different_verbs.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
 def test_bad_abbreviations_are_flagged(naming_agent: NamingAgent) -> None:
     code = load_fixture("naming/bad_abbreviations.py")
 

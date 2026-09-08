@@ -37,6 +37,31 @@ def test_good_comments_are_not_flagged(comments_agent: CommentsAgent) -> None:
     assert entry.rating == 100
 
 
+def test_doctest_example_is_not_flagged_as_dead_code(comments_agent: CommentsAgent) -> None:
+    """A deliberate, runnable usage example documenting the contract is
+    not dead code accidentally left behind."""
+    code = load_fixture("comments/false_positive_doctest_example.py")
+
+    result = comments_agent.execute_agent(code, file_path="false_positive_doctest_example.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+def test_caller_relevant_precondition_docstring_is_not_flagged(comments_agent: CommentsAgent) -> None:
+    """Naming an algorithm only to state a precondition the caller must
+    honor is part of the public contract, not leaked implementation
+    reasoning."""
+    code = load_fixture("comments/false_positive_caller_relevant_precondition_docstring.py")
+
+    result = comments_agent.execute_agent(code, file_path="false_positive_caller_relevant_precondition_docstring.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
 def test_redundant_comments_are_flagged(comments_agent: CommentsAgent) -> None:
     code = load_fixture("comments/redundant_comments.py")
 

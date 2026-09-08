@@ -30,6 +30,30 @@ def test_good_concurrency_is_not_flagged(conc_agent: ConcurrencyAgent) -> None:
     assert entry.rating == 100
 
 
+def test_lock_protected_mutation_is_not_flagged(conc_agent: ConcurrencyAgent) -> None:
+    """A mutation made only while holding a lock is fully guarded, not
+    the unprotected shared-state case item 1 targets."""
+    code = load_fixture("conc/false_positive_lock_protected_mutation.py")
+
+    result = conc_agent.execute_agent(code, file_path="false_positive_lock_protected_mutation.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+def test_sync_blocking_call_is_not_flagged_as_async_misuse(conc_agent: ConcurrencyAgent) -> None:
+    """time.sleep in a plain synchronous function has no event loop to
+    freeze — item 3 targets a blocking call inside an async def."""
+    code = load_fixture("conc/false_positive_sync_blocking_call.py")
+
+    result = conc_agent.execute_agent(code, file_path="false_positive_sync_blocking_call.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
 def test_unprotected_shared_state_violation_is_flagged(conc_agent: ConcurrencyAgent) -> None:
     code = load_fixture("conc/unprotected_shared_state_violation.py")
 

@@ -41,6 +41,47 @@ def test_fully_tested_code_is_not_flagged(test_gap_agent: CoverageGapAgent) -> N
     assert entry.rating == 100
 
 
+def test_parametrized_coverage_is_not_flagged_as_a_gap(test_gap_agent: CoverageGapAgent) -> None:
+    """A single parametrized test exercising all three branches must not
+    be mistaken for a gap just because there's only one test function —
+    what matters is which paths the cases actually cover."""
+    pairing = _pairing("parametrized_coverage_source.py", "parametrized_coverage_test.py")
+
+    result = test_gap_agent.execute_agent(pairing.get_content(), file_path=pairing.source_file.file_path)
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+def test_trivial_passthrough_with_no_test_file_is_not_flagged(test_gap_agent: CoverageGapAgent) -> None:
+    """A bare constant has no testable behavior at all, so the prompt's
+    own carve-out applies even though no test file was submitted."""
+    pairing = _pairing("trivial_passthrough_source.py")
+
+    result = test_gap_agent.execute_agent(pairing.get_content(), file_path=pairing.source_file.file_path)
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+def test_mocked_away_logic_out_of_scope_is_flagged_low(test_gap_agent: CoverageGapAgent) -> None:
+    """Generalization check, deliberately independent of the worked
+    example now in TCASE's prompt (vacuous assertions): stubbing out the
+    collaborator that does the real arithmetic and only checking it was
+    called is a different kind of unverified behavior entirely, so this
+    verifies the fallback clause holds for a case the model was never
+    shown, not just the one literal example."""
+    pairing = _pairing("out_of_scope_low_mocked_away_source.py", "out_of_scope_low_mocked_away_test.py")
+
+    result = test_gap_agent.execute_agent(pairing.get_content(), file_path=pairing.source_file.file_path)
+
+    entry = result.review[0]
+    assert entry.incidents != []
+    assert all(incident.priority == Priority.LOW for incident in entry.incidents)
+
+
 def test_partially_tested_code_is_flagged_for_the_gaps_only(test_gap_agent: CoverageGapAgent) -> None:
     pairing = _pairing("partially_tested_source.py", "partially_tested_test.py")
 
