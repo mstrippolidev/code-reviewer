@@ -49,7 +49,12 @@ calibrated to judge with confidence, and they are what critical, high, or
 medium priority are reserved for. If you notice a real coverage gap that
 doesn't fit any of them, you may still report it, but it must be priority
 low — report it rather than suppress it, just at the lower confidence
-this review can vouch for it.
+this review can vouch for it. One example of this weaker, still-real kind
+of gap: every path and edge case is technically exercised, but an
+assertion is vacuous (e.g. `assert result is not None`, or a `try/except`
+with an empty `except` block that swallows whatever happens) and verifies
+nothing about the actual behavior — a real gap in what's actually
+verified, distinct from a path or edge case that was never reached at all.
 
 For each gap you find, report one incident with:
 - priority: "critical" only when {TCASE_CRITICAL_CRITERION}. This is rare; if unsure between critical

@@ -36,6 +36,47 @@ def test_good_cohesion_is_not_flagged(coh_agent: CohesionAgent) -> None:
 
 
 @pytest.mark.llm
+def test_stateful_cache_wrapper_is_not_flagged_as_disjoint(coh_agent: CohesionAgent) -> None:
+    """get/set/evict look like three different jobs but all read or write
+    the same instance dict, so there is only one cluster of state, not a
+    disjoint-methods split."""
+    code = load_fixture("coh/false_positive_stateful_cache_wrapper.py")
+
+    result = coh_agent.execute_agent(code, file_path="false_positive_stateful_cache_wrapper.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+@pytest.mark.llm
+def test_classmethod_factory_is_not_flagged_as_ignoring_self(coh_agent: CohesionAgent) -> None:
+    """An alternate-constructor classmethod takes cls, not self, and
+    building the instance it returns is exactly this class's purpose."""
+    code = load_fixture("coh/false_positive_classmethod_factory.py")
+
+    result = coh_agent.execute_agent(code, file_path="false_positive_classmethod_factory.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+@pytest.mark.llm
+def test_related_utils_module_is_not_flagged_as_grab_bag(coh_agent: CohesionAgent) -> None:
+    """Three functions sharing one concept (a date range) match the
+    prompt's own carve-out for two or three closely related functions,
+    not a grab-bag module."""
+    code = load_fixture("coh/false_positive_related_utils_module.py")
+
+    result = coh_agent.execute_agent(code, file_path="false_positive_related_utils_module.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+@pytest.mark.llm
 def test_bundled_concerns_violation_is_flagged(coh_agent: CohesionAgent) -> None:
     code = load_fixture("coh/bundled_concerns_violation.py")
 

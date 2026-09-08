@@ -42,6 +42,46 @@ def test_good_solid2_is_not_flagged(solid2_agent: SolidLspDipAgent) -> None:
 
 
 @pytest.mark.llm
+def test_internal_scalar_state_is_not_flagged_as_dip_violation(solid2_agent: SolidLspDipAgent) -> None:
+    """A private counter is internal state, not a swappable collaborator
+    — the prompt's own carve-out for item 3."""
+    code = load_fixture("solid2/false_positive_internal_scalar_state.py")
+
+    result = solid2_agent.execute_agent(code, file_path="false_positive_internal_scalar_state.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+@pytest.mark.llm
+def test_covariant_override_is_not_flagged_as_lsp_violation(solid2_agent: SolidLspDipAgent) -> None:
+    """Accepting a broader input and returning a more specific type
+    honors the parent's contract; a caller relying on the parent type is
+    never surprised."""
+    code = load_fixture("solid2/false_positive_covariant_override.py")
+
+    result = solid2_agent.execute_agent(code, file_path="false_positive_covariant_override.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+@pytest.mark.llm
+def test_cohesive_small_interface_is_not_flagged_as_isp_violation(solid2_agent: SolidLspDipAgent) -> None:
+    """Every method on this two-method Protocol is genuinely part of one
+    coherent contract, with a real implementation on every implementer."""
+    code = load_fixture("solid2/false_positive_cohesive_small_interface.py")
+
+    result = solid2_agent.execute_agent(code, file_path="false_positive_cohesive_small_interface.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+@pytest.mark.llm
 def test_lsp_violation_is_flagged(solid2_agent: SolidLspDipAgent) -> None:
     code = load_fixture("solid2/lsp_violation.py")
 
@@ -121,6 +161,23 @@ def test_out_of_scope_scenario_is_flagged_low(solid2_agent: SolidLspDipAgent) ->
     code = load_fixture("solid2/priority_out_of_scope_low.py")
 
     result = solid2_agent.execute_agent(code, file_path="priority_out_of_scope_low.py")
+
+    entry = result.review[0]
+    assert entry.incidents != []
+    assert all(incident.priority == Priority.LOW for incident in entry.incidents)
+
+
+@pytest.mark.llm
+def test_leaky_kwargs_passthrough_out_of_scope_is_flagged_low(solid2_agent: SolidLspDipAgent) -> None:
+    """Generalization check, deliberately independent of the worked
+    example now in SOLID2's prompt (isinstance special-casing): blindly
+    forwarding **kwargs into an injected abstraction is a different
+    DIP-adjacent smell entirely, so this verifies the fallback clause
+    holds for a case the model was never shown, not just the one literal
+    example."""
+    code = load_fixture("solid2/out_of_scope_low_leaky_kwargs_passthrough.py")
+
+    result = solid2_agent.execute_agent(code, file_path="out_of_scope_low_leaky_kwargs_passthrough.py")
 
     entry = result.review[0]
     assert entry.incidents != []

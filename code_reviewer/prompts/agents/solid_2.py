@@ -55,7 +55,13 @@ judge with confidence, and they are what critical, high, or medium
 priority are reserved for. If you notice a real LSP/ISP/DIP-adjacent
 problem that doesn't fit any of them, you may still report it, but it
 must be priority low — report it rather than suppress it, just at the
-lower confidence this review can vouch for it.
+lower confidence this review can vouch for it. One example of this
+weaker, still-real kind of finding: a class that receives an abstraction
+through constructor injection (satisfying DIP on paper) but then uses
+`isinstance` to special-case one concrete implementation's behavior —
+this defeats the whole point of depending on the abstraction, even
+though it is not itself an LSP override, an ISP-forced meaningless
+method, or a concretely-constructed dependency.
 
 For each issue you flag, report one incident with:
 - priority: "critical" only for {SOLID2_CRITICAL_CRITERION}. This is rare;
