@@ -1,11 +1,35 @@
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+
+import httpx
 from fastapi import FastAPI
 
+from api.config.settings import get_api_settings
+from api.db.engine import DatabaseEngine
+from api.routers.auth import router as auth_router
 from api.routers.health import router as health_router
 
 
-def create_app() -> FastAPI:
-    app = FastAPI(title="My FastAPI Application", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    settings = get_api_settings()
+    app.state.database_engine = DatabaseEngine(settings.async_database_url)
+    app.state.http_client = httpx.AsyncClient()
+
+    yield
+
+    await app.state.http_client.aclose()
+    await app.state.database_engine.dispose()
+
+
+def _register_routers(app: FastAPI) -> None:
     app.include_router(health_router)
+    app.include_router(auth_router)
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(title="My FastAPI Application", version="1.0.0", lifespan=lifespan)
+    _register_routers(app)
     return app
 
 
