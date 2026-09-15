@@ -1,13 +1,6 @@
 from pydantic import BaseModel, ConfigDict
 
 
-class AuthTokenResponse(BaseModel):
-    """Response returned after a successful GitHub OAuth login."""
-
-    access_token: str
-    token_type: str = "bearer"
-
-
 class UserRead(BaseModel):
     """Public-facing representation of an authenticated user; never includes the stored GitHub token."""
 

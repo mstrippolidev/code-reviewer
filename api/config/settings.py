@@ -27,6 +27,8 @@ class ApiSettings(BaseSettings):
     github_oauth_client_secret: str
     github_oauth_redirect_uri: str
 
+    frontend_base_url: str = "http://localhost:5173"
+
     @property
     def async_database_url(self) -> URL:
         return self._build_database_url("postgresql+asyncpg")
