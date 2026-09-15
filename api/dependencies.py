@@ -41,6 +41,10 @@ def get_token_cipher() -> TokenCipher:
     return TokenCipher(encryption_key=settings.api_token_encryption_key)
 
 
+def get_frontend_base_url() -> str:
+    return get_api_settings().frontend_base_url
+
+
 def get_github_oauth_client(request: Request) -> GitHubOAuthClient:
     settings = get_api_settings()
     config = GitHubOAuthConfig(

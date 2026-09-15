@@ -3,18 +3,20 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from api.config.settings import get_api_settings
 from api.db.engine import DatabaseEngine
 from api.routers.auth import router as auth_router
 from api.routers.health import router as health_router
+from api.routers.repos import router as repos_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_api_settings()
     app.state.database_engine = DatabaseEngine(settings.async_database_url)
-    app.state.http_client = httpx.AsyncClient()
+    app.state.http_client = httpx.AsyncClient(http2=True)
 
     yield
 
@@ -25,11 +27,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 def _register_routers(app: FastAPI) -> None:
     app.include_router(health_router)
     app.include_router(auth_router)
+    app.include_router(repos_router)
+
+
+def _register_cors(app: FastAPI) -> None:
+    settings = get_api_settings()
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[settings.frontend_base_url],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="My FastAPI Application", version="1.0.0", lifespan=lifespan)
     _register_routers(app)
+    _register_cors(app)
     return app
 
 
