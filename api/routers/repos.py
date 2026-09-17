@@ -3,6 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.models.indexed_file import IndexedFile
 from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 from api.db.models.user import User
 from api.dependencies import (
@@ -15,7 +16,7 @@ from api.dependencies import (
 from api.indexing.producer import RepoIndexProducer, RepoRegisteredPublishError
 from api.integrations.github import PYTHON_PERCENTAGE_THRESHOLD, GitHubOAuthClient, GitHubRepo, GitHubRepoFetchError
 from api.schemas.indexing import RepoRegisteredMessage
-from api.schemas.repos import RegisterRepoRequest, RegisteredRepoRead
+from api.schemas.repos import RegisterRepoRequest, RegisteredRepoRead, IndexedFileRead
 from api.security.token_cipher import TokenCipher
 
 router = APIRouter(prefix="/api/repos", tags=["Repos"])
@@ -104,3 +105,26 @@ async def _fetch_and_verify_repo(
             detail=f"Repo is only {repo.python_percentage}% Python; must be at least {PYTHON_PERCENTAGE_THRESHOLD}%",
         )
     return repo
+
+
+@router.get("/{repo_id}/files")
+async def list_indexed_files(
+    repo_id: int,
+    _current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[IndexedFileRead]:
+    await _get_registered_repo_or_404(repo_id, session)
+    files = await _get_indexed_files(repo_id, session)
+    return [IndexedFileRead.model_validate(file) for file in files]
+
+
+async def _get_registered_repo_or_404(repo_id: int, session: AsyncSession) -> RegisteredRepo:
+    repo = await session.scalar(select(RegisteredRepo).where(RegisteredRepo.repo_id == repo_id))
+    if repo is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Repo {repo_id} is not registered")
+    return repo
+
+
+async def _get_indexed_files(repo_id: int, session: AsyncSession) -> list[IndexedFile]:
+    result = await session.scalars(select(IndexedFile).where(IndexedFile.repo_id == repo_id))
+    return list(result.all())

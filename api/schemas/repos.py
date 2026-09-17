@@ -26,6 +26,9 @@ class RegisteredRepoRead(BaseModel):
 
 
 class IndexedFileRead(BaseModel):
+    """
+        Show state of a file in a repo.
+    """
     model_config = ConfigDict(from_attributes=True)
 
     file_path: str
