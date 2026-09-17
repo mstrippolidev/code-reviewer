@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.config.settings import get_api_settings
 from api.db.engine import DatabaseEngine
 from api.db.models.user import User
+from api.indexing.producer import RepoIndexProducer
 from api.integrations.github import GitHubOAuthClient, GitHubOAuthConfig
 from api.security.jwt_service import InvalidAccessTokenError, JwtTokenService
 from api.security.token_cipher import TokenCipher
@@ -43,6 +44,10 @@ def get_token_cipher() -> TokenCipher:
 
 def get_frontend_base_url() -> str:
     return get_api_settings().frontend_base_url
+
+
+def get_kafka_producer(request: Request) -> RepoIndexProducer:
+    return request.app.state.kafka_producer
 
 
 def get_github_oauth_client(request: Request) -> GitHubOAuthClient:

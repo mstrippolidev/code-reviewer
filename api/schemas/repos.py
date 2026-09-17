@@ -2,6 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from api.db.models.indexed_file import IndexedFileStatus
 from api.db.models.registered_repo import RepoIndexStatus
 
 
@@ -22,3 +23,12 @@ class RegisteredRepoRead(BaseModel):
     status: RepoIndexStatus
     status_reason: str | None
     created_at: datetime
+
+
+class IndexedFileRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    file_path: str
+    status: IndexedFileStatus
+    status_reason: str | None
+    indexed_at: datetime | None

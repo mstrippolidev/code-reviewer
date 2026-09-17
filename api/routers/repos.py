@@ -1,26 +1,22 @@
-import asyncio
-
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.engine import DatabaseEngine
 from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 from api.db.models.user import User
 from api.dependencies import (
     get_current_user,
-    get_database_engine,
     get_db_session,
     get_github_oauth_client,
+    get_kafka_producer,
     get_token_cipher,
 )
+from api.indexing.producer import RepoIndexProducer, RepoRegisteredPublishError
 from api.integrations.github import PYTHON_PERCENTAGE_THRESHOLD, GitHubOAuthClient, GitHubRepo, GitHubRepoFetchError
+from api.schemas.indexing import RepoRegisteredMessage
 from api.schemas.repos import RegisterRepoRequest, RegisteredRepoRead
 from api.security.token_cipher import TokenCipher
-
-INDEXING_NOT_IMPLEMENTED_REASON = "Repo cloning and file indexing is not implemented yet"
-INDEXING_STUB_DELAY_SECONDS = 2
 
 router = APIRouter(prefix="/api/repos", tags=["Repos"])
 
@@ -37,12 +33,11 @@ async def list_registered_repos(
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def register_repo(
     request: RegisterRepoRequest,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     github_oauth_client: GitHubOAuthClient = Depends(get_github_oauth_client),
     token_cipher: TokenCipher = Depends(get_token_cipher),
+    kafka_producer: RepoIndexProducer = Depends(get_kafka_producer),
     session: AsyncSession = Depends(get_db_session),
-    database_engine: DatabaseEngine = Depends(get_database_engine),
 ) -> RegisteredRepoRead:
     await _reject_already_registered(request.repo_id, session)
     access_token = token_cipher.decrypt(current_user.encrypted_github_token)
@@ -62,22 +57,25 @@ async def register_repo(
     except IntegrityError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This repo is already registered") from error
     await session.refresh(registered)
-    background_tasks.add_task(_index_registered_repo, registered.id, database_engine)
+    await _publish_repo_registered(registered, kafka_producer)
     return RegisteredRepoRead.model_validate(registered)
 
 
-async def _index_registered_repo(registered_repo_id: int, database_engine: DatabaseEngine) -> None:
-    """Stub for the real clone/walk/index_file pipeline, which isn't built yet."""
-    async with database_engine.new_session() as session:
-        repo = await session.get(RegisteredRepo, registered_repo_id)
-        repo.status = RepoIndexStatus.INDEXING
-        await session.commit()
-
-        await asyncio.sleep(INDEXING_STUB_DELAY_SECONDS)
-
-        repo.status = RepoIndexStatus.FAILED
-        repo.status_reason = INDEXING_NOT_IMPLEMENTED_REASON
-        await session.commit()
+async def _publish_repo_registered(registered: RegisteredRepo, kafka_producer: RepoIndexProducer) -> None:
+    message = RepoRegisteredMessage(
+        repo_id=registered.repo_id,
+        owner_id=registered.owner_id,
+        full_name=registered.full_name,
+        default_branch=registered.default_branch,
+        registered_by_user_id=registered.registered_by_user_id,
+    )
+    try:
+        await kafka_producer.publish_repo_registered(message)
+    except RepoRegisteredPublishError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not queue this repo for indexing",
+        ) from error
 
 
 async def _reject_already_registered(repo_id: int, session: AsyncSession) -> None:

@@ -17,9 +17,12 @@ USER_PROFILE_URL = "https://api.github.com/user"
 USER_REPOS_URL = "https://api.github.com/user/repos"
 REPO_URL_TEMPLATE = "https://api.github.com/repos/{full_name}"
 REPO_LANGUAGES_URL_TEMPLATE = "https://api.github.com/repos/{full_name}/languages"
+COMMIT_URL_TEMPLATE = "https://api.github.com/repos/{full_name}/commits/{ref}"
+TARBALL_URL_TEMPLATE = "https://api.github.com/repos/{full_name}/tarball/{ref}"
 PYTHON_PERCENTAGE_THRESHOLD = 25.0
 REPOS_PER_PAGE = 15
 WARMUP_CONNECTION_COUNT = 16
+REPO_INDEXING_REQUEST_TIMEOUT_SECONDS = 15.0
 
 
 class GitHubRepoAccessLevel(str, Enum):
@@ -45,6 +48,14 @@ class GitHubProfileFetchError(Exception):
 
 class GitHubRepoFetchError(Exception):
     """Raised when the authenticated user's repo list cannot be retrieved."""
+
+
+class GitHubCommitFetchError(Exception):
+    """Raised when a branch's tip commit sha cannot be retrieved."""
+
+
+class GitHubTarballFetchError(Exception):
+    """Raised when a repo's tarball snapshot cannot be downloaded."""
 
 
 @dataclass(frozen=True)
@@ -167,6 +178,34 @@ class GitHubOAuthClient:
         except httpx.HTTPStatusError as error:
             raise GitHubRepoFetchError(f"GitHub languages request failed: {error.response.text}") from error
         return response.json()
+
+    async def fetch_branch_commit_sha(self, access_token: str, full_name: str, ref: str) -> str:
+        headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/vnd.github+json"}
+        url = COMMIT_URL_TEMPLATE.format(full_name=full_name, ref=ref)
+        try:
+            response = await self._client.get(url, headers=headers, timeout=REPO_INDEXING_REQUEST_TIMEOUT_SECONDS)
+        except httpx.HTTPError as error:
+            raise GitHubCommitFetchError("Could not reach GitHub to fetch the branch commit") from error
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            raise GitHubCommitFetchError(f"GitHub commit request failed: {error.response.text}") from error
+        return response.json()["sha"]
+
+    async def download_tarball(self, access_token: str, full_name: str, ref: str) -> bytes:
+        headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/vnd.github+json"}
+        url = TARBALL_URL_TEMPLATE.format(full_name=full_name, ref=ref)
+        try:
+            response = await self._client.get(
+                url, headers=headers, follow_redirects=True, timeout=REPO_INDEXING_REQUEST_TIMEOUT_SECONDS
+            )
+        except httpx.HTTPError as error:
+            raise GitHubTarballFetchError("Could not reach GitHub to download the repo tarball") from error
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            raise GitHubTarballFetchError(f"GitHub tarball request failed: {error.response.text}") from error
+        return response.content
 
     def _parse_repo(self, repo_data: dict, languages: dict[str, int]) -> GitHubRepo:
         python_percentage = _python_percentage(languages)

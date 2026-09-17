@@ -29,6 +29,10 @@ class ApiSettings(BaseSettings):
 
     frontend_base_url: str = "http://localhost:5173"
 
+    kafka_bootstrap_servers: str
+    kafka_repo_registered_topic: str = "repo.registered"
+    kafka_repo_registered_dlq_topic: str = "repo.registered.dlq"
+
     @property
     def async_database_url(self) -> URL:
         return self._build_database_url("postgresql+asyncpg")
