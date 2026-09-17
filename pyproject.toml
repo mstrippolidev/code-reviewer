@@ -31,7 +31,8 @@ dependencies = [
     "cryptography (>=50.0.1,<51.0.0)",
     "alembic (>=1.19.2,<2.0.0)",
     "greenlet (>=3.5.5,<4.0.0)",
-    "h2 (>=4.4.1,<5.0.0)"
+    "h2 (>=4.4.1,<5.0.0)",
+    "aiokafka (>=0.14.0,<0.15.0)"
 ]
 
 
@@ -41,10 +42,11 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m 'not db and not llm'"
+addopts = "-m 'not db and not llm and not kafka'"
 markers = [
     "llm: exercises a real local Ollama model, slower and requires Ollama running",
     "db: exercises a real local Postgres instance, requires the code_reviewer database and schema to already exist",
+    "kafka: exercises the real local Kafka cluster (kafka-dev namespace), requires the broker running",
 ]
 
 [dependency-groups]

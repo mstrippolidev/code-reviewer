@@ -3,7 +3,6 @@
 """
 from datetime import datetime
 
-import pytest
 from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -12,21 +11,16 @@ from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 from api.db.models.user import User
 from api.dependencies import (
     get_current_user,
-    get_database_engine,
     get_db_session,
     get_github_oauth_client,
+    get_kafka_producer,
     get_token_cipher,
 )
+from api.indexing.producer import RepoRegisteredPublishError
 from api.integrations.github import GitHubRepo, GitHubRepoFetchError
-from api.routers import repos as repos_module
 from api.routers.repos import router as repos_router
+from api.schemas.indexing import RepoRegisteredMessage
 from api.security.token_cipher import TokenCipher
-
-
-@pytest.fixture(autouse=True)
-def _fast_indexing_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """TestClient runs BackgroundTasks synchronously, so every register call would otherwise sleep for real."""
-    monkeypatch.setattr(repos_module, "INDEXING_STUB_DELAY_SECONDS", 0)
 
 
 class FakeGitHubOAuthClient:
@@ -38,6 +32,17 @@ class FakeGitHubOAuthClient:
         if self._fetch_error:
             raise self._fetch_error
         return self._repo
+
+
+class FakeRepoIndexProducer:
+    def __init__(self, *, publish_error: Exception | None = None) -> None:
+        self._publish_error = publish_error
+        self.published: list[RepoRegisteredMessage] = []
+
+    async def publish_repo_registered(self, message: RepoRegisteredMessage) -> None:
+        if self._publish_error:
+            raise self._publish_error
+        self.published.append(message)
 
 
 class _ScalarsResult:
@@ -83,14 +88,6 @@ class FakeAsyncSession:
         return next((row for row in self._rows if row.id == row_id), None)
 
 
-class FakeDatabaseEngine:
-    def __init__(self, session: FakeAsyncSession) -> None:
-        self._session = session
-
-    def new_session(self) -> FakeAsyncSession:
-        return self._session
-
-
 def _make_user(cipher: TokenCipher) -> User:
     return User(
         id=1,
@@ -125,6 +122,7 @@ def _build_app(
     session: FakeAsyncSession,
     current_user: User | None = None,
     token_cipher: TokenCipher | None = None,
+    kafka_producer: FakeRepoIndexProducer | None = None,
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(repos_router)
@@ -137,7 +135,7 @@ def _build_app(
         encryption_key=Fernet.generate_key().decode()
     )
     app.dependency_overrides[get_db_session] = _fake_db_session
-    app.dependency_overrides[get_database_engine] = lambda: FakeDatabaseEngine(session)
+    app.dependency_overrides[get_kafka_producer] = lambda: kafka_producer or FakeRepoIndexProducer()
     if current_user is not None:
         app.dependency_overrides[get_current_user] = lambda: current_user
     return app
@@ -256,21 +254,38 @@ def test_list_registered_repos_returns_every_row() -> None:
     assert [row["repo_id"] for row in response.json()] == [10]
 
 
-@pytest.mark.asyncio
-async def test_background_indexing_task_moves_pending_to_failed() -> None:
-    registered = RegisteredRepo(
-        id=1,
-        repo_id=10,
-        owner_id=99,
-        full_name="octocat/hello-world",
-        default_branch="main",
-        registered_by_user_id=1,
-        status=RepoIndexStatus.PENDING,
+def test_register_repo_publishes_a_repo_registered_message() -> None:
+    repo = _make_github_repo()
+    user, cipher = _make_authenticated_user()
+    kafka_producer = FakeRepoIndexProducer()
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(repo=repo),
+        session=FakeAsyncSession(),
+        current_user=user,
+        token_cipher=cipher,
+        kafka_producer=kafka_producer,
     )
-    session = FakeAsyncSession(existing=[registered])
-    engine = FakeDatabaseEngine(session)
+    client = TestClient(app)
 
-    await repos_module._index_registered_repo(1, engine)
+    client.post("/api/repos", json={"repo_id": 10, "full_name": "octocat/hello-world"})
 
-    assert registered.status == RepoIndexStatus.FAILED
-    assert registered.status_reason == repos_module.INDEXING_NOT_IMPLEMENTED_REASON
+    [message] = kafka_producer.published
+    assert message.repo_id == 10
+
+
+def test_register_repo_surfaces_a_kafka_publish_failure_as_a_bad_gateway() -> None:
+    repo = _make_github_repo()
+    user, cipher = _make_authenticated_user()
+    kafka_producer = FakeRepoIndexProducer(publish_error=RepoRegisteredPublishError("broker unreachable"))
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(repo=repo),
+        session=FakeAsyncSession(),
+        current_user=user,
+        token_cipher=cipher,
+        kafka_producer=kafka_producer,
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/repos", json={"repo_id": 10, "full_name": "octocat/hello-world"})
+
+    assert response.status_code == 502

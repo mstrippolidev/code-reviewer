@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.config.settings import get_api_settings
 from api.db.engine import DatabaseEngine
+from api.indexing.producer import RepoIndexProducer
 from api.routers.auth import router as auth_router
 from api.routers.health import router as health_router
 from api.routers.repos import router as repos_router
@@ -17,9 +18,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_api_settings()
     app.state.database_engine = DatabaseEngine(settings.async_database_url)
     app.state.http_client = httpx.AsyncClient(http2=True)
+    app.state.kafka_producer = RepoIndexProducer(settings.kafka_bootstrap_servers, settings.kafka_repo_registered_topic)
+    await app.state.kafka_producer.start()
 
     yield
 
+    await app.state.kafka_producer.stop()
     await app.state.http_client.aclose()
     await app.state.database_engine.dispose()
 
