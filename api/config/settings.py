@@ -30,8 +30,7 @@ class ApiSettings(BaseSettings):
     frontend_base_url: str = "http://localhost:5173"
 
     kafka_bootstrap_servers: str
-    kafka_repo_registered_topic: str = "repo.registered"
-    kafka_repo_registered_dlq_topic: str = "repo.registered.dlq"
+    max_concurrent_file_indexing: int = 4
 
     @property
     def async_database_url(self) -> URL:

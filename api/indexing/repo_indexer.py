@@ -1,5 +1,6 @@
 """
-    Downloads one registered repo's default branch and indexes its Python files.
+    Downloads one registered repo's default branch, walks its files, and dispatches each
+    Python file to repo.file.index for RepoFileIndexConsumer to actually embed.
 """
 import asyncio
 import logging
@@ -17,15 +18,18 @@ from api.db.engine import DatabaseEngine
 from api.db.models.indexed_file import IndexedFile, IndexedFileStatus
 from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 from api.db.models.user import User
+from api.indexing.producer import RepoIndexProducer
+from api.indexing.repo_completion_finalizer import RepoCompletionFinalizer
+from api.indexing.topics import REPO_FILE_INDEX, REPO_FILE_PROGRESS
 from api.integrations.github import GitHubOAuthClient
-from api.schemas.indexing import RepoRegisteredMessage
+from api.schemas.indexing import RepoFileIndexMessage, RepoRegisteredMessage
+from api.schemas.repos import RepoFileProgressMessage
 from api.security.token_cipher import TokenCipher
-from code_reviewer.rag.indexer import LlamaIndexRagManager
-from code_reviewer.rag.repo_data import RepoData
 
 logger = logging.getLogger(__name__)
 
 _EXCLUDED_DIR_NAMES = {".venv", "venv", "__pycache__", ".git", "node_modules"}
+_MAX_INLINE_FILE_BYTES = 700_000  # headroom under Kafka's ~1MB default message size, after JSON overhead
 
 
 class RepoIndexUserNotFoundError(Exception):
@@ -38,18 +42,19 @@ class RepoTarballLayoutError(Exception):
 
 @dataclass(frozen=True)
 class RepoIndexerDependencies:
-    """Collaborators RepoIndexer needs to fetch, walk, and index a registered repo."""
+    """Collaborators RepoIndexer needs to fetch, walk, and dispatch a registered repo's files."""
 
     database_engine: DatabaseEngine
     http_client: httpx.AsyncClient
     token_cipher: TokenCipher
     github_client: GitHubOAuthClient
-    rag_manager: LlamaIndexRagManager
+    repo_producer: RepoIndexProducer
+    completion_finalizer: RepoCompletionFinalizer
 
 
 @dataclass(frozen=True)
 class _IndexingContext:
-    """Everything a single repo's per-file indexing pass needs, bundled to keep helper signatures short."""
+    """Everything a single repo's walk pass needs, bundled to keep helper signatures short."""
 
     repo_msg: RepoRegisteredMessage
     commit_sha: str
@@ -58,7 +63,7 @@ class _IndexingContext:
 
 
 class RepoIndexer:
-    """Fetches a registered repo's content over GitHub and indexes every Python file into code_reviewer.rag."""
+    """Fetches a registered repo's content over GitHub, walks it, and dispatches each Python file for indexing."""
 
     def __init__(self, dependencies: RepoIndexerDependencies) -> None:
         self._dependencies = dependencies
@@ -69,10 +74,11 @@ class RepoIndexer:
                 await self._fetch_and_index(repo_msg, session)
             except Exception as error:
                 logger.error("Failed to index repo_id=%s", repo_msg.repo_id, exc_info=error)
+                await session.rollback()
                 await self._mark_repo_failed(repo_msg.repo_id, str(error), session)
                 raise
             else:
-                await self._mark_repo_indexed(repo_msg.repo_id, session)
+                await self._dependencies.completion_finalizer.finalize_if_complete(repo_msg.repo_id, session)
 
     async def _fetch_and_index(self, repo_msg: RepoRegisteredMessage, session: AsyncSession) -> None:
         access_token = await self._fetch_access_token(repo_msg.registered_by_user_id, session)
@@ -93,62 +99,67 @@ class RepoIndexer:
         return self._dependencies.token_cipher.decrypt(user.encrypted_github_token)
 
     async def _index_repo_files(self, context: _IndexingContext) -> None:
-        repo_data = RepoData(
-            repo_id=str(context.repo_msg.repo_id),
-            commit_sha=context.commit_sha,
-            owner_id=str(context.repo_msg.owner_id),
-        )
-        for relative_path in _walk_repo_files(context.repo_root):
+        relative_paths = _walk_repo_files(context.repo_root)
+        await self._start_indexing(context, total_files=len(relative_paths))
+        for relative_path in relative_paths:
             if not relative_path.endswith(".py"):
-                await self._record_skip(context, relative_path)
+                await self._record_terminal(context, relative_path, IndexedFileStatus.SKIPPED, "not Python")
                 continue
-            await self._index_one_file(context, repo_data, relative_path)
+            await self._queue_file_for_indexing(context, relative_path)
 
-    async def _record_skip(self, context: _IndexingContext, relative_path: str) -> None:
-        context.session.add(
-            IndexedFile(
-                repo_id=context.repo_msg.repo_id,
-                file_path=relative_path,
-                status=IndexedFileStatus.SKIPPED,
-                status_reason="not Python",
-            )
+    async def _start_indexing(self, context: _IndexingContext, total_files: int) -> None:
+        repo = await context.session.scalar(
+            select(RegisteredRepo).where(RegisteredRepo.repo_id == context.repo_msg.repo_id)
         )
+        if repo is None:
+            return
+        repo.status = RepoIndexStatus.INDEXING
+        repo.total_files_expected = total_files
         await context.session.commit()
 
-    async def _index_one_file(self, context: _IndexingContext, repo_data: RepoData, relative_path: str) -> None:
-        indexed_file = IndexedFile(
-            repo_id=context.repo_msg.repo_id,
-            file_path=relative_path,
-            status=IndexedFileStatus.PROCESSING,
-        )
-        context.session.add(indexed_file)
-        await context.session.commit()
+    async def _queue_file_for_indexing(self, context: _IndexingContext, relative_path: str) -> None:
         try:
             content = await asyncio.to_thread(_read_file, os.path.join(context.repo_root, relative_path))
-            await asyncio.to_thread(self._dependencies.rag_manager.index_file, repo_data, relative_path, content)
         except Exception as error:
-            logger.error(
-                "Failed to index %s for repo_id=%s", relative_path, context.repo_msg.repo_id, exc_info=error
-            )
-            indexed_file.status = IndexedFileStatus.FAILED
-            indexed_file.status_reason = str(error)
-        else:
-            indexed_file.status = IndexedFileStatus.INDEXED
+            await self._record_terminal(context, relative_path, IndexedFileStatus.FAILED, str(error))
+            return
+        if len(content.encode("utf-8")) > _MAX_INLINE_FILE_BYTES:
+            await self._record_terminal(context, relative_path, IndexedFileStatus.SKIPPED, "too large to index inline")
+            return
+        context.session.add(
+            IndexedFile(repo_id=context.repo_msg.repo_id, file_path=relative_path, status=IndexedFileStatus.PENDING)
+        )
         await context.session.commit()
+        message = RepoFileIndexMessage(
+            repo_id=context.repo_msg.repo_id,
+            owner_id=context.repo_msg.owner_id,
+            commit_sha=context.commit_sha,
+            file_path=relative_path,
+            content=content,
+        )
+        key = f"{context.repo_msg.repo_id}:{relative_path}".encode()
+        await self._dependencies.repo_producer.publish(REPO_FILE_INDEX, message, key)
 
-    async def _mark_repo_indexed(self, repo_id: int, session: AsyncSession) -> None:
-        await self._set_repo_status(repo_id, RepoIndexStatus.INDEXED, None, session)
+    async def _record_terminal(
+        self, context: _IndexingContext, relative_path: str, status: IndexedFileStatus, reason: str
+    ) -> None:
+        context.session.add(
+            IndexedFile(repo_id=context.repo_msg.repo_id, file_path=relative_path, status=status, status_reason=reason)
+        )
+        await context.session.commit()
+        await self._dependencies.repo_producer.publish(
+            REPO_FILE_PROGRESS,
+            RepoFileProgressMessage(
+                repo_id=context.repo_msg.repo_id, file_path=relative_path, status=status, status_reason=reason
+            ),
+            f"{context.repo_msg.repo_id}:{relative_path}".encode(),
+        )
 
     async def _mark_repo_failed(self, repo_id: int, reason: str, session: AsyncSession) -> None:
-        await self._set_repo_status(repo_id, RepoIndexStatus.FAILED, reason, session)
-
-    async def _set_repo_status(
-        self, repo_id: int, status: RepoIndexStatus, reason: str | None, session: AsyncSession
-    ) -> None:
         repo = await session.scalar(select(RegisteredRepo).where(RegisteredRepo.repo_id == repo_id))
         if repo is None:
             return
-        repo.status = status
+        repo.status = RepoIndexStatus.FAILED
         repo.status_reason = reason
         await session.commit()
 

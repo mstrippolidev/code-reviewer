@@ -13,7 +13,8 @@ from api.dependencies import (
     get_kafka_producer,
     get_token_cipher,
 )
-from api.indexing.producer import RepoIndexProducer, RepoRegisteredPublishError
+from api.indexing.producer import PublishError, RepoIndexProducer
+from api.indexing.topics import REPO_REGISTERED
 from api.integrations.github import PYTHON_PERCENTAGE_THRESHOLD, GitHubOAuthClient, GitHubRepo, GitHubRepoFetchError
 from api.schemas.indexing import RepoRegisteredMessage
 from api.schemas.repos import RegisterRepoRequest, RegisteredRepoRead, IndexedFileRead
@@ -40,7 +41,7 @@ async def register_repo(
     kafka_producer: RepoIndexProducer = Depends(get_kafka_producer),
     session: AsyncSession = Depends(get_db_session),
 ) -> RegisteredRepoRead:
-    await _reject_already_registered(request.repo_id, session)
+    await _reject_active_registration(request.repo_id, session)
     access_token = token_cipher.decrypt(current_user.encrypted_github_token)
     repo = await _fetch_and_verify_repo(request, access_token, github_oauth_client)
 
@@ -71,18 +72,22 @@ async def _publish_repo_registered(registered: RegisteredRepo, kafka_producer: R
         registered_by_user_id=registered.registered_by_user_id,
     )
     try:
-        await kafka_producer.publish_repo_registered(message)
-    except RepoRegisteredPublishError as error:
+        await kafka_producer.publish(REPO_REGISTERED, message, str(message.repo_id).encode())
+    except PublishError as error:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Could not queue this repo for indexing",
         ) from error
 
 
-async def _reject_already_registered(repo_id: int, session: AsyncSession) -> None:
+async def _reject_active_registration(repo_id: int, session: AsyncSession) -> None:
     existing = await session.scalar(select(RegisteredRepo).where(RegisteredRepo.repo_id == repo_id))
-    if existing is not None:
+    if existing is None:
+        return
+    if existing.status != RepoIndexStatus.FAILED:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This repo is already registered")
+    await session.delete(existing)
+    await session.flush()
 
 
 async def _fetch_and_verify_repo(

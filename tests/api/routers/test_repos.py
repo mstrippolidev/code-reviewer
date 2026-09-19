@@ -17,7 +17,7 @@ from api.dependencies import (
     get_kafka_producer,
     get_token_cipher,
 )
-from api.indexing.producer import RepoRegisteredPublishError
+from api.indexing.producer import PublishError
 from api.integrations.github import GitHubRepo, GitHubRepoFetchError
 from api.routers.repos import router as repos_router
 from api.schemas.indexing import RepoRegisteredMessage
@@ -40,7 +40,7 @@ class FakeRepoIndexProducer:
         self._publish_error = publish_error
         self.published: list[RepoRegisteredMessage] = []
 
-    async def publish_repo_registered(self, message: RepoRegisteredMessage) -> None:
+    async def publish(self, topic: str, message: RepoRegisteredMessage, key: bytes) -> None:
         if self._publish_error:
             raise self._publish_error
         self.published.append(message)
@@ -90,6 +90,12 @@ class FakeAsyncSession:
 
     def add(self, row: RegisteredRepo) -> None:
         self._rows.append(row)
+
+    async def delete(self, row: RegisteredRepo) -> None:
+        self._rows.remove(row)
+
+    async def flush(self) -> None:
+        pass
 
     async def commit(self) -> None:
         pass
@@ -273,6 +279,24 @@ def test_register_repo_rejects_a_repo_id_already_registered() -> None:
     assert response.status_code == 409
 
 
+def test_register_repo_allows_re_registering_a_previously_failed_repo() -> None:
+    existing = _make_registered_repo(status=RepoIndexStatus.FAILED, status_reason="tarball fetch failed")
+    repo = _make_github_repo()
+    user, cipher = _make_authenticated_user()
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(repo=repo),
+        session=FakeAsyncSession(existing=[existing]),
+        current_user=user,
+        token_cipher=cipher,
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/repos", json={"repo_id": 10, "full_name": "octocat/hello-world"})
+
+    assert response.status_code == 201
+    assert response.json()["status"] == "pending"
+
+
 def test_list_registered_repos_returns_every_row() -> None:
     existing = RegisteredRepo(
         id=1,
@@ -321,7 +345,7 @@ def test_register_repo_publishes_a_repo_registered_message() -> None:
 def test_register_repo_surfaces_a_kafka_publish_failure_as_a_bad_gateway() -> None:
     repo = _make_github_repo()
     user, cipher = _make_authenticated_user()
-    kafka_producer = FakeRepoIndexProducer(publish_error=RepoRegisteredPublishError("broker unreachable"))
+    kafka_producer = FakeRepoIndexProducer(publish_error=PublishError("broker unreachable"))
     app = _build_app(
         github_client=FakeGitHubOAuthClient(repo=repo),
         session=FakeAsyncSession(),

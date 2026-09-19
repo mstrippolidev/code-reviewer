@@ -1,0 +1,6 @@
+REPO_REGISTERED = "repo.registered"
+REPO_REGISTERED_DLQ = "repo.registered.dlq"
+REPO_FILE_PROGRESS = "repo.file.progress"
+REPO_STATUS_PROGRESS = "repo.status.progress"
+REPO_FILE_INDEX = "repo.file.index"
+REPO_FILE_INDEX_DLQ = "repo.file.index.dlq"
