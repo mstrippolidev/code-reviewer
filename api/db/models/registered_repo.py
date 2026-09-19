@@ -32,9 +32,15 @@ class RegisteredRepo(Base):
     default_branch: Mapped[str]
     registered_by_user_id: Mapped[int] = mapped_column(ForeignKey("api.users.id"))
     status: Mapped[RepoIndexStatus] = mapped_column(
-        SqlEnum(RepoIndexStatus, name="repo_index_status", inherit_schema=True),
+        SqlEnum(
+            RepoIndexStatus,
+            name="repo_index_status",
+            inherit_schema=True,
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
         default=RepoIndexStatus.PENDING,
         server_default=RepoIndexStatus.PENDING.value,
     )
     status_reason: Mapped[str | None]
+    total_files_expected: Mapped[int | None]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())

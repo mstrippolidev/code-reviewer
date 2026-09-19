@@ -103,28 +103,182 @@
   color: #cf222e;
 }
 
-.registration-progress {
-  margin-top: 1rem;
+.repo-progress {
+  margin-bottom: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
 }
 
-.progress-bar {
+.repo-progress-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.4rem;
+}
+
+.repo-progress-label {
+  font-size: 0.85rem;
+}
+
+.repo-refresh-button {
+  flex-shrink: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  font: inherit;
+  font-size: 0.75rem;
+  color: #6e7781;
+  cursor: pointer;
+}
+
+.repo-refresh-button:hover {
+  color: var(--text-h);
+}
+
+.repo-progress-bar {
   width: 100%;
-  height: 8px;
-  background: #d0d7de;
+  height: 4px;
+  background: var(--border);
   border-radius: 999px;
   overflow: hidden;
 }
 
-.progress-bar-fill {
+.repo-progress-fill {
   height: 100%;
   transition: width 0.3s ease;
-  background: #24292f;
+  background: #6e7781;
 }
 
-.progress-bar-fill.progress-indexed {
+.repo-progress-fill.repo-progress-indexed {
   background: #1a7f37;
 }
 
-.progress-bar-fill.progress-failed {
+.repo-progress-fill.repo-progress-failed {
   background: #cf222e;
+}
+
+.repo-browser {
+  display: flex;
+  align-items: flex-start;
+  gap: 2rem;
+  width: 100%;
+  max-width: 1080px;
+  margin: 3rem auto;
+  padding: 0 1rem;
+  box-sizing: border-box;
+  text-align: left;
+}
+
+.repo-browser-pane {
+  flex: 1;
+  min-width: 0;
+}
+
+.repo-browser-left h1 {
+  font-size: 28px;
+  margin: 0 0 1rem;
+}
+
+.repo-browser-right {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem;
+  min-height: 200px;
+}
+
+.repo-section-collapsible {
+  margin-bottom: 1.5rem;
+}
+
+.repo-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0;
+  background: none;
+  border: none;
+  font: inherit;
+  font-size: 0.85rem;
+  color: #6e7781;
+  cursor: pointer;
+}
+
+.repo-section-arrow {
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+.repo-section-arrow.expanded {
+  transform: rotate(90deg);
+}
+
+.repo-list-readonly {
+  margin-top: 0.5rem;
+  margin-bottom: 0;
+}
+
+.repo-list li.repo-viewing {
+  border-bottom-color: #24292f;
+}
+
+.repo-tag {
+  font-size: 0.75rem;
+  font-style: italic;
+  color: #6e7781;
+}
+
+.file-tree,
+.file-tree ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.file-tree-node {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0;
+  cursor: default;
+  font-size: 0.9rem;
+}
+
+.file-tree-folder {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.file-tree-caret {
+  display: inline-block;
+  width: 0.9rem;
+  color: #6e7781;
+}
+
+.file-tree-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-tree-glyph {
+  font-size: 0.85rem;
+}
+
+.file-tree-status-indexed .file-tree-glyph {
+  color: #1a7f37;
+}
+
+.file-tree-status-failed .file-tree-glyph {
+  color: #cf222e;
+}
+
+.file-tree-status-pending .file-tree-glyph,
+.file-tree-status-processing .file-tree-glyph {
+  color: #9a6700;
+}
+
+.file-tree-status-skipped .file-tree-glyph {
+  color: #9096a0;
 }

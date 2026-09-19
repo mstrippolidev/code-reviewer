@@ -31,7 +31,12 @@ class IndexedFile(Base):
     repo_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("api.registered_repos.repo_id"), index=True)
     file_path: Mapped[str] = mapped_column(String)
     status: Mapped[IndexedFileStatus] = mapped_column(
-        SqlEnum(IndexedFileStatus, name="indexed_file_status", inherit_schema=True),
+        SqlEnum(
+            IndexedFileStatus,
+            name="indexed_file_status",
+            inherit_schema=True,
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
         default=IndexedFileStatus.PENDING,
         server_default=IndexedFileStatus.PENDING.value,
     )

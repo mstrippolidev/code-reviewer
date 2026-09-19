@@ -26,9 +26,26 @@ class RegisteredRepoRead(BaseModel):
 
 
 class IndexedFileRead(BaseModel):
+    """
+        Show state of a file in a repo.
+    """
     model_config = ConfigDict(from_attributes=True)
 
     file_path: str
     status: IndexedFileStatus
     status_reason: str | None
     indexed_at: datetime | None
+
+class RepoFileProgressMessage(BaseModel):
+    """Schema for the progress bar SSE"""
+    repo_id: int
+    file_path: str
+    status: IndexedFileStatus
+    status_reason: str | None
+
+
+class RepoStatusProgressMessage(BaseModel):
+    """Published once a repo's indexing pass reaches a terminal state, so the SSE route knows to stop relaying."""
+    repo_id: int
+    status: RepoIndexStatus
+    status_reason: str | None

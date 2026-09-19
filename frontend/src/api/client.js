@@ -5,36 +5,58 @@ export class RepoFetchError extends Error {}
 
 export class RegisterRepoError extends Error {}
 
+export class UnauthorizedError extends Error {}
+
+function authHeaders(token) {
+  return { Authorization: `Bearer ${token}` }
+}
+
+async function getJson(url, token, ErrorClass) {
+  const response = await fetch(url, { headers: authHeaders(token) })
+  if (response.status === 401) {
+    throw new UnauthorizedError('Session expired')
+  }
+  if (!response.ok) {
+    throw new ErrorClass(`Request failed with status ${response.status}`)
+  }
+  return response.json()
+}
+
 export function githubLoginUrl(accessLevel) {
   return `${API_BASE_URL}/api/oauth/github/login?access_level=${accessLevel}`
 }
 
 export async function fetchUserRepos(token) {
-  const response = await fetch(`${API_BASE_URL}/api/oauth/github/repos`, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  if (!response.ok) {
-    throw new RepoFetchError(`Request failed with status ${response.status}`)
-  }
-  return response.json()
+  return getJson(`${API_BASE_URL}/api/oauth/github/repos`, token, RepoFetchError)
 }
 
 export async function fetchRegisteredRepos(token) {
-  const response = await fetch(`${API_BASE_URL}/api/repos`, {
-    headers: { Authorization: `Bearer ${token}` },
+  return getJson(`${API_BASE_URL}/api/repos`, token, RepoFetchError)
+}
+
+export async function openIndexedFilesStream(token, repoId, signal) {
+  const response = await fetch(`${API_BASE_URL}/api/repos/${repoId}/files/stream`, {
+    headers: authHeaders(token),
+    signal,
   })
+  if (response.status === 401) {
+    throw new UnauthorizedError('Session expired')
+  }
   if (!response.ok) {
     throw new RepoFetchError(`Request failed with status ${response.status}`)
   }
-  return response.json()
+  return response
 }
 
 export async function registerRepo(token, { repo_id: repoId, full_name: fullName }) {
   const response = await fetch(`${API_BASE_URL}/api/repos`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
     body: JSON.stringify({ repo_id: repoId, full_name: fullName }),
   })
+  if (response.status === 401) {
+    throw new UnauthorizedError('Session expired')
+  }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}))
     throw new RegisterRepoError(body.detail ?? `Request failed with status ${response.status}`)

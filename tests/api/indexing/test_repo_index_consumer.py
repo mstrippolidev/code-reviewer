@@ -81,7 +81,12 @@ def _make_message(**overrides) -> RepoRegisteredMessage:
 
 def _make_consumer(*, indexer: FakeIndexer, dlq_producer: FakeDlqProducer) -> RepoIndexConsumer:
     placeholder_indexer_dependencies = RepoIndexerDependencies(
-        database_engine=None, http_client=None, token_cipher=None, github_client=None, rag_manager=None
+        database_engine=None,
+        http_client=None,
+        token_cipher=None,
+        github_client=None,
+        repo_producer=None,
+        completion_finalizer=None,
     )
     dependencies = RepoIndexConsumerDependencies(
         indexer_dependencies=placeholder_indexer_dependencies, dlq_producer=dlq_producer

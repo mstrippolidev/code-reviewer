@@ -1,12 +1,10 @@
 """
     Tests for RepoIndexProducer against a fake underlying AIOKafkaProducer: no real Kafka broker.
 """
-from unittest.mock import AsyncMock
-
 import pytest
 from aiokafka.errors import KafkaError
 
-from api.indexing.producer import RepoIndexProducer, RepoRegisteredPublishError
+from api.indexing.producer import DlqPublishError, PublishError, RepoIndexProducer
 from api.schemas.indexing import RepoRegisteredMessage
 
 
@@ -17,12 +15,11 @@ class _FakeRecordMetadata:
 
 
 class FakeAIOKafkaProducer:
-    def __init__(self, *, send_error: Exception | None = None, fail_count: int | None = None) -> None:
+    def __init__(self, *, send_error: Exception | None = None) -> None:
         self._send_error = send_error
-        self._fail_count = fail_count
         self.started = False
         self.stopped = False
-        self.sent: list[tuple[str, bytes, bytes]] = []
+        self.sent: list[tuple[str, bytes, bytes | None, list[tuple[str, bytes]] | None]] = []
 
     async def start(self) -> None:
         self.started = True
@@ -31,13 +28,11 @@ class FakeAIOKafkaProducer:
         self.stopped = True
 
     async def send_and_wait(
-        self, topic: str, value: bytes, key: bytes, headers: list[tuple[str, bytes]] | None = None
+        self, topic: str, value: bytes, key: bytes | None, headers: list[tuple[str, bytes]] | None = None
     ) -> _FakeRecordMetadata:
-        if self._send_error and (self._fail_count is None or self._fail_count > 0):
-            if self._fail_count is not None:
-                self._fail_count -= 1
+        if self._send_error:
             raise self._send_error
-        self.sent.append((topic, value, key))
+        self.sent.append((topic, value, key, headers))
         return _FakeRecordMetadata(partition=1, offset=42)
 
 
@@ -56,7 +51,7 @@ def _make_message(**overrides) -> RepoRegisteredMessage:
 @pytest.mark.asyncio
 async def test_start_delegates_to_the_underlying_producer() -> None:
     fake = FakeAIOKafkaProducer()
-    producer = RepoIndexProducer(bootstrap_servers="localhost:30092", topic="repo.registered", producer=fake)
+    producer = RepoIndexProducer(bootstrap_servers="localhost:30092", producer=fake)
 
     await producer.start()
 
@@ -66,7 +61,7 @@ async def test_start_delegates_to_the_underlying_producer() -> None:
 @pytest.mark.asyncio
 async def test_stop_delegates_to_the_underlying_producer() -> None:
     fake = FakeAIOKafkaProducer()
-    producer = RepoIndexProducer(bootstrap_servers="localhost:30092", topic="repo.registered", producer=fake)
+    producer = RepoIndexProducer(bootstrap_servers="localhost:30092", producer=fake)
 
     await producer.stop()
 
@@ -74,57 +69,66 @@ async def test_stop_delegates_to_the_underlying_producer() -> None:
 
 
 @pytest.mark.asyncio
-async def test_publish_repo_registered_sends_to_the_configured_topic() -> None:
+async def test_publish_sends_to_the_given_topic() -> None:
     fake = FakeAIOKafkaProducer()
-    producer = RepoIndexProducer(bootstrap_servers="localhost:30092", topic="repo.registered", producer=fake)
+    producer = RepoIndexProducer(bootstrap_servers="localhost:30092", producer=fake)
 
-    await producer.publish_repo_registered(_make_message())
+    await producer.publish("repo.registered", _make_message(), b"10")
 
-    [(topic, _value, _key)] = fake.sent
+    [(topic, _value, _key, _headers)] = fake.sent
     assert topic == "repo.registered"
 
 
 @pytest.mark.asyncio
-async def test_publish_repo_registered_keys_the_message_by_repo_id() -> None:
+async def test_publish_keys_the_message_as_given() -> None:
     fake = FakeAIOKafkaProducer()
-    producer = RepoIndexProducer(bootstrap_servers="localhost:30092", topic="repo.registered", producer=fake)
+    producer = RepoIndexProducer(bootstrap_servers="localhost:30092", producer=fake)
 
-    await producer.publish_repo_registered(_make_message(repo_id=10))
+    await producer.publish("repo.registered", _make_message(repo_id=10), b"10")
 
-    [(_topic, _value, key)] = fake.sent
+    [(_topic, _value, key, _headers)] = fake.sent
     assert key == b"10"
 
 
 @pytest.mark.asyncio
-async def test_publish_repo_registered_sends_the_message_as_json() -> None:
+async def test_publish_sends_the_message_as_json() -> None:
     fake = FakeAIOKafkaProducer()
-    producer = RepoIndexProducer(bootstrap_servers="localhost:30092", topic="repo.registered", producer=fake)
+    producer = RepoIndexProducer(bootstrap_servers="localhost:30092", producer=fake)
     message = _make_message()
 
-    await producer.publish_repo_registered(message)
+    await producer.publish("repo.registered", message, b"10")
 
-    [(_topic, value, _key)] = fake.sent
+    [(_topic, value, _key, _headers)] = fake.sent
     assert RepoRegisteredMessage.model_validate_json(value) == message
 
 
 @pytest.mark.asyncio
-async def test_publish_repo_registered_wraps_a_kafka_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("api.indexing.producer.asyncio.sleep", AsyncMock())
+async def test_publish_wraps_a_kafka_failure() -> None:
     fake = FakeAIOKafkaProducer(send_error=KafkaError("broker unreachable"))
-    producer = RepoIndexProducer(bootstrap_servers="localhost:30092", topic="repo.registered", producer=fake)
+    producer = RepoIndexProducer(bootstrap_servers="localhost:30092", producer=fake)
 
-    with pytest.raises(RepoRegisteredPublishError):
-        await producer.publish_repo_registered(_make_message())
+    with pytest.raises(PublishError):
+        await producer.publish("repo.registered", _make_message(), b"10")
 
 
 @pytest.mark.asyncio
-async def test_publish_repo_registered_retries_a_transient_failure_then_succeeds(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("api.indexing.producer.asyncio.sleep", AsyncMock())
-    fake = FakeAIOKafkaProducer(send_error=KafkaError("broker unreachable"), fail_count=1)
-    producer = RepoIndexProducer(bootstrap_servers="localhost:30092", topic="repo.registered", producer=fake)
+async def test_publish_to_dlq_sends_error_headers() -> None:
+    fake = FakeAIOKafkaProducer()
+    producer = RepoIndexProducer(bootstrap_servers="localhost:30092", producer=fake)
 
-    await producer.publish_repo_registered(_make_message())
+    await producer.publish_to_dlq("repo.registered.dlq", b"payload", b"10", ValueError("boom"))
 
-    [(_topic, _value, _key)] = fake.sent
+    [(topic, value, key, headers)] = fake.sent
+    assert topic == "repo.registered.dlq"
+    assert value == b"payload"
+    assert key == b"10"
+    assert dict(headers) == {"error_type": b"ValueError", "error_message": b"boom"}
+
+
+@pytest.mark.asyncio
+async def test_publish_to_dlq_wraps_a_kafka_failure() -> None:
+    fake = FakeAIOKafkaProducer(send_error=KafkaError("broker unreachable"))
+    producer = RepoIndexProducer(bootstrap_servers="localhost:30092", producer=fake)
+
+    with pytest.raises(DlqPublishError):
+        await producer.publish_to_dlq("repo.registered.dlq", b"payload", b"10", ValueError("boom"))

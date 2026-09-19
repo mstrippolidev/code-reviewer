@@ -33,7 +33,7 @@ def _make_message() -> RepoRegisteredMessage:
 async def test_publish_repo_registered_is_readable_by_a_real_consumer() -> None:
     settings = get_api_settings()
     message = _make_message()
-    producer = RepoIndexProducer(bootstrap_servers=settings.kafka_bootstrap_servers, topic=INTEGRATION_TEST_TOPIC)
+    producer = RepoIndexProducer(bootstrap_servers=settings.kafka_bootstrap_servers)
     consumer = AIOKafkaConsumer(
         INTEGRATION_TEST_TOPIC,
         bootstrap_servers=settings.kafka_bootstrap_servers,
@@ -44,7 +44,7 @@ async def test_publish_repo_registered_is_readable_by_a_real_consumer() -> None:
     await producer.start()
     await consumer.start()
     try:
-        await producer.publish_repo_registered(message)
+        await producer.publish(INTEGRATION_TEST_TOPIC, message, str(message.repo_id).encode())
         record = await asyncio.wait_for(consumer.getone(), timeout=CONSUME_TIMEOUT_SECONDS)
     finally:
         await producer.stop()
@@ -58,7 +58,7 @@ async def test_publish_repo_registered_is_readable_by_a_real_consumer() -> None:
 async def test_publish_repo_registered_keys_the_record_by_repo_id() -> None:
     settings = get_api_settings()
     message = _make_message()
-    producer = RepoIndexProducer(bootstrap_servers=settings.kafka_bootstrap_servers, topic=INTEGRATION_TEST_TOPIC)
+    producer = RepoIndexProducer(bootstrap_servers=settings.kafka_bootstrap_servers)
     consumer = AIOKafkaConsumer(
         INTEGRATION_TEST_TOPIC,
         bootstrap_servers=settings.kafka_bootstrap_servers,
@@ -69,7 +69,7 @@ async def test_publish_repo_registered_keys_the_record_by_repo_id() -> None:
     await producer.start()
     await consumer.start()
     try:
-        await producer.publish_repo_registered(message)
+        await producer.publish(INTEGRATION_TEST_TOPIC, message, str(message.repo_id).encode())
         record = await asyncio.wait_for(consumer.getone(), timeout=CONSUME_TIMEOUT_SECONDS)
     finally:
         await producer.stop()

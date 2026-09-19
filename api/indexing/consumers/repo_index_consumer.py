@@ -11,6 +11,7 @@ from api.config.settings import get_api_settings
 from api.indexing.consumers.interface import ConsumerInterface
 from api.indexing.producer import RepoIndexProducer
 from api.indexing.repo_indexer import RepoIndexer, RepoIndexerDependencies
+from api.indexing.topics import REPO_REGISTERED, REPO_REGISTERED_DLQ
 from api.schemas.indexing import RepoRegisteredMessage
 
 logger = logging.getLogger(__name__)
@@ -18,8 +19,8 @@ logger = logging.getLogger(__name__)
 settings = get_api_settings()
 
 GROUP_ID = 'repo_index_workflow_consumer'
-TOPIC = settings.kafka_repo_registered_topic
-DLQ_TOPIC = settings.kafka_repo_registered_dlq_topic
+TOPIC = REPO_REGISTERED
+DLQ_TOPIC = REPO_REGISTERED_DLQ
 BOOTSTRAP_SERVER = settings.kafka_bootstrap_servers
 
 

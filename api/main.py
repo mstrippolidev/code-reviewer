@@ -10,10 +10,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.config.settings import ApiSettings, get_api_settings
 from api.db.engine import DatabaseEngine
 from api.dependencies import get_token_cipher
-from api.indexing.consumer import consume
+from api.exception_handlers import register_exception_handlers
+from api.indexing.consumer import ConsumerDependencies, consume
 from api.indexing.consumers.dlq_notifier import DlqNotifier, PrintDlqNotifier
+from api.indexing.consumers.repo_file_index_consumer import RepoFileIndexConsumerDependencies
 from api.indexing.consumers.repo_index_consumer import RepoIndexConsumerDependencies
 from api.indexing.producer import RepoIndexProducer
+from api.indexing.repo_completion_finalizer import RepoCompletionFinalizer
 from api.indexing.repo_indexer import RepoIndexerDependencies
 from api.integrations.github import GitHubOAuthClient, GitHubOAuthConfig
 from api.routers.auth import router as auth_router
@@ -21,7 +24,7 @@ from api.routers.health import router as health_router
 from api.routers.repos import router as repos_router
 from code_reviewer.rag.indexer import LlamaIndexRagManager
 
-ConsumerSpec = tuple[str, RepoIndexConsumerDependencies | DlqNotifier]
+ConsumerSpec = tuple[str, ConsumerDependencies]
 
 
 @asynccontextmanager
@@ -29,7 +32,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_api_settings()
     app.state.database_engine = DatabaseEngine(settings.async_database_url)
     app.state.http_client = httpx.AsyncClient(http2=True)
-    app.state.kafka_producer = RepoIndexProducer(settings.kafka_bootstrap_servers, settings.kafka_repo_registered_topic)
+    app.state.kafka_producer = RepoIndexProducer(settings.kafka_bootstrap_servers)
+    app.state.repo_completion_finalizer = RepoCompletionFinalizer(app.state.kafka_producer)
+    app.state.rag_manager = LlamaIndexRagManager()
     await app.state.kafka_producer.start()
     app.state.consumer_tasks = [
         asyncio.create_task(consume(key, dependencies))
@@ -52,6 +57,7 @@ def _build_consumer_specs(app: FastAPI, settings: ApiSettings) -> list[ConsumerS
     return [
         ("repo_indexing", _build_repo_index_consumer_dependencies(app, settings)),
         ("repo_indexing_dlq", PrintDlqNotifier()),
+        ("repo_file_indexing", _build_repo_file_index_consumer_dependencies(app, settings)),
     ]
 
 
@@ -66,9 +72,22 @@ def _build_repo_index_consumer_dependencies(app: FastAPI, settings: ApiSettings)
         http_client=app.state.http_client,
         token_cipher=get_token_cipher(),
         github_client=GitHubOAuthClient(github_config, app.state.http_client),
-        rag_manager=LlamaIndexRagManager(),
+        repo_producer=app.state.kafka_producer,
+        completion_finalizer=app.state.repo_completion_finalizer,
     )
     return RepoIndexConsumerDependencies(indexer_dependencies=indexer_dependencies, dlq_producer=app.state.kafka_producer)
+
+
+def _build_repo_file_index_consumer_dependencies(
+    app: FastAPI, settings: ApiSettings
+) -> RepoFileIndexConsumerDependencies:
+    return RepoFileIndexConsumerDependencies(
+        database_engine=app.state.database_engine,
+        rag_manager=app.state.rag_manager,
+        repo_producer=app.state.kafka_producer,
+        completion_finalizer=app.state.repo_completion_finalizer,
+        max_concurrent_file_indexing=settings.max_concurrent_file_indexing,
+    )
 
 
 def _register_routers(app: FastAPI) -> None:
@@ -91,6 +110,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="My FastAPI Application", version="1.0.0", lifespan=lifespan)
     _register_routers(app)
     _register_cors(app)
+    register_exception_handlers(app)
     return app
 
 

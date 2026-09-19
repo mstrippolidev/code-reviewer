@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from api.config.settings import get_api_settings
 from api.indexing.consumers.dlq_notifier import DlqNotifier
 from api.indexing.consumers.interface import ConsumerInterface
+from api.indexing.topics import REPO_REGISTERED_DLQ
 from api.schemas.indexing import RepoRegisteredMessage
 
 logger = logging.getLogger(__name__)
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 settings = get_api_settings()
 
 GROUP_ID = "repo_index_dlq_consumer"
-TOPIC = settings.kafka_repo_registered_dlq_topic
+TOPIC = REPO_REGISTERED_DLQ
 BOOTSTRAP_SERVER = settings.kafka_bootstrap_servers
 
 
