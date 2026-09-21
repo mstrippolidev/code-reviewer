@@ -14,6 +14,7 @@ from api.exception_handlers import register_exception_handlers
 from api.indexing.consumer import ConsumerDependencies, consume
 from api.indexing.consumers.dlq_notifier import DlqNotifier, PrintDlqNotifier
 from api.indexing.consumers.repo_file_index_consumer import RepoFileIndexConsumerDependencies
+from api.indexing.consumers.repo_file_retry_consumer import RepoFileRetryConsumerDependencies
 from api.indexing.consumers.repo_index_consumer import RepoIndexConsumerDependencies
 from api.indexing.consumers.repo_progress_consumer import RepoProgressConsumerDependencies
 from api.indexing.producer import RepoIndexProducer
@@ -60,21 +61,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 def _build_consumer_specs(app: FastAPI, settings: ApiSettings) -> list[ConsumerSpec]:
+    retry_dependencies = RepoFileRetryConsumerDependencies(
+        indexer_dependencies=_build_indexer_dependencies(app, settings)
+    )
     return [
         ("repo_indexing", _build_repo_index_consumer_dependencies(app, settings)),
         ("repo_indexing_dlq", PrintDlqNotifier()),
         ("repo_file_indexing", _build_repo_file_index_consumer_dependencies(app, settings)),
+        ("repo_file_retry", retry_dependencies),
         ("repo_progress", RepoProgressConsumerDependencies(broadcaster=app.state.repo_progress_broadcaster)),
     ]
 
 
-def _build_repo_index_consumer_dependencies(app: FastAPI, settings: ApiSettings) -> RepoIndexConsumerDependencies:
+def _build_indexer_dependencies(app: FastAPI, settings: ApiSettings) -> RepoIndexerDependencies:
     github_config = GitHubOAuthConfig(
         client_id=settings.github_oauth_client_id,
         client_secret=settings.github_oauth_client_secret,
         redirect_uri=settings.github_oauth_redirect_uri,
     )
-    indexer_dependencies = RepoIndexerDependencies(
+    return RepoIndexerDependencies(
         database_engine=app.state.database_engine,
         http_client=app.state.http_client,
         token_cipher=get_token_cipher(),
@@ -83,7 +88,12 @@ def _build_repo_index_consumer_dependencies(app: FastAPI, settings: ApiSettings)
         completion_finalizer=app.state.repo_completion_finalizer,
         max_concurrent_file_dispatch=settings.max_concurrent_file_dispatch,
     )
-    return RepoIndexConsumerDependencies(indexer_dependencies=indexer_dependencies, dlq_producer=app.state.kafka_producer)
+
+
+def _build_repo_index_consumer_dependencies(app: FastAPI, settings: ApiSettings) -> RepoIndexConsumerDependencies:
+    return RepoIndexConsumerDependencies(
+        indexer_dependencies=_build_indexer_dependencies(app, settings), dlq_producer=app.state.kafka_producer
+    )
 
 
 def _build_repo_file_index_consumer_dependencies(

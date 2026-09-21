@@ -649,3 +649,114 @@ def test_delete_registered_repo_returns_404_for_an_unregistered_repo() -> None:
     response = client.delete("/api/repos/999")
 
     assert response.status_code == 404
+
+
+def test_retry_failed_files_sets_status_to_indexing_when_a_failed_file_exists() -> None:
+    registered = _make_registered_repo(status=RepoIndexStatus.FAILED)
+    failed_file = _make_indexed_file(status=IndexedFileStatus.FAILED, status_reason="boom")
+    user, cipher = _make_authenticated_user()
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(),
+        session=FakeAsyncSession(existing=[registered], indexed_files=[failed_file]),
+        current_user=user,
+        token_cipher=cipher,
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/repos/10/files/retry")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "indexing"
+
+
+def test_retry_failed_files_publishes_a_retry_and_a_status_progress_message() -> None:
+    registered = _make_registered_repo(status=RepoIndexStatus.FAILED, total_files_expected=5)
+    failed_file = _make_indexed_file(status=IndexedFileStatus.FAILED, status_reason="boom")
+    user, cipher = _make_authenticated_user()
+    kafka_producer = FakeRepoIndexProducer()
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(),
+        session=FakeAsyncSession(existing=[registered], indexed_files=[failed_file]),
+        current_user=user,
+        token_cipher=cipher,
+        kafka_producer=kafka_producer,
+    )
+    client = TestClient(app)
+
+    client.post("/api/repos/10/files/retry")
+
+    [retry_message] = [m for m in kafka_producer.published if isinstance(m, RepoRegisteredMessage)]
+    assert retry_message.repo_id == 10
+    [status_message] = [m for m in kafka_producer.published if isinstance(m, RepoStatusProgressMessage)]
+    assert status_message.status == "indexing"
+    assert status_message.total_files_expected == 5
+
+
+def test_retry_failed_files_is_a_no_op_when_nothing_failed() -> None:
+    registered = _make_registered_repo(status=RepoIndexStatus.COMPLETED)
+    user, cipher = _make_authenticated_user()
+    kafka_producer = FakeRepoIndexProducer()
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(),
+        session=FakeAsyncSession(existing=[registered], indexed_files=[]),
+        current_user=user,
+        token_cipher=cipher,
+        kafka_producer=kafka_producer,
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/repos/10/files/retry")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert kafka_producer.published == []
+
+
+def test_retry_failed_files_rejects_a_repo_that_has_not_finished_indexing() -> None:
+    registered = _make_registered_repo(status=RepoIndexStatus.INDEXING)
+    failed_file = _make_indexed_file(status=IndexedFileStatus.FAILED)
+    user, cipher = _make_authenticated_user()
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(),
+        session=FakeAsyncSession(existing=[registered], indexed_files=[failed_file]),
+        current_user=user,
+        token_cipher=cipher,
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/repos/10/files/retry")
+
+    assert response.status_code == 409
+
+
+def test_retry_failed_files_surfaces_a_kafka_publish_failure_as_a_bad_gateway() -> None:
+    registered = _make_registered_repo(status=RepoIndexStatus.FAILED)
+    failed_file = _make_indexed_file(status=IndexedFileStatus.FAILED)
+    user, cipher = _make_authenticated_user()
+    session = FakeAsyncSession(existing=[registered], indexed_files=[failed_file])
+    kafka_producer = FakeRepoIndexProducer(publish_error=PublishError("broker unreachable"))
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(),
+        session=session,
+        current_user=user,
+        token_cipher=cipher,
+        kafka_producer=kafka_producer,
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/repos/10/files/retry")
+
+    assert response.status_code == 502
+    assert registered.status == RepoIndexStatus.FAILED
+
+
+def test_retry_failed_files_returns_404_for_an_unregistered_repo() -> None:
+    user, cipher = _make_authenticated_user()
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(), session=FakeAsyncSession(), current_user=user, token_cipher=cipher
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/repos/999/files/retry")
+
+    assert response.status_code == 404
