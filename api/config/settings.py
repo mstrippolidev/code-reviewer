@@ -16,6 +16,7 @@ class ApiSettings(BaseSettings):
     pg_password: str
 
     api_environment: str = "local"
+    api_log_level: str = "INFO"
 
     api_jwt_secret_key: str
     api_jwt_access_token_ttl_seconds: int = 3600
