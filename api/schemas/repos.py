@@ -22,6 +22,7 @@ class RegisteredRepoRead(BaseModel):
     default_branch: str
     status: RepoIndexStatus
     status_reason: str | None
+    total_files_expected: int | None
     created_at: datetime
 
 
@@ -45,7 +46,8 @@ class RepoFileProgressMessage(BaseModel):
 
 
 class RepoStatusProgressMessage(BaseModel):
-    """Published once a repo's indexing pass reaches a terminal state, so the SSE route knows to stop relaying."""
+    """Published on every repo-level status change; the SSE route relays it live and stops on a terminal state."""
     repo_id: int
     status: RepoIndexStatus
     status_reason: str | None
+    total_files_expected: int | None = None

@@ -47,7 +47,7 @@ class RepoFileIndexConsumerDependencies:
     max_concurrent_file_indexing: int
 
 
-class RepoFileIndexConsumer(ConsumerInterface):
+class RepoFileIndexConsumer(ConsumerInterface[RepoFileIndexMessage]):
     """Consumes repo.file.index; many instances share one group so Kafka partitions the work across them."""
 
     def __init__(self, dependencies: RepoFileIndexConsumerDependencies) -> None:
@@ -55,31 +55,47 @@ class RepoFileIndexConsumer(ConsumerInterface):
         self.dependencies = dependencies
         self._semaphore = asyncio.Semaphore(self.dependencies.max_concurrent_file_indexing)
 
-    async def consume(self) -> None:
-        consumer = self._build()
-        await consumer.start()
+    def _parse_msg(self, msg: ConsumerRecord) -> RepoFileIndexMessage:
         try:
-            async for msg in consumer:
-                await self._process_message(msg, consumer)
-        finally:
-            await consumer.stop()
-
-    async def _process_message(self, msg: ConsumerRecord, consumer: AIOKafkaConsumer) -> None:
-        try:
-            file_msg = self._parse_msg(msg.value)
-        except RepoFileIndexMessageParseError as error:
-            logger.error("Could not parse repo.file.index message at offset=%s", msg.offset, exc_info=error)
-            await self.dependencies.repo_producer.publish_to_dlq(REPO_FILE_INDEX_DLQ, msg.value, msg.key, error)
-            await consumer.commit()
-            return
-        await self._index_file(file_msg)
-        await consumer.commit()
-
-    def _parse_msg(self, msg: bytes) -> RepoFileIndexMessage:
-        try:
-            return RepoFileIndexMessage.model_validate_json(msg)
+            return RepoFileIndexMessage.model_validate_json(msg.value)
         except ValidationError as error:
             raise RepoFileIndexMessageParseError("Could not parse repo.file.index message") from error
+
+    async def _handle_parse_error(self, msg: ConsumerRecord, error: Exception) -> None:
+        logger.error("Could not parse repo.file.index message at offset=%s", msg.offset, exc_info=error)
+        await self.dependencies.repo_producer.publish_to_dlq(REPO_FILE_INDEX_DLQ, msg.value, msg.key, error)
+
+    async def _handle_parsed_message(
+        self, file_msg: RepoFileIndexMessage, msg: ConsumerRecord, consumer: AIOKafkaConsumer
+    ) -> None:
+        try:
+            await self._index_file(file_msg)
+        except Exception as error:
+            logger.exception(
+                "Unexpected failure processing repo.file.index for repo_id=%s file_path=%s",
+                file_msg.repo_id, file_msg.file_path,
+            )
+            await self._mark_failed_best_effort(file_msg, error)
+
+    async def _mark_failed_best_effort(self, file_msg: RepoFileIndexMessage, error: Exception) -> None:
+        try:
+            async with self.dependencies.database_engine.new_session() as session:
+                indexed_file = await session.scalar(
+                    select(IndexedFile).where(
+                        IndexedFile.repo_id == file_msg.repo_id, IndexedFile.file_path == file_msg.file_path
+                    )
+                )
+                if indexed_file is None:
+                    return
+                indexed_file.status = IndexedFileStatus.FAILED
+                indexed_file.status_reason = str(error)
+                await session.commit()
+                await self.dependencies.completion_finalizer.finalize_if_complete(file_msg.repo_id, session)
+        except Exception:
+            logger.exception(
+                "Could not mark repo_id=%s file_path=%s FAILED after an earlier failure",
+                file_msg.repo_id, file_msg.file_path,
+            )
 
     async def _index_file(self, file_msg: RepoFileIndexMessage) -> None:
         async with self.dependencies.database_engine.new_session() as session:
@@ -107,6 +123,7 @@ class RepoFileIndexConsumer(ConsumerInterface):
         )
         try:
             async with self._semaphore:
+                logger.info("Embedding started file_path=%s repo_id=%s", file_msg.file_path, file_msg.repo_id)
                 await asyncio.to_thread(
                     self.dependencies.rag_manager.index_file, repo_data, file_msg.file_path, file_msg.content
                 )
@@ -116,13 +133,24 @@ class RepoFileIndexConsumer(ConsumerInterface):
             indexed_file.status_reason = str(error)
         else:
             indexed_file.status = IndexedFileStatus.INDEXED
-            indexed_file.indexed_at = datetime.now(UTC)
-        await session.commit()
-        await self.dependencies.repo_producer.publish(
-            REPO_FILE_PROGRESS,
-            RepoFileProgressMessage(
-                repo_id=file_msg.repo_id, file_path=file_msg.file_path,
-                status=indexed_file.status, status_reason=indexed_file.status_reason,
-            ),
-            f"{file_msg.repo_id}:{file_msg.file_path}".encode(),
+            indexed_file.indexed_at = datetime.now(UTC).replace(tzinfo=None)
+        logger.info(
+            "Embedding finished file_path=%s repo_id=%s status=%s",
+            file_msg.file_path, file_msg.repo_id, indexed_file.status,
         )
+        await session.commit()
+        try:
+            await self.dependencies.repo_producer.publish(
+                REPO_FILE_PROGRESS,
+                RepoFileProgressMessage(
+                    repo_id=file_msg.repo_id, file_path=file_msg.file_path,
+                    status=indexed_file.status, status_reason=indexed_file.status_reason,
+                ),
+                f"{file_msg.repo_id}:{file_msg.file_path}".encode(),
+            )
+        except Exception:
+            # A lost notification, not a lost result — indexed_file.status is already committed.
+            logger.exception(
+                "Failed to publish repo.file.progress for repo_id=%s file_path=%s",
+                file_msg.repo_id, file_msg.file_path,
+            )

@@ -87,6 +87,7 @@ def _make_consumer(*, indexer: FakeIndexer, dlq_producer: FakeDlqProducer) -> Re
         github_client=None,
         repo_producer=None,
         completion_finalizer=None,
+        max_concurrent_file_dispatch=8,
     )
     dependencies = RepoIndexConsumerDependencies(
         indexer_dependencies=placeholder_indexer_dependencies, dlq_producer=dlq_producer

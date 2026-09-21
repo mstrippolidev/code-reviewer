@@ -3,22 +3,25 @@ import { FileTree } from '../components/FileTree'
 import {
   RegisterRepoError,
   RepoFetchError,
+  RepoIndexingControlError,
   TOKEN_STORAGE_KEY,
   UnauthorizedError,
+  deleteRepo,
   fetchRegisteredRepos,
   fetchUserRepos,
   openIndexedFilesStream,
+  pauseRepoIndexing,
   registerRepo,
+  resumeRepoIndexing,
 } from '../api/client'
 import { parseEventStream } from '../api/sse'
 import { useUnauthorizedHandler } from '../hooks/useUnauthorizedHandler'
 import { buildFileTree } from '../utils/buildFileTree'
 
-const POLL_INTERVAL_MS = 1500
 const STREAM_RECONNECT_DELAY_MS = 1500
-const TERMINAL_REPO_STATUSES = new Set(['indexed', 'failed'])
+const RESTING_REPO_STATUSES = new Set(['completed', 'failed', 'paused'])
 const TERMINAL_FILE_STATUSES = new Set(['indexed', 'skipped', 'failed'])
-const STATUS_PROGRESS_PERCENT_BEFORE_FILES_APPEAR = { pending: 5, indexing: 10, indexed: 100, failed: 100 }
+const STATUS_PROGRESS_PERCENT_BEFORE_FILES_APPEAR = { pending: 5, indexing: 10, completed: 100, failed: 100 }
 
 function useGithubRepos(token, onUnauthorized) {
   const [repos, setRepos] = useState([])
@@ -79,20 +82,21 @@ function upsertByFilePath(files, incomingFile) {
 function useRepoFileTree(token, repoId, onUnauthorized) {
   const [trackedRepoId, setTrackedRepoId] = useState(repoId)
   const [files, setFiles] = useState([])
+  const [repoStatus, setRepoStatus] = useState(null)
   const [status, setStatus] = useState(repoId ? 'loading' : 'idle')
   const [retryNonce, setRetryNonce] = useState(0)
 
   if (trackedRepoId !== repoId) {
     setTrackedRepoId(repoId)
     setFiles([])
+    setRepoStatus(null)
     setStatus(repoId ? 'loading' : 'idle')
   }
 
-  const allFilesSettled = files.length > 0 && files.every((file) => TERMINAL_FILE_STATUSES.has(file.status))
-  const allFilesSettledRef = useRef(allFilesSettled)
+  const repoStatusRef = useRef(repoStatus)
   useEffect(() => {
-    allFilesSettledRef.current = allFilesSettled
-  }, [allFilesSettled])
+    repoStatusRef.current = repoStatus
+  }, [repoStatus])
 
   useEffect(() => {
     if (!repoId) {
@@ -110,8 +114,12 @@ function useRepoFileTree(token, repoId, onUnauthorized) {
           const response = await openIndexedFilesStream(token, repoId, controller.signal)
           opened = true
           setStatus('ready')
-          for await (const rawData of parseEventStream(response)) {
-            const file = JSON.parse(rawData)
+          for await (const event of parseEventStream(response)) {
+            if (event.type === 'status') {
+              setRepoStatus(JSON.parse(event.data))
+              continue
+            }
+            const file = JSON.parse(event.data)
             setFiles((previous) => upsertByFilePath(previous, file))
           }
         } catch (error) {
@@ -127,7 +135,7 @@ function useRepoFileTree(token, repoId, onUnauthorized) {
             return
           }
         }
-        if (controller.signal.aborted || allFilesSettledRef.current) {
+        if (controller.signal.aborted || RESTING_REPO_STATUSES.has(repoStatusRef.current?.status)) {
           return
         }
         await new Promise((resolve) => setTimeout(resolve, STREAM_RECONNECT_DELAY_MS))
@@ -141,7 +149,7 @@ function useRepoFileTree(token, repoId, onUnauthorized) {
   const refresh = useCallback(() => setRetryNonce((nonce) => nonce + 1), [])
   const settledFileCount = files.filter((file) => TERMINAL_FILE_STATUSES.has(file.status)).length
   const nodes = buildFileTree(files.map((file) => ({ path: file.file_path, status: file.status })))
-  return { nodes, status, totalFileCount: files.length, settledFileCount, refresh }
+  return { nodes, status, repoStatus, totalFileCount: files.length, settledFileCount, refresh }
 }
 
 function notEnoughPythonReason(repo) {
@@ -152,47 +160,93 @@ function byAlreadyRegisteredFirst(registeredRepoIds) {
   return (a, b) => Number(registeredRepoIds.has(b.repo_id)) - Number(registeredRepoIds.has(a.repo_id))
 }
 
-function computeProgressPercent(repoStatus, totalFileCount, settledFileCount) {
-  if (totalFileCount > 0) {
-    return Math.round((settledFileCount / totalFileCount) * 100)
+function computeProgressPercent(repo, settledFileCount) {
+  if (repo.total_files_expected) {
+    return Math.round((settledFileCount / repo.total_files_expected) * 100)
   }
-  return STATUS_PROGRESS_PERCENT_BEFORE_FILES_APPEAR[repoStatus] ?? 0
+  return STATUS_PROGRESS_PERCENT_BEFORE_FILES_APPEAR[repo.status] ?? 0
 }
 
 export function RepoBrowserPage() {
   const token = localStorage.getItem(TOKEN_STORAGE_KEY)
   const handleUnauthorized = useUnauthorizedHandler()
   const { repos, status } = useGithubRepos(token, handleUnauthorized)
-  const { registeredRepos, refresh, hasError: registeredReposError } = useRegisteredRepos(token, handleUnauthorized)
+  const { registeredRepos, refresh } = useRegisteredRepos(token, handleUnauthorized)
   const [selectedRepoId, setSelectedRepoId] = useState(null)
   const [registeringRepoId, setRegisteringRepoId] = useState(null)
   const [registerError, setRegisterError] = useState(null)
   const [viewedRepoId, setViewedRepoId] = useState(null)
   const [notAvailableExpanded, setNotAvailableExpanded] = useState(false)
+  const [controlError, setControlError] = useState(null)
 
   const registeredRepoIds = new Set(registeredRepos.map((repo) => repo.repo_id))
-  const registeringRepo = registeredRepos.find((repo) => repo.repo_id === registeringRepoId) ?? null
-  const viewedRepo = registeredRepos.find((repo) => repo.repo_id === viewedRepoId) ?? null
+  const baseViewedRepo = registeredRepos.find((repo) => repo.repo_id === viewedRepoId) ?? null
   const {
     nodes: fileTreeNodes,
     status: fileTreeStatus,
-    totalFileCount,
+    repoStatus: liveRepoStatus,
     settledFileCount,
     refresh: refreshFileTree,
   } = useRepoFileTree(token, viewedRepoId, handleUnauthorized)
+  const viewedRepo = baseViewedRepo && liveRepoStatus ? { ...baseViewedRepo, ...liveRepoStatus } : baseViewedRepo
 
   function handleRetryClick() {
     refresh()
     refreshFileTree()
   }
 
-  useEffect(() => {
-    if (!registeringRepoId || registeredReposError || (registeringRepo && TERMINAL_REPO_STATUSES.has(registeringRepo.status))) {
+  async function handlePauseClick() {
+    setControlError(null)
+    try {
+      await pauseRepoIndexing(token, viewedRepo.repo_id)
+      refresh()
+    } catch (error) {
+      if (error instanceof UnauthorizedError) {
+        handleUnauthorized()
+        return
+      }
+      setControlError(error instanceof RepoIndexingControlError ? error.message : 'Could not pause indexing.')
+    }
+  }
+
+  async function handleResumeClick() {
+    setControlError(null)
+    try {
+      await resumeRepoIndexing(token, viewedRepo.repo_id)
+      refresh()
+      refreshFileTree()
+    } catch (error) {
+      if (error instanceof UnauthorizedError) {
+        handleUnauthorized()
+        return
+      }
+      setControlError(error instanceof RepoIndexingControlError ? error.message : 'Could not resume indexing.')
+    }
+  }
+
+  async function handleDeleteClick() {
+    if (!window.confirm(`Delete ${viewedRepo.full_name} and all its indexed content? This cannot be undone.`)) {
       return
     }
-    const interval = setInterval(refresh, POLL_INTERVAL_MS)
-    return () => clearInterval(interval)
-  }, [registeringRepoId, registeringRepo, registeredReposError, refresh])
+    setControlError(null)
+    try {
+      await deleteRepo(token, viewedRepo.repo_id)
+      setViewedRepoId(null)
+      refresh()
+    } catch (error) {
+      if (error instanceof UnauthorizedError) {
+        handleUnauthorized()
+        return
+      }
+      setControlError(error instanceof RepoIndexingControlError ? error.message : 'Could not delete this repo.')
+    }
+  }
+
+  useEffect(() => {
+    if (liveRepoStatus && RESTING_REPO_STATUSES.has(liveRepoStatus.status)) {
+      refresh()
+    }
+  }, [liveRepoStatus?.status, refresh])
 
   if (status === 'loading') {
     return <p className="page centered">Loading your repositories...</p>
@@ -291,22 +345,38 @@ export function RepoBrowserPage() {
       </div>
       <div className="repo-browser-pane repo-browser-right">
         {registerError ? <p className="note error">{registerError}</p> : null}
+        {controlError ? <p className="note error">{controlError}</p> : null}
         {viewedRepo ? (
           <div className="repo-progress">
             <div className="repo-progress-header">
               <p className="repo-progress-label">
                 {viewedRepo.full_name}: {viewedRepo.status}
                 {viewedRepo.status_reason ? ` — ${viewedRepo.status_reason}` : ''}
-                {totalFileCount > 0 ? ` (${settledFileCount}/${totalFileCount} files)` : ''}
+                {viewedRepo.total_files_expected ? ` (${settledFileCount}/${viewedRepo.total_files_expected} files)` : ''}
               </p>
-              <button type="button" className="repo-refresh-button" onClick={handleRetryClick}>
-                ⟳ Refresh
-              </button>
+              <div className="repo-progress-actions">
+                {viewedRepo.status === 'indexing' ? (
+                  <button type="button" className="repo-control-button" onClick={handlePauseClick}>
+                    Stop
+                  </button>
+                ) : null}
+                {viewedRepo.status === 'paused' ? (
+                  <button type="button" className="repo-control-button" onClick={handleResumeClick}>
+                    Resume
+                  </button>
+                ) : null}
+                <button type="button" className="repo-control-button repo-control-button-danger" onClick={handleDeleteClick}>
+                  Delete
+                </button>
+                <button type="button" className="repo-refresh-button" onClick={handleRetryClick}>
+                  ⟳ Refresh
+                </button>
+              </div>
             </div>
             <div className="repo-progress-bar">
               <div
                 className={`repo-progress-fill repo-progress-${viewedRepo.status}`}
-                style={{ width: `${computeProgressPercent(viewedRepo.status, totalFileCount, settledFileCount)}%` }}
+                style={{ width: `${computeProgressPercent(viewedRepo, settledFileCount)}%` }}
               />
             </div>
           </div>

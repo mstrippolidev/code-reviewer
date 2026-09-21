@@ -36,7 +36,7 @@ class RepoIndexConsumerDependencies:
     dlq_producer: RepoIndexProducer
 
 
-class RepoIndexConsumer(ConsumerInterface):
+class RepoIndexConsumer(ConsumerInterface[RepoRegisteredMessage]):
     """Consumes repo.registered messages and hands each one to a RepoIndexer."""
 
     def __init__(self, dependencies: RepoIndexConsumerDependencies, topic: str = TOPIC,
@@ -45,29 +45,21 @@ class RepoIndexConsumer(ConsumerInterface):
         self._indexer = RepoIndexer(dependencies.indexer_dependencies)
         self._dlq_producer = dependencies.dlq_producer
 
-    async def consume(self) -> None:
-        """
-            Concrete implementation of this consumer
-        """
-        consumer = self._build()
-        await consumer.start()
+    def _parse_msg(self, msg: ConsumerRecord) -> RepoRegisteredMessage:
         try:
-            async for msg in consumer:
-                await self._process_message(msg, consumer)
-        finally:
-            await consumer.stop()
+            return RepoRegisteredMessage.model_validate_json(msg.value)
+        except ValidationError as error:
+            raise RepoRegisteredMessageParseError("Could not parse repo.registered message") from error
 
-    async def _process_message(self, msg: ConsumerRecord, consumer: AIOKafkaConsumer) -> None:
+    async def _handle_parse_error(self, msg: ConsumerRecord, error: Exception) -> None:
+        logger.error("Failed to process repo.registered message at offset=%s", msg.offset, exc_info=error)
+        await self._dlq_producer.publish_to_dlq(DLQ_TOPIC, msg.value, msg.key, error)
+
+    async def _handle_parsed_message(
+        self, repo_msg: RepoRegisteredMessage, msg: ConsumerRecord, consumer: AIOKafkaConsumer
+    ) -> None:
         try:
-            repo_msg = self._parse_message(msg.value)
             await self._indexer.index_repo(repo_msg)
         except Exception as error:
             logger.error("Failed to process repo.registered message at offset=%s", msg.offset, exc_info=error)
             await self._dlq_producer.publish_to_dlq(DLQ_TOPIC, msg.value, msg.key, error)
-        await consumer.commit()
-
-    def _parse_message(self, payload: bytes) -> RepoRegisteredMessage:
-        try:
-            return RepoRegisteredMessage.model_validate_json(payload)
-        except ValidationError as error:
-            raise RepoRegisteredMessageParseError("Could not parse repo.registered message") from error

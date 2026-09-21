@@ -15,13 +15,16 @@ from api.dependencies import (
     get_db_session,
     get_github_oauth_client,
     get_kafka_producer,
+    get_rag_manager,
     get_token_cipher,
 )
 from api.indexing.producer import PublishError
 from api.integrations.github import GitHubRepo, GitHubRepoFetchError
 from api.routers.repos import router as repos_router
 from api.schemas.indexing import RepoRegisteredMessage
+from api.schemas.repos import RepoStatusProgressMessage
 from api.security.token_cipher import TokenCipher
+from code_reviewer.rag.errors import VectorStoreDeletionError
 
 
 class FakeGitHubOAuthClient:
@@ -38,12 +41,23 @@ class FakeGitHubOAuthClient:
 class FakeRepoIndexProducer:
     def __init__(self, *, publish_error: Exception | None = None) -> None:
         self._publish_error = publish_error
-        self.published: list[RepoRegisteredMessage] = []
+        self.published: list[RepoRegisteredMessage | RepoStatusProgressMessage] = []
 
-    async def publish(self, topic: str, message: RepoRegisteredMessage, key: bytes) -> None:
+    async def publish(self, topic: str, message: RepoRegisteredMessage | RepoStatusProgressMessage, key: bytes) -> None:
         if self._publish_error:
             raise self._publish_error
         self.published.append(message)
+
+
+class FakeRagManager:
+    def __init__(self, *, delete_error: Exception | None = None) -> None:
+        self._delete_error = delete_error
+        self.deleted_repo_ids: list[str] = []
+
+    def delete_repo(self, repo_id: str) -> None:
+        if self._delete_error:
+            raise self._delete_error
+        self.deleted_repo_ids.append(repo_id)
 
 
 class _ScalarsResult:
@@ -87,6 +101,10 @@ class FakeAsyncSession:
 
     async def scalars(self, statement) -> _ScalarsResult:
         return _ScalarsResult(self._rows_for(statement))
+
+    async def execute(self, statement) -> None:
+        requested_repo_id = next(iter(statement.compile().params.values()), None)
+        self._indexed_files = [row for row in self._indexed_files if row.repo_id != requested_repo_id]
 
     def add(self, row: RegisteredRepo) -> None:
         self._rows.append(row)
@@ -144,7 +162,7 @@ def _make_registered_repo(**overrides) -> RegisteredRepo:
         "full_name": "octocat/hello-world",
         "default_branch": "main",
         "registered_by_user_id": 1,
-        "status": RepoIndexStatus.INDEXED,
+        "status": RepoIndexStatus.COMPLETED,
         "created_at": datetime(2026, 1, 1),
     }
     defaults.update(overrides)
@@ -174,6 +192,7 @@ def _build_app(
     current_user: User | None = None,
     token_cipher: TokenCipher | None = None,
     kafka_producer: FakeRepoIndexProducer | None = None,
+    rag_manager: FakeRagManager | None = None,
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(repos_router)
@@ -187,6 +206,7 @@ def _build_app(
     )
     app.dependency_overrides[get_db_session] = _fake_db_session
     app.dependency_overrides[get_kafka_producer] = lambda: kafka_producer or FakeRepoIndexProducer()
+    app.dependency_overrides[get_rag_manager] = lambda: rag_manager or FakeRagManager()
     if current_user is not None:
         app.dependency_overrides[get_current_user] = lambda: current_user
     return app
@@ -261,7 +281,7 @@ def test_register_repo_rejects_a_repo_id_already_registered() -> None:
         full_name="octocat/hello-world",
         default_branch="main",
         registered_by_user_id=1,
-        status=RepoIndexStatus.INDEXED,
+        status=RepoIndexStatus.COMPLETED,
         created_at=datetime(2026, 1, 1),
     )
     repo = _make_github_repo()
@@ -305,7 +325,7 @@ def test_list_registered_repos_returns_every_row() -> None:
         full_name="octocat/hello-world",
         default_branch="main",
         registered_by_user_id=1,
-        status=RepoIndexStatus.INDEXED,
+        status=RepoIndexStatus.COMPLETED,
         created_at=datetime(2026, 1, 1),
     )
     user, cipher = _make_authenticated_user()
@@ -413,5 +433,219 @@ def test_list_indexed_files_returns_404_for_an_unregistered_repo() -> None:
     client = TestClient(app)
 
     response = client.get("/api/repos/999/files")
+
+    assert response.status_code == 404
+
+
+def test_pause_repo_indexing_sets_status_to_paused_when_currently_indexing() -> None:
+    registered = _make_registered_repo(status=RepoIndexStatus.INDEXING)
+    user, cipher = _make_authenticated_user()
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(),
+        session=FakeAsyncSession(existing=[registered]),
+        current_user=user,
+        token_cipher=cipher,
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/repos/10/pause")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "paused"
+
+
+def test_pause_repo_indexing_publishes_a_status_progress_message() -> None:
+    registered = _make_registered_repo(status=RepoIndexStatus.INDEXING, total_files_expected=40)
+    user, cipher = _make_authenticated_user()
+    kafka_producer = FakeRepoIndexProducer()
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(),
+        session=FakeAsyncSession(existing=[registered]),
+        current_user=user,
+        token_cipher=cipher,
+        kafka_producer=kafka_producer,
+    )
+    client = TestClient(app)
+
+    client.post("/api/repos/10/pause")
+
+    [message] = kafka_producer.published
+    assert message.status == "paused"
+    assert message.total_files_expected == 40
+
+
+def test_pause_repo_indexing_rejects_a_repo_that_is_not_currently_indexing() -> None:
+    registered = _make_registered_repo(status=RepoIndexStatus.PENDING)
+    user, cipher = _make_authenticated_user()
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(),
+        session=FakeAsyncSession(existing=[registered]),
+        current_user=user,
+        token_cipher=cipher,
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/repos/10/pause")
+
+    assert response.status_code == 409
+
+
+def test_pause_repo_indexing_returns_404_for_an_unregistered_repo() -> None:
+    user, cipher = _make_authenticated_user()
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(), session=FakeAsyncSession(), current_user=user, token_cipher=cipher
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/repos/999/pause")
+
+    assert response.status_code == 404
+
+
+def test_resume_repo_indexing_sets_status_to_indexing_when_paused() -> None:
+    registered = _make_registered_repo(status=RepoIndexStatus.PAUSED)
+    user, cipher = _make_authenticated_user()
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(),
+        session=FakeAsyncSession(existing=[registered]),
+        current_user=user,
+        token_cipher=cipher,
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/repos/10/resume")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "indexing"
+
+
+def test_resume_repo_indexing_republishes_a_repo_registered_message() -> None:
+    """Resume reuses the exact registration flow so RepoIndexer re-walks and dispatches
+    only files that have no IndexedFile row yet -- no separate resume-specific pipeline."""
+    registered = _make_registered_repo(status=RepoIndexStatus.PAUSED)
+    user, cipher = _make_authenticated_user()
+    kafka_producer = FakeRepoIndexProducer()
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(),
+        session=FakeAsyncSession(existing=[registered]),
+        current_user=user,
+        token_cipher=cipher,
+        kafka_producer=kafka_producer,
+    )
+    client = TestClient(app)
+
+    client.post("/api/repos/10/resume")
+
+    published_repo_registered = [message for message in kafka_producer.published if isinstance(message, RepoRegisteredMessage)]
+    [message] = published_repo_registered
+    assert message.repo_id == 10
+
+
+def test_resume_repo_indexing_rejects_a_repo_that_is_not_paused() -> None:
+    registered = _make_registered_repo(status=RepoIndexStatus.INDEXING)
+    user, cipher = _make_authenticated_user()
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(),
+        session=FakeAsyncSession(existing=[registered]),
+        current_user=user,
+        token_cipher=cipher,
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/repos/10/resume")
+
+    assert response.status_code == 409
+
+
+def test_resume_repo_indexing_returns_404_for_an_unregistered_repo() -> None:
+    user, cipher = _make_authenticated_user()
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(), session=FakeAsyncSession(), current_user=user, token_cipher=cipher
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/repos/999/resume")
+
+    assert response.status_code == 404
+
+
+def test_delete_registered_repo_removes_the_registration() -> None:
+    registered = _make_registered_repo(status=RepoIndexStatus.COMPLETED)
+    user, cipher = _make_authenticated_user()
+    session = FakeAsyncSession(existing=[registered])
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(), session=session, current_user=user, token_cipher=cipher
+    )
+    client = TestClient(app)
+
+    response = client.delete("/api/repos/10")
+
+    assert response.status_code == 204
+    assert session._rows == []
+
+
+def test_delete_registered_repo_removes_its_indexed_files() -> None:
+    registered = _make_registered_repo()
+    files = [_make_indexed_file(id=1, file_path="a.py"), _make_indexed_file(id=2, file_path="b.py")]
+    user, cipher = _make_authenticated_user()
+    session = FakeAsyncSession(existing=[registered], indexed_files=files)
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(), session=session, current_user=user, token_cipher=cipher
+    )
+    client = TestClient(app)
+
+    client.delete("/api/repos/10")
+
+    assert session._indexed_files == []
+
+
+def test_delete_registered_repo_purges_the_vector_store() -> None:
+    registered = _make_registered_repo()
+    user, cipher = _make_authenticated_user()
+    rag_manager = FakeRagManager()
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(),
+        session=FakeAsyncSession(existing=[registered]),
+        current_user=user,
+        token_cipher=cipher,
+        rag_manager=rag_manager,
+    )
+    client = TestClient(app)
+
+    client.delete("/api/repos/10")
+
+    assert rag_manager.deleted_repo_ids == ["10"]
+
+
+def test_delete_registered_repo_keeps_the_registration_when_the_purge_fails() -> None:
+    """A failed vector-store purge must never leave the repo unregistered -- that would
+    orphan indexed content nobody can authorize the presence of anymore."""
+    registered = _make_registered_repo()
+    user, cipher = _make_authenticated_user()
+    session = FakeAsyncSession(existing=[registered])
+    rag_manager = FakeRagManager(delete_error=VectorStoreDeletionError("pgvector unreachable"))
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(),
+        session=session,
+        current_user=user,
+        token_cipher=cipher,
+        rag_manager=rag_manager,
+    )
+    client = TestClient(app)
+
+    response = client.delete("/api/repos/10")
+
+    assert response.status_code == 502
+    assert session._rows == [registered]
+
+
+def test_delete_registered_repo_returns_404_for_an_unregistered_repo() -> None:
+    user, cipher = _make_authenticated_user()
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(), session=FakeAsyncSession(), current_user=user, token_cipher=cipher
+    )
+    client = TestClient(app)
+
+    response = client.delete("/api/repos/999")
 
     assert response.status_code == 404

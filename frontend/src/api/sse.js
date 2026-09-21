@@ -14,19 +14,22 @@ export async function* parseEventStream(response) {
     while (boundary !== -1) {
       const rawEvent = buffer.slice(0, boundary)
       buffer = buffer.slice(boundary + 2)
-      const data = extractEventData(rawEvent)
-      if (data !== null) {
-        yield data
+      const event = extractEvent(rawEvent)
+      if (event !== null) {
+        yield event
       }
       boundary = buffer.indexOf('\n\n')
     }
   }
 }
 
-function extractEventData(rawEvent) {
-  const dataLines = rawEvent
-    .split('\n')
-    .filter((line) => line.startsWith('data:'))
-    .map((line) => line.slice('data:'.length).trimStart())
-  return dataLines.length > 0 ? dataLines.join('\n') : null
+function extractEvent(rawEvent) {
+  const lines = rawEvent.split('\n')
+  const dataLines = lines.filter((line) => line.startsWith('data:')).map((line) => line.slice('data:'.length).trimStart())
+  if (dataLines.length === 0) {
+    return null
+  }
+  const eventLine = lines.find((line) => line.startsWith('event:'))
+  const type = eventLine ? eventLine.slice('event:'.length).trim() : 'message'
+  return { type, data: dataLines.join('\n') }
 }

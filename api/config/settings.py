@@ -16,6 +16,7 @@ class ApiSettings(BaseSettings):
     pg_password: str
 
     api_environment: str = "local"
+    api_log_level: str = "INFO"
 
     api_jwt_secret_key: str
     api_jwt_access_token_ttl_seconds: int = 3600
@@ -31,6 +32,7 @@ class ApiSettings(BaseSettings):
 
     kafka_bootstrap_servers: str
     max_concurrent_file_indexing: int = 4
+    max_concurrent_file_dispatch: int = 8
 
     @property
     def async_database_url(self) -> URL:

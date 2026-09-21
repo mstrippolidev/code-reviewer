@@ -5,6 +5,8 @@ export class RepoFetchError extends Error {}
 
 export class RegisterRepoError extends Error {}
 
+export class RepoIndexingControlError extends Error {}
+
 export class UnauthorizedError extends Error {}
 
 function authHeaders(token) {
@@ -62,4 +64,38 @@ export async function registerRepo(token, { repo_id: repoId, full_name: fullName
     throw new RegisterRepoError(body.detail ?? `Request failed with status ${response.status}`)
   }
   return response.json()
+}
+
+export async function pauseRepoIndexing(token, repoId) {
+  return postRepoControl(token, `${API_BASE_URL}/api/repos/${repoId}/pause`)
+}
+
+export async function resumeRepoIndexing(token, repoId) {
+  return postRepoControl(token, `${API_BASE_URL}/api/repos/${repoId}/resume`)
+}
+
+async function postRepoControl(token, url) {
+  const response = await fetch(url, { method: 'POST', headers: authHeaders(token) })
+  if (response.status === 401) {
+    throw new UnauthorizedError('Session expired')
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}))
+    throw new RepoIndexingControlError(body.detail ?? `Request failed with status ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function deleteRepo(token, repoId) {
+  const response = await fetch(`${API_BASE_URL}/api/repos/${repoId}`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+  })
+  if (response.status === 401) {
+    throw new UnauthorizedError('Session expired')
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}))
+    throw new RepoIndexingControlError(body.detail ?? `Request failed with status ${response.status}`)
+  }
 }

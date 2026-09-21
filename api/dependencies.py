@@ -12,6 +12,7 @@ from api.indexing.producer import RepoIndexProducer
 from api.integrations.github import GitHubOAuthClient, GitHubOAuthConfig
 from api.security.jwt_service import InvalidAccessTokenError, JwtTokenService
 from api.security.token_cipher import TokenCipher
+from code_reviewer.rag.indexer import LlamaIndexRagManager
 
 bearer_scheme = HTTPBearer(auto_error=True)
 
@@ -48,6 +49,10 @@ def get_frontend_base_url() -> str:
 
 def get_kafka_producer(request: Request) -> RepoIndexProducer:
     return request.app.state.kafka_producer
+
+
+def get_rag_manager(request: Request) -> LlamaIndexRagManager:
+    return request.app.state.rag_manager
 
 
 def get_github_oauth_client(request: Request) -> GitHubOAuthClient:

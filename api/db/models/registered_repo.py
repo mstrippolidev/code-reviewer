@@ -16,7 +16,8 @@ class RepoIndexStatus(str, Enum):
 
     PENDING = "pending"
     INDEXING = "indexing"
-    INDEXED = "indexed"
+    PAUSED = "paused"
+    COMPLETED = "completed"
     FAILED = "failed"
 
 

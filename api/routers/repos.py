@@ -1,5 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+import asyncio
+import logging
+from collections.abc import AsyncIterator
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import EventSourceResponse
+from fastapi.sse import ServerSentEvent
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,16 +17,31 @@ from api.dependencies import (
     get_db_session,
     get_github_oauth_client,
     get_kafka_producer,
+    get_rag_manager,
     get_token_cipher,
 )
 from api.indexing.producer import PublishError, RepoIndexProducer
-from api.indexing.topics import REPO_REGISTERED
+from api.indexing.repo_progress_broadcaster import RepoProgressBroadcaster
+from api.indexing.topics import REPO_REGISTERED, REPO_STATUS_PROGRESS
 from api.integrations.github import PYTHON_PERCENTAGE_THRESHOLD, GitHubOAuthClient, GitHubRepo, GitHubRepoFetchError
 from api.schemas.indexing import RepoRegisteredMessage
-from api.schemas.repos import RegisterRepoRequest, RegisteredRepoRead, IndexedFileRead
+from api.schemas.repos import (
+    IndexedFileRead,
+    RegisterRepoRequest,
+    RegisteredRepoRead,
+    RepoFileProgressMessage,
+    RepoStatusProgressMessage,
+)
 from api.security.token_cipher import TokenCipher
+from code_reviewer.rag.errors import VectorStoreDeletionError
+from code_reviewer.rag.indexer import LlamaIndexRagManager
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/repos", tags=["Repos"])
+
+_TERMINAL_REPO_STATUSES = frozenset({RepoIndexStatus.COMPLETED, RepoIndexStatus.FAILED})
+_STREAM_CLOSING_STATUSES = _TERMINAL_REPO_STATUSES | {RepoIndexStatus.PAUSED}
 
 
 @router.get("")
@@ -133,3 +154,110 @@ async def _get_registered_repo_or_404(repo_id: int, session: AsyncSession) -> Re
 async def _get_indexed_files(repo_id: int, session: AsyncSession) -> list[IndexedFile]:
     result = await session.scalars(select(IndexedFile).where(IndexedFile.repo_id == repo_id))
     return list(result.all())
+
+
+async def _require_registered_repo(
+    repo_id: int, session: AsyncSession = Depends(get_db_session)
+) -> RegisteredRepo:
+    return await _get_registered_repo_or_404(repo_id, session)
+
+
+@router.get("/{repo_id}/files/stream", response_class=EventSourceResponse)
+async def stream_indexed_files(
+    request: Request,
+    repo: RegisteredRepo = Depends(_require_registered_repo),
+    session: AsyncSession = Depends(get_db_session),
+    _current_user: User = Depends(get_current_user),
+) -> AsyncIterator[ServerSentEvent]:
+    broadcaster: RepoProgressBroadcaster = request.app.state.repo_progress_broadcaster
+    queue = broadcaster.subscribe(repo.repo_id)
+    try:
+        yield ServerSentEvent(event="status", data=_current_repo_status(repo))
+        files = await _get_indexed_files(repo.repo_id, session)
+        for file in files:
+            yield ServerSentEvent(event="file", data=IndexedFileRead.model_validate(file))
+        if repo.status in _STREAM_CLOSING_STATUSES:
+            return
+        while True:
+            event = await queue.get()
+            if isinstance(event, RepoStatusProgressMessage):
+                yield ServerSentEvent(event="status", data=event)
+                if event.status in _STREAM_CLOSING_STATUSES:
+                    return
+            elif isinstance(event, RepoFileProgressMessage):
+                yield ServerSentEvent(event="file", data=event)
+    finally:
+        broadcaster.unsubscribe(repo.repo_id, queue)
+
+
+def _current_repo_status(repo: RegisteredRepo) -> RepoStatusProgressMessage:
+    return RepoStatusProgressMessage(
+        repo_id=repo.repo_id,
+        status=repo.status,
+        status_reason=repo.status_reason,
+        total_files_expected=repo.total_files_expected,
+    )
+
+
+@router.post("/{repo_id}/pause")
+async def pause_repo_indexing(
+    repo: RegisteredRepo = Depends(_require_registered_repo),
+    session: AsyncSession = Depends(get_db_session),
+    kafka_producer: RepoIndexProducer = Depends(get_kafka_producer),
+    _current_user: User = Depends(get_current_user),
+) -> RegisteredRepoRead:
+    if repo.status != RepoIndexStatus.INDEXING:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Repo is not currently indexing")
+    repo.status = RepoIndexStatus.PAUSED
+    await session.commit()
+    await _publish_status_progress(kafka_producer, repo)
+    return RegisteredRepoRead.model_validate(repo)
+
+
+@router.post("/{repo_id}/resume")
+async def resume_repo_indexing(
+    repo: RegisteredRepo = Depends(_require_registered_repo),
+    session: AsyncSession = Depends(get_db_session),
+    kafka_producer: RepoIndexProducer = Depends(get_kafka_producer),
+    _current_user: User = Depends(get_current_user),
+) -> RegisteredRepoRead:
+    if repo.status != RepoIndexStatus.PAUSED:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Repo is not paused")
+    repo.status = RepoIndexStatus.INDEXING
+    await session.commit()
+    await _publish_status_progress(kafka_producer, repo)
+    await _publish_repo_registered(repo, kafka_producer)
+    return RegisteredRepoRead.model_validate(repo)
+
+
+async def _publish_status_progress(kafka_producer: RepoIndexProducer, repo: RegisteredRepo) -> None:
+    try:
+        await kafka_producer.publish(REPO_STATUS_PROGRESS, _current_repo_status(repo), str(repo.repo_id).encode())
+    except Exception:
+        # A lost notification, not a lost result — repo.status above is already committed.
+        logger.exception("Failed to publish repo.status.progress for repo_id=%s", repo.repo_id)
+
+
+@router.delete("/{repo_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_registered_repo(
+    repo: RegisteredRepo = Depends(_require_registered_repo),
+    session: AsyncSession = Depends(get_db_session),
+    rag_manager: LlamaIndexRagManager = Depends(get_rag_manager),
+    _current_user: User = Depends(get_current_user),
+) -> None:
+    # Purge the vector store before the registration row: if the purge fails, the repo
+    # stays registered (still authorized) rather than leaving unowned content behind.
+    await _purge_vector_store_content(repo.repo_id, rag_manager)
+    await session.execute(delete(IndexedFile).where(IndexedFile.repo_id == repo.repo_id))
+    await session.delete(repo)
+    await session.commit()
+
+
+async def _purge_vector_store_content(repo_id: int, rag_manager: LlamaIndexRagManager) -> None:
+    try:
+        await asyncio.to_thread(rag_manager.delete_repo, str(repo_id))
+    except VectorStoreDeletionError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not purge this repo's indexed content; repo was not unregistered",
+        ) from error

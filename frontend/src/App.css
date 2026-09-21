@@ -121,6 +121,13 @@
   font-size: 0.85rem;
 }
 
+.repo-progress-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
 .repo-refresh-button {
   flex-shrink: 0;
   padding: 0;
@@ -150,12 +157,41 @@
   background: #6e7781;
 }
 
-.repo-progress-fill.repo-progress-indexed {
+.repo-progress-fill.repo-progress-completed {
   background: #1a7f37;
 }
 
 .repo-progress-fill.repo-progress-failed {
   background: #cf222e;
+}
+
+.repo-progress-fill.repo-progress-paused {
+  background: #9a6700;
+}
+
+.repo-control-button {
+  flex-shrink: 0;
+  padding: 0.2rem 0.6rem;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.repo-control-button:hover {
+  background: var(--border);
+}
+
+.repo-control-button-danger {
+  color: #cf222e;
+  border-color: #cf222e;
+}
+
+.repo-control-button-danger:hover {
+  background: #cf222e;
+  color: #fff;
 }
 
 .repo-browser {
