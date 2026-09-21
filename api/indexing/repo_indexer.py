@@ -20,10 +20,10 @@ from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 from api.db.models.user import User
 from api.indexing.producer import RepoIndexProducer
 from api.indexing.repo_completion_finalizer import RepoCompletionFinalizer
-from api.indexing.topics import REPO_FILE_INDEX, REPO_FILE_PROGRESS
+from api.indexing.topics import REPO_FILE_INDEX, REPO_FILE_PROGRESS, REPO_STATUS_PROGRESS
 from api.integrations.github import GitHubOAuthClient
 from api.schemas.indexing import RepoFileIndexMessage, RepoRegisteredMessage
-from api.schemas.repos import RepoFileProgressMessage
+from api.schemas.repos import RepoFileProgressMessage, RepoStatusProgressMessage
 from api.security.token_cipher import TokenCipher
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,7 @@ class RepoIndexerDependencies:
     github_client: GitHubOAuthClient
     repo_producer: RepoIndexProducer
     completion_finalizer: RepoCompletionFinalizer
+    max_concurrent_file_dispatch: int
 
 
 @dataclass(frozen=True)
@@ -101,11 +102,36 @@ class RepoIndexer:
     async def _index_repo_files(self, context: _IndexingContext) -> None:
         relative_paths = _walk_repo_files(context.repo_root)
         await self._start_indexing(context, total_files=len(relative_paths))
-        for relative_path in relative_paths:
+        semaphore = asyncio.Semaphore(self._dependencies.max_concurrent_file_dispatch)
+        await asyncio.gather(
+            *(self._dispatch_one_file(context, relative_path, semaphore) for relative_path in relative_paths)
+        )
+
+    async def _dispatch_one_file(
+        self, context: _IndexingContext, relative_path: str, semaphore: asyncio.Semaphore
+    ) -> None:
+        async with semaphore:
+            if not await self._should_dispatch(context, relative_path):
+                return
             if not relative_path.endswith(".py"):
                 await self._record_terminal(context, relative_path, IndexedFileStatus.SKIPPED, "not Python")
-                continue
+                return
             await self._queue_file_for_indexing(context, relative_path)
+
+    async def _should_dispatch(self, context: _IndexingContext, relative_path: str) -> bool:
+        """False when a resumed walk already has a row for this file, or the repo was paused mid-walk."""
+        async with self._dependencies.database_engine.new_session() as session:
+            repo = await session.scalar(
+                select(RegisteredRepo).where(RegisteredRepo.repo_id == context.repo_msg.repo_id)
+            )
+            if repo is None or repo.status == RepoIndexStatus.PAUSED:
+                return False
+            existing = await session.scalar(
+                select(IndexedFile).where(
+                    IndexedFile.repo_id == context.repo_msg.repo_id, IndexedFile.file_path == relative_path
+                )
+            )
+            return existing is None
 
     async def _start_indexing(self, context: _IndexingContext, total_files: int) -> None:
         repo = await context.session.scalar(
@@ -116,6 +142,20 @@ class RepoIndexer:
         repo.status = RepoIndexStatus.INDEXING
         repo.total_files_expected = total_files
         await context.session.commit()
+        try:
+            await self._dependencies.repo_producer.publish(
+                REPO_STATUS_PROGRESS,
+                RepoStatusProgressMessage(
+                    repo_id=context.repo_msg.repo_id,
+                    status=RepoIndexStatus.INDEXING,
+                    status_reason=None,
+                    total_files_expected=total_files,
+                ),
+                str(context.repo_msg.repo_id).encode(),
+            )
+        except Exception:
+            # A lost notification, not a lost result — RegisteredRepo.status above is already committed.
+            logger.exception("Failed to publish repo.status.progress for repo_id=%s", context.repo_msg.repo_id)
 
     async def _queue_file_for_indexing(self, context: _IndexingContext, relative_path: str) -> None:
         try:
@@ -126,10 +166,6 @@ class RepoIndexer:
         if len(content.encode("utf-8")) > _MAX_INLINE_FILE_BYTES:
             await self._record_terminal(context, relative_path, IndexedFileStatus.SKIPPED, "too large to index inline")
             return
-        context.session.add(
-            IndexedFile(repo_id=context.repo_msg.repo_id, file_path=relative_path, status=IndexedFileStatus.PENDING)
-        )
-        await context.session.commit()
         message = RepoFileIndexMessage(
             repo_id=context.repo_msg.repo_id,
             owner_id=context.repo_msg.owner_id,
@@ -137,23 +173,55 @@ class RepoIndexer:
             file_path=relative_path,
             content=content,
         )
-        key = f"{context.repo_msg.repo_id}:{relative_path}".encode()
-        await self._dependencies.repo_producer.publish(REPO_FILE_INDEX, message, key)
+        async with self._dependencies.database_engine.new_session() as session:
+            indexed_file = IndexedFile(
+                repo_id=context.repo_msg.repo_id, file_path=relative_path, status=IndexedFileStatus.PENDING
+            )
+            session.add(indexed_file)
+            await session.commit()
+            await self._dispatch_or_mark_failed(context, indexed_file, message, session)
+
+    async def _dispatch_or_mark_failed(
+        self, context: _IndexingContext, indexed_file: IndexedFile, message: RepoFileIndexMessage, session: AsyncSession
+    ) -> None:
+        key = f"{context.repo_msg.repo_id}:{message.file_path}".encode()
+        try:
+            await self._dependencies.repo_producer.publish(REPO_FILE_INDEX, message, key)
+        except Exception as error:
+            # Unlike a lost progress notification, a lost dispatch means no consumer ever picks this up.
+            logger.exception(
+                "Failed to dispatch %s for repo_id=%s to repo.file.index", message.file_path, context.repo_msg.repo_id
+            )
+            indexed_file.status = IndexedFileStatus.FAILED
+            indexed_file.status_reason = f"could not dispatch for indexing: {error}"
+            await session.commit()
+        else:
+            logger.info(
+                "Dispatched file_path=%s for repo_id=%s to repo.file.index", message.file_path, context.repo_msg.repo_id
+            )
 
     async def _record_terminal(
         self, context: _IndexingContext, relative_path: str, status: IndexedFileStatus, reason: str
     ) -> None:
-        context.session.add(
-            IndexedFile(repo_id=context.repo_msg.repo_id, file_path=relative_path, status=status, status_reason=reason)
-        )
-        await context.session.commit()
-        await self._dependencies.repo_producer.publish(
-            REPO_FILE_PROGRESS,
-            RepoFileProgressMessage(
-                repo_id=context.repo_msg.repo_id, file_path=relative_path, status=status, status_reason=reason
-            ),
-            f"{context.repo_msg.repo_id}:{relative_path}".encode(),
-        )
+        async with self._dependencies.database_engine.new_session() as session:
+            session.add(
+                IndexedFile(repo_id=context.repo_msg.repo_id, file_path=relative_path, status=status, status_reason=reason)
+            )
+            await session.commit()
+        try:
+            await self._dependencies.repo_producer.publish(
+                REPO_FILE_PROGRESS,
+                RepoFileProgressMessage(
+                    repo_id=context.repo_msg.repo_id, file_path=relative_path, status=status, status_reason=reason
+                ),
+                f"{context.repo_msg.repo_id}:{relative_path}".encode(),
+            )
+        except Exception:
+            # A lost notification, not a lost result — the terminal status above is already committed.
+            logger.exception(
+                "Failed to publish repo.file.progress for repo_id=%s file_path=%s",
+                context.repo_msg.repo_id, relative_path,
+            )
 
     async def _mark_repo_failed(self, repo_id: int, reason: str, session: AsyncSession) -> None:
         repo = await session.scalar(select(RegisteredRepo).where(RegisteredRepo.repo_id == repo_id))
@@ -162,6 +230,15 @@ class RepoIndexer:
         repo.status = RepoIndexStatus.FAILED
         repo.status_reason = reason
         await session.commit()
+        try:
+            await self._dependencies.repo_producer.publish(
+                REPO_STATUS_PROGRESS,
+                RepoStatusProgressMessage(repo_id=repo_id, status=RepoIndexStatus.FAILED, status_reason=reason),
+                str(repo_id).encode(),
+            )
+        except Exception:
+            # A lost notification, not a lost result — repo.status above is already committed.
+            logger.exception("Failed to publish repo.status.progress for repo_id=%s", repo_id)
 
 
 def _extract_tarball_safely(tarball: bytes, extract_dir: str) -> None:

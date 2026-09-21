@@ -32,6 +32,7 @@ class ApiSettings(BaseSettings):
 
     kafka_bootstrap_servers: str
     max_concurrent_file_indexing: int = 4
+    max_concurrent_file_dispatch: int = 8
 
     @property
     def async_database_url(self) -> URL:

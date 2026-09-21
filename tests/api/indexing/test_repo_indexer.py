@@ -7,6 +7,7 @@
 """
 import os
 import tarfile
+from collections.abc import Callable
 from io import BytesIO
 
 import pytest
@@ -24,9 +25,9 @@ from api.indexing.repo_indexer import (
     _walk_repo_files,
     _MAX_INLINE_FILE_BYTES,
 )
-from api.indexing.topics import REPO_FILE_INDEX, REPO_FILE_PROGRESS
+from api.indexing.topics import REPO_FILE_INDEX, REPO_FILE_PROGRESS, REPO_STATUS_PROGRESS
 from api.schemas.indexing import RepoFileIndexMessage, RepoRegisteredMessage
-from api.schemas.repos import RepoFileProgressMessage
+from api.schemas.repos import RepoFileProgressMessage, RepoStatusProgressMessage
 
 TOP_LEVEL_DIR = "octocat-hello-world-abc123"
 
@@ -81,7 +82,11 @@ class FakeAsyncSession:
             return self.users.get(primary_key)
         return None
 
-    async def scalar(self, _statement) -> RegisteredRepo | None:
+    async def scalar(self, statement) -> object | None:
+        entity = statement.column_descriptions[0]["entity"]
+        if entity is IndexedFile:
+            params = list(statement.compile().params.values())
+            return next((row for row in self.indexed_files if row.file_path in params), None)
         return self.registered_repo
 
     def add(self, row: object) -> None:
@@ -148,11 +153,22 @@ class FakeTokenCipher:
 class FakeRepoProducer:
     """Records every publish() call; RepoIndexer never publishes to a DLQ, so that's not faked here."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        publish_error: Exception | None = None,
+        on_publish: Callable[[str, object], None] | None = None,
+    ) -> None:
+        self._publish_error = publish_error
+        self._on_publish = on_publish
         self.published: list[tuple[str, object, bytes]] = []
 
     async def publish(self, topic: str, message: object, key: bytes) -> None:
+        if self._publish_error:
+            raise self._publish_error
         self.published.append((topic, message, key))
+        if self._on_publish:
+            self._on_publish(topic, message)
 
     @property
     def file_index_messages(self) -> list[RepoFileIndexMessage]:
@@ -161,6 +177,10 @@ class FakeRepoProducer:
     @property
     def progress_messages(self) -> list[RepoFileProgressMessage]:
         return [message for topic, message, _ in self.published if topic == REPO_FILE_PROGRESS]
+
+    @property
+    def status_messages(self) -> list[RepoStatusProgressMessage]:
+        return [message for topic, message, _ in self.published if topic == REPO_STATUS_PROGRESS]
 
 
 class FakeCompletionFinalizer:
@@ -178,7 +198,7 @@ class FakeCompletionFinalizer:
         terminal_statuses = {IndexedFileStatus.INDEXED, IndexedFileStatus.SKIPPED, IndexedFileStatus.FAILED}
         terminal_count = len([row for row in session.indexed_files if row.status in terminal_statuses])
         if terminal_count >= repo.total_files_expected:
-            repo.status = RepoIndexStatus.INDEXED
+            repo.status = RepoIndexStatus.COMPLETED
 
 
 def _make_user(user_id: int = 1) -> User:
@@ -212,6 +232,7 @@ def _make_indexer(
     token_cipher: FakeTokenCipher | None = None,
     repo_producer: FakeRepoProducer | None = None,
     completion_finalizer: FakeCompletionFinalizer | None = None,
+    max_concurrent_file_dispatch: int = 8,
 ) -> tuple[RepoIndexer, FakeRepoProducer]:
     producer = repo_producer or FakeRepoProducer()
     dependencies = RepoIndexerDependencies(
@@ -221,6 +242,7 @@ def _make_indexer(
         github_client=github_client or FakeGitHubClient(),
         repo_producer=producer,
         completion_finalizer=completion_finalizer or FakeCompletionFinalizer(),
+        max_concurrent_file_dispatch=max_concurrent_file_dispatch,
     )
     return RepoIndexer(dependencies), producer
 
@@ -336,7 +358,7 @@ async def test_index_repo_handles_an_empty_repo() -> None:
     assert producer.file_index_messages == []
     # No files at all means total_files_expected == 0, so the finalizer's own
     # terminal_count >= total_files_expected check is satisfied immediately.
-    assert session.registered_repo.status == RepoIndexStatus.INDEXED
+    assert session.registered_repo.status == RepoIndexStatus.COMPLETED
 
 
 @pytest.mark.asyncio
@@ -435,6 +457,34 @@ async def test_index_repo_raises_and_marks_repo_failed_when_tarball_download_fai
 
 
 @pytest.mark.asyncio
+async def test_mark_repo_failed_publishes_repo_status_progress() -> None:
+    session = FakeAsyncSession(users={1: _make_user()}, registered_repo=RegisteredRepo(repo_id=10, status=RepoIndexStatus.PENDING))
+    github_client = FakeGitHubClient(commit_error=RuntimeError("github unreachable"))
+    indexer, producer = _make_indexer(session=session, github_client=github_client)
+
+    with pytest.raises(RuntimeError):
+        await indexer.index_repo(_make_repo_msg())
+
+    [message] = producer.status_messages
+    assert message.repo_id == 10
+    assert message.status == RepoIndexStatus.FAILED
+    assert "github unreachable" in message.status_reason
+
+
+@pytest.mark.asyncio
+async def test_mark_repo_failed_swallows_a_status_progress_publish_failure() -> None:
+    session = FakeAsyncSession(users={1: _make_user()}, registered_repo=RegisteredRepo(repo_id=10, status=RepoIndexStatus.PENDING))
+    github_client = FakeGitHubClient(commit_error=RuntimeError("github unreachable"))
+    producer = FakeRepoProducer(publish_error=RuntimeError("broker unreachable"))
+    indexer, _ = _make_indexer(session=session, github_client=github_client, repo_producer=producer)
+
+    with pytest.raises(RuntimeError, match="github unreachable"):
+        await indexer.index_repo(_make_repo_msg())
+
+    assert session.registered_repo.status == RepoIndexStatus.FAILED
+
+
+@pytest.mark.asyncio
 async def test_index_repo_does_not_raise_when_the_registered_repo_row_is_missing() -> None:
     session = FakeAsyncSession(users={1: _make_user()}, registered_repo=None)
     github_client = FakeGitHubClient(commit_error=RuntimeError("boom"))
@@ -442,6 +492,50 @@ async def test_index_repo_does_not_raise_when_the_registered_repo_row_is_missing
 
     with pytest.raises(RuntimeError):
         await indexer.index_repo(_make_repo_msg())
+
+
+@pytest.mark.asyncio
+async def test_index_repo_skips_files_that_already_have_an_indexed_file_row() -> None:
+    """Simulates a resumed walk: repo.registered is re-published after a pause, and a file
+    already dispatched on the first pass must not be dispatched again."""
+    tarball = _make_tarball({"already-done.py": b"x = 1", "new-file.py": b"y = 2"})
+    session = FakeAsyncSession(
+        users={1: _make_user()}, registered_repo=RegisteredRepo(repo_id=10, status=RepoIndexStatus.PAUSED)
+    )
+    session.added.append(IndexedFile(repo_id=10, file_path="already-done.py", status=IndexedFileStatus.INDEXED))
+    indexer, producer = _make_indexer(session=session, github_client=FakeGitHubClient(tarball=tarball))
+
+    await indexer.index_repo(_make_repo_msg())
+
+    assert {message.file_path for message in producer.file_index_messages} == {"new-file.py"}
+    assert len([row for row in session.indexed_files if row.file_path == "already-done.py"]) == 1
+    assert session.registered_repo.total_files_expected == 2
+
+
+@pytest.mark.asyncio
+async def test_index_repo_stops_dispatching_once_the_repo_is_paused_mid_walk() -> None:
+    tarball = _make_tarball({"first.py": b"a = 1", "second.py": b"b = 2", "third.py": b"c = 3"})
+    session = FakeAsyncSession(
+        users={1: _make_user()}, registered_repo=RegisteredRepo(repo_id=10, status=RepoIndexStatus.PENDING)
+    )
+
+    def pause_once_the_first_file_dispatches(topic: str, _message: object) -> None:
+        if topic == REPO_FILE_INDEX:
+            session.registered_repo.status = RepoIndexStatus.PAUSED
+
+    producer = FakeRepoProducer(on_publish=pause_once_the_first_file_dispatches)
+    indexer, _ = _make_indexer(
+        session=session,
+        github_client=FakeGitHubClient(tarball=tarball),
+        repo_producer=producer,
+        max_concurrent_file_dispatch=1,
+    )
+
+    await indexer.index_repo(_make_repo_msg())
+
+    assert len(producer.file_index_messages) == 1
+    assert session.registered_repo.total_files_expected == 3
+    assert session.registered_repo.status == RepoIndexStatus.PAUSED
 
 
 def test_is_safe_tar_member_rejects_path_traversal(tmp_path) -> None:

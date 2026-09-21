@@ -119,6 +119,18 @@ class FakeCompletionFinalizer:
         self.finalize_calls.append(repo_id)
 
 
+class RaiseOnceCompletionFinalizer:
+    """Simulates an unexpected failure deep inside _index_file, after embedding already succeeded."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def finalize_if_complete(self, _repo_id: int, _session: FakeAsyncSession) -> None:
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("finalizer boom")
+
+
 def _make_message(**overrides) -> RepoFileIndexMessage:
     defaults = {
         "repo_id": 10,
@@ -221,6 +233,46 @@ async def test_process_message_drops_message_when_no_indexed_file_row_exists() -
     assert producer.progress_messages == []
     assert finalizer.finalize_calls == []
     assert kafka_consumer.commit_count == 1
+
+
+@pytest.mark.asyncio
+async def test_process_message_marks_failed_via_fallback_when_index_file_raises_unexpectedly() -> None:
+    indexed_file = IndexedFile(repo_id=10, file_path="main.py", status=IndexedFileStatus.PENDING)
+    consumer, rag, _producer, _finalizer = _make_consumer(
+        indexed_files=[indexed_file, indexed_file], completion_finalizer=RaiseOnceCompletionFinalizer()
+    )
+    message = _make_message()
+    kafka_consumer = FakeKafkaConsumer([])
+
+    await consumer._process_message(FakeConsumerRecord(value=message.model_dump_json().encode()), kafka_consumer)
+
+    assert rag.indexed == [(RepoData(repo_id="10", commit_sha="abc123", owner_id="99"), "main.py", "print('hi')")]
+    assert indexed_file.status == IndexedFileStatus.FAILED
+    assert "finalizer boom" in indexed_file.status_reason
+    assert kafka_consumer.commit_count == 1
+
+
+@pytest.mark.asyncio
+async def test_consume_keeps_processing_later_messages_after_an_unexpected_per_file_failure() -> None:
+    bad_file = IndexedFile(repo_id=10, file_path="bad.py", status=IndexedFileStatus.PENDING)
+    good_file = IndexedFile(repo_id=10, file_path="good.py", status=IndexedFileStatus.PENDING)
+    consumer, _rag, _producer, _finalizer = _make_consumer(
+        indexed_files=[bad_file, bad_file, good_file], completion_finalizer=RaiseOnceCompletionFinalizer()
+    )
+    messages = [
+        FakeConsumerRecord(value=_make_message(file_path="bad.py").model_dump_json().encode()),
+        FakeConsumerRecord(value=_make_message(file_path="good.py").model_dump_json().encode()),
+    ]
+    kafka_consumer = FakeKafkaConsumer(messages)
+    consumer._build = lambda: kafka_consumer
+
+    await consumer.consume()
+
+    assert kafka_consumer.started is True
+    assert kafka_consumer.stopped is True
+    assert bad_file.status == IndexedFileStatus.FAILED
+    assert good_file.status == IndexedFileStatus.INDEXED
+    assert kafka_consumer.commit_count == 2
 
 
 @pytest.mark.asyncio
