@@ -22,7 +22,7 @@ TOPIC = REPO_REGISTERED_DLQ
 BOOTSTRAP_SERVER = settings.kafka_bootstrap_servers
 
 
-class RepoIndexDlqConsumer(ConsumerInterface):
+class RepoIndexDlqConsumer(ConsumerInterface[tuple[str, str, str]]):
     """Sends one notification per message that lands on repo.registered.dlq."""
 
     def __init__(self, notifier: DlqNotifier, topic: str = TOPIC,
@@ -30,18 +30,18 @@ class RepoIndexDlqConsumer(ConsumerInterface):
         super().__init__(topic, bootstrap_servers, group_id, enable_auto_commit=False)
         self._notifier = notifier
 
-    async def consume(self) -> None:
-        consumer = self._build()
-        await consumer.start()
-        try:
-            async for msg in consumer:
-                await self._process_message(msg, consumer)
-        finally:
-            await consumer.stop()
-
-    async def _process_message(self, msg: ConsumerRecord, consumer: AIOKafkaConsumer) -> None:
+    def _parse_msg(self, msg: ConsumerRecord) -> tuple[str, str, str]:
         repo_id = _read_repo_id(msg.value)
         error_type, error_message = _read_error_headers(msg.headers)
+        return repo_id, error_type, error_message
+
+    async def _handle_parse_error(self, msg: ConsumerRecord, error: Exception) -> None:
+        logger.error("Could not interpret repo.registered.dlq message at offset=%s", msg.offset, exc_info=error)
+
+    async def _handle_parsed_message(
+        self, parsed: tuple[str, str, str], msg: ConsumerRecord, consumer: AIOKafkaConsumer
+    ) -> None:
+        repo_id, error_type, error_message = parsed
         try:
             self._notifier.notify(
                 subject=f"repo.registered.dlq: repo_id={repo_id} ({error_type})",
@@ -49,7 +49,6 @@ class RepoIndexDlqConsumer(ConsumerInterface):
             )
         except Exception as error:
             logger.error("Failed to send DLQ notification for offset=%s", msg.offset, exc_info=error)
-        await consumer.commit()
 
 
 def _read_repo_id(payload: bytes) -> str:
