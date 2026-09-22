@@ -264,8 +264,6 @@ class RepoIndexer:
         try:
             await self._dependencies.repo_producer.publish(REPO_FILE_INDEX, message, key)
         except Exception as error:
-            # Same asymmetry as _dispatch_or_mark_failed: a lost dispatch means no consumer
-            # ever re-embeds this file, so it must be recorded as FAILED, not just logged.
             logger.exception(
                 "Failed to dispatch retry for %s repo_id=%s", relative_path, context.repo_msg.repo_id
             )

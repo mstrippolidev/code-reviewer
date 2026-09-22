@@ -18,7 +18,39 @@ function collectFolderPaths(nodes, paths) {
   return paths
 }
 
-function FileTreeNode({ node, depth, expandedPaths, onToggle, onNodeClick }) {
+function formatTimestamp(value) {
+  if (!value) {
+    return '—'
+  }
+  return new Date(value).toLocaleString()
+}
+
+function FileInfoModal({ node, onClose }) {
+  return (
+    <div className="modal-overlay" role="presentation" onClick={onClose}>
+      <div className="modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+        <h3 className="modal-title">{node.name}</h3>
+        <dl className="file-info-list">
+          <dt>Path</dt>
+          <dd>{node.path}</dd>
+          <dt>Status</dt>
+          <dd className="file-info-status">{node.status ?? 'pending'}</dd>
+          <dt>Status reason</dt>
+          <dd>{node.statusReason ?? '—'}</dd>
+          <dt>Indexed at</dt>
+          <dd>{formatTimestamp(node.indexedAt)}</dd>
+        </dl>
+        <div className="modal-actions">
+          <button type="button" className="repo-control-button" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function FileTreeNode({ node, depth, expandedPaths, onToggle, onNodeClick, onShowInfo }) {
   const isFolder = node.type === 'folder'
   const isExpanded = expandedPaths.has(node.path)
 
@@ -32,6 +64,19 @@ function FileTreeNode({ node, depth, expandedPaths, onToggle, onNodeClick }) {
         <span className="file-tree-caret">{isFolder ? (isExpanded ? '▾' : '▸') : ''}</span>
         <span className="file-tree-name">{node.name}</span>
         <span className="file-tree-glyph">{STATUS_GLYPH[node.status] ?? ''}</span>
+        {!isFolder ? (
+          <button
+            type="button"
+            className="file-tree-info-button"
+            aria-label={`Info for ${node.name}`}
+            onClick={(event) => {
+              event.stopPropagation()
+              onShowInfo(node)
+            }}
+          >
+            ⓘ
+          </button>
+        ) : null}
       </div>
       {isFolder && isExpanded ? (
         <ul>
@@ -43,6 +88,7 @@ function FileTreeNode({ node, depth, expandedPaths, onToggle, onNodeClick }) {
               expandedPaths={expandedPaths}
               onToggle={onToggle}
               onNodeClick={onNodeClick}
+              onShowInfo={onShowInfo}
             />
           ))}
         </ul>
@@ -53,6 +99,7 @@ function FileTreeNode({ node, depth, expandedPaths, onToggle, onNodeClick }) {
 
 export function FileTree({ nodes, onNodeClick }) {
   const [expandedPaths, setExpandedPaths] = useState(() => collectFolderPaths(nodes, new Set()))
+  const [infoNode, setInfoNode] = useState(null)
 
   function handleToggle(path) {
     setExpandedPaths((previous) => {
@@ -67,17 +114,21 @@ export function FileTree({ nodes, onNodeClick }) {
   }
 
   return (
-    <ul className="file-tree">
-      {nodes.map((node) => (
-        <FileTreeNode
-          key={node.path}
-          node={node}
-          depth={0}
-          expandedPaths={expandedPaths}
-          onToggle={handleToggle}
-          onNodeClick={onNodeClick}
-        />
-      ))}
-    </ul>
+    <>
+      <ul className="file-tree">
+        {nodes.map((node) => (
+          <FileTreeNode
+            key={node.path}
+            node={node}
+            depth={0}
+            expandedPaths={expandedPaths}
+            onToggle={handleToggle}
+            onNodeClick={onNodeClick}
+            onShowInfo={setInfoNode}
+          />
+        ))}
+      </ul>
+      {infoNode ? <FileInfoModal node={infoNode} onClose={() => setInfoNode(null)} /> : null}
+    </>
   )
 }

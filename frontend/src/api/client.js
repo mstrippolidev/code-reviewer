@@ -66,12 +66,12 @@ export async function registerRepo(token, { repo_id: repoId, full_name: fullName
   return response.json()
 }
 
-export async function pauseRepoIndexing(token, repoId) {
-  return postRepoControl(token, `${API_BASE_URL}/api/repos/${repoId}/pause`)
-}
-
 export async function resumeRepoIndexing(token, repoId) {
   return postRepoControl(token, `${API_BASE_URL}/api/repos/${repoId}/resume`)
+}
+
+export async function retryFailedFiles(token, repoId) {
+  return postRepoControl(token, `${API_BASE_URL}/api/repos/${repoId}/files/retry`)
 }
 
 async function postRepoControl(token, url) {
