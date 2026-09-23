@@ -11,6 +11,13 @@ class RegisterRepoRequest(BaseModel):
 
     repo_id: int
     full_name: str
+    branch: str | None = None
+
+
+class SwitchBranchRequest(BaseModel):
+    """The branch a registered repo should re-index against, replacing whatever is currently indexed."""
+
+    branch: str
 
 
 class RegisteredRepoRead(BaseModel):
@@ -20,6 +27,8 @@ class RegisteredRepoRead(BaseModel):
     owner_id: int
     full_name: str
     default_branch: str
+    branch: str
+    commit_sha: str | None
     status: RepoIndexStatus
     status_reason: str | None
     total_files_expected: int | None
@@ -36,6 +45,15 @@ class IndexedFileRead(BaseModel):
     status: IndexedFileStatus
     status_reason: str | None
     indexed_at: datetime | None
+
+class IndexedFileContentRead(BaseModel):
+    """The stored source of one indexed file, for a client rendering it alongside a review."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    file_path: str
+    content: str
+
 
 class RepoFileProgressMessage(BaseModel):
     """Schema for the progress bar SSE"""

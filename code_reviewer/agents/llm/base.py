@@ -11,6 +11,8 @@ from langchain_core.language_models import BaseChatModel, LanguageModelInput
 from langchain_core.runnables import Runnable
 from pydantic import BaseModel
 
+from code_reviewer.schemas.review import CodeKey
+
 T = TypeVar("T", bound=BaseModel)
 
 
@@ -26,6 +28,9 @@ class LLMInterface(ABC, Generic[T]):
 
     def __init__(self, temperature: float = 0.0) -> None:
         self._temperature = temperature
+
+    def for_code_key(self, code_key: CodeKey) -> "LLMInterface[T]":
+        return self
 
     def create_model(
         self, output_schema: type[T], include_raw: bool = False

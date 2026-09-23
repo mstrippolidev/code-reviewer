@@ -3,7 +3,9 @@
     It orchestrates the intake screen, file selection, and per-file pipeline run and
     call the agents for each.
 """
+import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 
 from code_reviewer.agents.registry import AgentsContainer
 from code_reviewer.guardrails.errors import IntakeRejectedError
@@ -20,7 +22,7 @@ from code_reviewer.rag.dry_matching import find_intra_pr_duplicates
 from code_reviewer.rag.errors import DryMatchingChunkingError
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.rag.structural_hash_store import LocatedChunk
-from code_reviewer.schemas.review import AggregatorOutput, SizeStatus, SkippedFile
+from code_reviewer.schemas.review import AgentReviewEntry, AggregatorOutput, CodeKey, SizeStatus, SkippedFile
 from code_reviewer.schemas.submission import PreparedFile, SubmittedFile
 
 logger = logging.getLogger(__name__)
@@ -30,10 +32,15 @@ _SKIP_REASONS = {
     FileTooLargeError: "file_too_large",
     IntakeRejectedError: "intake_rejected",
 }
+_AGENT_EXECUTION_FAILED_REASON = "agent_execution_failed"
 
 
-def run_pipeline(
-    files: list[SubmittedFile], agents_container: AgentsContainer, repo_data: RepoData | None = None
+async def run_pipeline(
+    files: list[SubmittedFile],
+    agents_container: AgentsContainer,
+    repo_data: RepoData | None = None,
+    on_file_reviewed: Callable[[str, bool, list[AgentReviewEntry]], Awaitable[None]] | None = None,
+    on_agent_reviewed: Callable[[CodeKey, AgentReviewEntry], Awaitable[None]] | None = None,
 ) -> AggregatorOutput:
     """Runs the full pipeline end to end: guards, dispatch, aggregation —
     the single entry point from a raw submission to the final PR report.
@@ -46,18 +53,42 @@ def run_pipeline(
             in it. None for a standalone review with no repo context, in
             which case ARCH/COUP's evidence hop falls back to single-file
             judgment.
+        on_file_reviewed: Optional progress hook, awaited with a file's path,
+            whether its dispatch raised, and every agent entry produced for
+            it (empty on a raise), once that file is settled. Files are
+            processed one at a time, in order, so this is safe to use for
+            incremental progress reporting.
+        on_agent_reviewed: Optional progress hook, awaited with one agent's
+            code_key and its finished AgentReviewEntry the instant that
+            agent finishes on the current file — other agents on that same
+            file may still be running.
 
     Returns:
         The complete PR-level report: one merged entry per reviewed file,
-        plus PR-level meta.
+        plus PR-level meta. A file whose dispatch raises (a provider outage,
+        every retry exhausted) is treated like any other skip — reported in
+        meta.skipped_files rather than failing every other file's review.
     """
-    prepared_files, skipped_files = prepare_files_for_pipeline(files, repo_data)
-    entries = [
-        entry
-        for prepared_file in prepared_files
-        for entry in review_file_runnable(prepared_file, agents_container)
-    ]
-    return Aggregator().build_output(entries, prepared_files, skipped_files)
+    prepared_files, skipped_files = await asyncio.to_thread(prepare_files_for_pipeline, files, repo_data)
+    entries = []
+    reviewed_files = []
+    for prepared_file in prepared_files:
+        file_path = prepared_file.source_file.file_path
+        try:
+            file_entries = await review_file_runnable(
+                prepared_file, agents_container, on_agent_reviewed=on_agent_reviewed
+            )
+        except Exception:
+            logger.exception("Agent dispatch failed for file_path=%s; skipping it and continuing", file_path)
+            skipped_files.append(SkippedFile(file_path=file_path, reason=_AGENT_EXECUTION_FAILED_REASON))
+            if on_file_reviewed is not None:
+                await on_file_reviewed(file_path, True, [])
+            continue
+        entries.extend(file_entries)
+        reviewed_files.append(prepared_file)
+        if on_file_reviewed is not None:
+            await on_file_reviewed(file_path, False, file_entries)
+    return Aggregator().build_output(entries, reviewed_files, skipped_files)
 
 
 def prepare_files_for_pipeline(

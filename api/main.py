@@ -23,10 +23,15 @@ from api.indexing.repo_indexer import RepoIndexerDependencies
 from api.indexing.repo_progress_broadcaster import RepoProgressBroadcaster
 from api.integrations.github import GitHubOAuthClient, GitHubOAuthConfig
 from api.logging_config import configure_logging
+from api.review.review_consumer import ReviewRequestConsumer, ReviewRequestConsumerDependencies
+from api.review.review_progress_broadcaster import ReviewProgressBroadcaster
+from api.routers.agents import router as agents_router
 from api.routers.auth import router as auth_router
 from api.routers.health import router as health_router
 from api.routers.repos import router as repos_router
+from api.routers.reviews import router as reviews_router
 from code_reviewer.agents.llm.openrouter import OpenRouter
+from code_reviewer.agents.registry import build_agent_roster
 from code_reviewer.rag.chunk_explainer import ChunkExplainer
 from code_reviewer.rag.indexer import LlamaIndexRagManager
 
@@ -42,11 +47,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.repo_completion_finalizer = RepoCompletionFinalizer(app.state.kafka_producer)
     app.state.rag_manager = LlamaIndexRagManager(explainer=ChunkExplainer(OpenRouter()))
     app.state.repo_progress_broadcaster = RepoProgressBroadcaster()
+    app.state.agents_container = build_agent_roster(llm=OpenRouter())
+    app.state.review_progress_broadcaster = ReviewProgressBroadcaster()
+    # sentence-transformers, loaded above via the RAG manager/agent roster, attaches its own
+    # root logging handler as a side effect — this must run after that to still be in effect
+    # once the app serves requests.
+    configure_logging(settings)
     await app.state.kafka_producer.start()
     app.state.consumer_tasks = [
         asyncio.create_task(consume(key, dependencies))
         for key, dependencies in _build_consumer_specs(app, settings)
     ]
+    app.state.consumer_tasks.append(asyncio.create_task(_build_review_consumer(app).consume()))
 
     yield
 
@@ -108,10 +120,21 @@ def _build_repo_file_index_consumer_dependencies(
     )
 
 
+def _build_review_consumer(app: FastAPI) -> ReviewRequestConsumer:
+    dependencies = ReviewRequestConsumerDependencies(
+        database_engine=app.state.database_engine,
+        agents_container=app.state.agents_container,
+        broadcaster=app.state.review_progress_broadcaster,
+    )
+    return ReviewRequestConsumer(dependencies)
+
+
 def _register_routers(app: FastAPI) -> None:
     app.include_router(health_router)
+    app.include_router(agents_router)
     app.include_router(auth_router)
     app.include_router(repos_router)
+    app.include_router(reviews_router)
 
 
 def _register_cors(app: FastAPI) -> None:

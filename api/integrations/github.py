@@ -19,6 +19,8 @@ REPO_URL_TEMPLATE = "https://api.github.com/repos/{full_name}"
 REPO_LANGUAGES_URL_TEMPLATE = "https://api.github.com/repos/{full_name}/languages"
 COMMIT_URL_TEMPLATE = "https://api.github.com/repos/{full_name}/commits/{ref}"
 TARBALL_URL_TEMPLATE = "https://api.github.com/repos/{full_name}/tarball/{ref}"
+BRANCHES_URL_TEMPLATE = "https://api.github.com/repos/{full_name}/branches"
+BRANCHES_PER_PAGE = 100
 PYTHON_PERCENTAGE_THRESHOLD = 50.0
 REPOS_PER_PAGE = 15
 WARMUP_CONNECTION_COUNT = 16
@@ -56,6 +58,10 @@ class GitHubCommitFetchError(Exception):
 
 class GitHubTarballFetchError(Exception):
     """Raised when a repo's tarball snapshot cannot be downloaded."""
+
+
+class GitHubBranchFetchError(Exception):
+    """Raised when a repo's branch list cannot be retrieved."""
 
 
 @dataclass(frozen=True)
@@ -206,6 +212,31 @@ class GitHubOAuthClient:
         except httpx.HTTPStatusError as error:
             raise GitHubTarballFetchError(f"GitHub tarball request failed: {error.response.text}") from error
         return response.content
+
+    async def fetch_repo_branches(self, access_token: str, full_name: str) -> list[str]:
+        """Every branch name for a repo, paginated until GitHub returns a short page."""
+        headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/vnd.github+json"}
+        url = BRANCHES_URL_TEMPLATE.format(full_name=full_name)
+        branch_names: list[str] = []
+        page = 1
+        while True:
+            page_data = await self._fetch_branches_page(url, headers, page)
+            branch_names.extend(branch["name"] for branch in page_data)
+            if len(page_data) < BRANCHES_PER_PAGE:
+                return branch_names
+            page += 1
+
+    async def _fetch_branches_page(self, url: str, headers: dict[str, str], page: int) -> list[dict]:
+        params = {"page": page, "per_page": BRANCHES_PER_PAGE}
+        try:
+            response = await self._client.get(url, headers=headers, params=params)
+        except httpx.HTTPError as error:
+            raise GitHubBranchFetchError("Could not reach GitHub to fetch the branch list") from error
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            raise GitHubBranchFetchError(f"GitHub branch list request failed: {error.response.text}") from error
+        return response.json()
 
     def _parse_repo(self, repo_data: dict, languages: dict[str, int]) -> GitHubRepo:
         python_percentage = _python_percentage(languages)

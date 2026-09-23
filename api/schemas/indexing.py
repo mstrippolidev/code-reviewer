@@ -7,7 +7,7 @@ class RepoRegisteredMessage(BaseModel):
     repo_id: int
     owner_id: int
     full_name: str
-    default_branch: str
+    branch: str
     registered_by_user_id: int
 
 

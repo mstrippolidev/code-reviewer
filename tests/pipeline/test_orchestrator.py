@@ -67,6 +67,20 @@ class FakeAgent:
         return [self.execute_agent(chunk, file_path) for chunk in chunks]
 
 
+class RaisingOnFileAgent(FakeAgent):
+    """Raises when dispatched against one specific file, to exercise the
+    per-file failure-isolation path — every other file still succeeds."""
+
+    def __init__(self, code_key: CodeKey, failing_file_path: str) -> None:
+        super().__init__(code_key)
+        self._failing_file_path = failing_file_path
+
+    def execute_agent(self, code: str, file_path: str | None = None, size_status: SizeStatus | None = None) -> AgentOutput:
+        if file_path == self._failing_file_path:
+            raise RuntimeError("simulated provider outage")
+        return super().execute_agent(code, file_path, size_status)
+
+
 class FakeDryJudge:
     """Stands in for DryJudge — never called by these tests, since none
     of them give DRY any evidence to judge."""
@@ -99,25 +113,91 @@ def _file(file_path: str, content: str = "x = 1\n") -> SubmittedFile:
     return SubmittedFile(file_path=file_path, content=content)
 
 
-def test_runs_every_agent_for_a_single_file(container: AgentsContainer) -> None:
-    result = run_pipeline([_file("a.py")], container)
+@pytest.mark.asyncio
+async def test_runs_every_agent_for_a_single_file(container: AgentsContainer) -> None:
+    result = await run_pipeline([_file("a.py")], container)
 
     assert set(result.meta.agents_run) == {CodeKey.COH, CodeKey.VAR, CodeKey.TCASE, CodeKey.DRY}
     assert result.meta.skipped_files == []
 
 
-def test_reviews_every_file_in_the_submission(container: AgentsContainer) -> None:
-    result = run_pipeline([_file("a.py"), _file("b.py")], container)
+@pytest.mark.asyncio
+async def test_reviews_every_file_in_the_submission(container: AgentsContainer) -> None:
+    result = await run_pipeline([_file("a.py"), _file("b.py")], container)
 
     assert {entry.file_path for entry in result.review} == {"a.py", "b.py"}
     assert result.meta.total_files_reviewed == 2
 
 
-def test_no_files_returns_no_review_entries_and_no_skips(container: AgentsContainer) -> None:
-    result = run_pipeline([], container)
+@pytest.mark.asyncio
+async def test_no_files_returns_no_review_entries_and_no_skips(container: AgentsContainer) -> None:
+    result = await run_pipeline([], container)
 
     assert result.review == []
     assert result.meta.skipped_files == []
+
+
+@pytest.mark.asyncio
+async def test_on_file_reviewed_fires_once_per_file_in_order(container: AgentsContainer) -> None:
+    reviewed: list[tuple[str, bool]] = []
+    entries_by_file: dict[str, list[AgentReviewEntry]] = {}
+
+    async def on_file_reviewed(file_path: str, failed: bool, entries: list[AgentReviewEntry]) -> None:
+        reviewed.append((file_path, failed))
+        entries_by_file[file_path] = entries
+
+    await run_pipeline([_file("a.py"), _file("b.py")], container, on_file_reviewed=on_file_reviewed)
+
+    assert reviewed == [("a.py", False), ("b.py", False)]
+    assert {entry.code_key for entry in entries_by_file["a.py"]} == {CodeKey.COH, CodeKey.VAR, CodeKey.TCASE, CodeKey.DRY}
+
+
+@pytest.mark.asyncio
+async def test_on_agent_reviewed_fires_per_agent_per_file(container: AgentsContainer) -> None:
+    reviewed: list[tuple[str, CodeKey]] = []
+
+    async def on_agent_reviewed(code_key: CodeKey, entry) -> None:
+        reviewed.append((entry.file_path, code_key))
+
+    await run_pipeline([_file("a.py"), _file("b.py")], container, on_agent_reviewed=on_agent_reviewed)
+
+    assert {file_path for file_path, _ in reviewed} == {"a.py", "b.py"}
+    assert {code_key for _, code_key in reviewed} == {CodeKey.COH, CodeKey.VAR, CodeKey.TCASE, CodeKey.DRY}
+
+
+@pytest.mark.asyncio
+async def test_agent_dispatch_failure_skips_the_file_and_continues() -> None:
+    """One file's agent raising must not fail the whole submission — it's
+    reported as a skip, like any other pipeline guard rejection, and every
+    other file still gets reviewed."""
+    engine = create_engine("sqlite:///:memory:", poolclass=StaticPool, connect_args={"check_same_thread": False})
+    container = AgentsContainer(
+        file_agents=[RaisingOnFileAgent(CodeKey.COH, failing_file_path="broken.py")],
+        chunk_agents=[FakeAgent(CodeKey.VAR)],
+        tcase_agent=FakeAgent(CodeKey.TCASE),
+        dry_judge=FakeDryJudge(),
+        rag_manager=FakeEmbeddingIndex(),
+        structural_hash_store=StructuralHashStore(engine=engine, schema_name=None),
+        code_similarity_index=FakeCodeSimilarityIndex(),
+        history_match_reranker=HistoryMatchReranker(max_candidates=100, postprocessor=FakeRerankPostprocessor()),
+    )
+    reviewed: list[tuple[str, bool]] = []
+    entries_by_file: dict[str, list[AgentReviewEntry]] = {}
+
+    async def on_file_reviewed(file_path: str, failed: bool, entries: list[AgentReviewEntry]) -> None:
+        reviewed.append((file_path, failed))
+        entries_by_file[file_path] = entries
+
+    result = await run_pipeline(
+        [_file("broken.py"), _file("a.py")], container, on_file_reviewed=on_file_reviewed
+    )
+
+    assert {entry.file_path for entry in result.review} == {"a.py"}
+    assert [skipped.file_path for skipped in result.meta.skipped_files] == ["broken.py"]
+    assert [skipped.reason for skipped in result.meta.skipped_files] == ["agent_execution_failed"]
+    assert reviewed == [("broken.py", True), ("a.py", False)]
+    assert entries_by_file["broken.py"] == []
+    assert entries_by_file["a.py"] != []
 
 
 def test_intra_pr_duplicate_groups_are_attached_per_file() -> None:
@@ -149,13 +229,14 @@ def test_intra_pr_duplicate_detection_degrades_gracefully_on_unparseable_file() 
     assert all(prepared.intra_pr_duplicates == [] for prepared in prepared_files)
 
 
-def test_file_over_the_hard_line_limit_is_skipped_not_reviewed(
+@pytest.mark.asyncio
+async def test_file_over_the_hard_line_limit_is_skipped_not_reviewed(
     container: AgentsContainer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(get_settings(), "max_file_lines", 10)
     oversized = _file("too_big.py", content="x = 1\n" * 20)
 
-    result = run_pipeline([oversized], container)
+    result = await run_pipeline([oversized], container)
 
     assert result.review == []
     assert [skipped_file.file_path for skipped_file in result.meta.skipped_files] == ["too_big.py"]

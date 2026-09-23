@@ -111,7 +111,7 @@ class RepoIndexer:
     ) -> AsyncIterator[tuple[str, str]]:
         access_token = await self._fetch_access_token(repo_msg.registered_by_user_id, session)
         commit_sha = await self._dependencies.github_client.fetch_branch_commit_sha(
-            access_token, repo_msg.full_name, repo_msg.default_branch
+            access_token, repo_msg.full_name, repo_msg.branch
         )
         tarball = await self._dependencies.github_client.download_tarball(access_token, repo_msg.full_name, commit_sha)
         with TemporaryDirectory() as extract_dir:
@@ -166,6 +166,7 @@ class RepoIndexer:
             return
         repo.status = RepoIndexStatus.INDEXING
         repo.total_files_expected = total_files
+        repo.commit_sha = context.commit_sha
         await context.session.commit()
         try:
             await self._dependencies.repo_producer.publish(

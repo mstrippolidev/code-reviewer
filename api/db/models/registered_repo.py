@@ -31,6 +31,8 @@ class RegisteredRepo(Base):
     owner_id: Mapped[int] = mapped_column(BigInteger, index=True)
     full_name: Mapped[str]
     default_branch: Mapped[str]
+    branch: Mapped[str]
+    commit_sha: Mapped[str | None]
     registered_by_user_id: Mapped[int] = mapped_column(ForeignKey("api.users.id"))
     status: Mapped[RepoIndexStatus] = mapped_column(
         SqlEnum(

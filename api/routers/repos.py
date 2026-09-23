@@ -19,18 +19,27 @@ from api.dependencies import (
     get_kafka_producer,
     get_rag_manager,
     get_token_cipher,
+    require_registered_repo,
 )
 from api.indexing.producer import PublishError, RepoIndexProducer
 from api.indexing.repo_progress_broadcaster import RepoProgressBroadcaster
 from api.indexing.topics import REPO_FILE_RETRY, REPO_REGISTERED, REPO_STATUS_PROGRESS
-from api.integrations.github import PYTHON_PERCENTAGE_THRESHOLD, GitHubOAuthClient, GitHubRepo, GitHubRepoFetchError
+from api.integrations.github import (
+    PYTHON_PERCENTAGE_THRESHOLD,
+    GitHubCommitFetchError,
+    GitHubOAuthClient,
+    GitHubRepo,
+    GitHubRepoFetchError,
+)
 from api.schemas.indexing import RepoRegisteredMessage
 from api.schemas.repos import (
+    IndexedFileContentRead,
     IndexedFileRead,
     RegisterRepoRequest,
     RegisteredRepoRead,
     RepoFileProgressMessage,
     RepoStatusProgressMessage,
+    SwitchBranchRequest,
 )
 from api.security.token_cipher import TokenCipher
 from code_reviewer.rag.errors import VectorStoreDeletionError
@@ -71,6 +80,7 @@ async def register_repo(
         owner_id=repo.owner_id,
         full_name=repo.full_name,
         default_branch=repo.default_branch,
+        branch=request.branch or repo.default_branch,
         registered_by_user_id=current_user.id,
         status=RepoIndexStatus.PENDING,
     )
@@ -89,7 +99,7 @@ async def _publish_repo_registered(registered: RegisteredRepo, kafka_producer: R
         repo_id=registered.repo_id,
         owner_id=registered.owner_id,
         full_name=registered.full_name,
-        default_branch=registered.default_branch,
+        branch=registered.branch,
         registered_by_user_id=registered.registered_by_user_id,
     )
     try:
@@ -139,16 +149,9 @@ async def list_indexed_files(
     _current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[IndexedFileRead]:
-    await _get_registered_repo_or_404(repo_id, session)
+    await require_registered_repo(repo_id, session)
     files = await _get_indexed_files(repo_id, session)
     return [IndexedFileRead.model_validate(file) for file in files]
-
-
-async def _get_registered_repo_or_404(repo_id: int, session: AsyncSession) -> RegisteredRepo:
-    repo = await session.scalar(select(RegisteredRepo).where(RegisteredRepo.repo_id == repo_id))
-    if repo is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Repo {repo_id} is not registered")
-    return repo
 
 
 async def _get_indexed_files(repo_id: int, session: AsyncSession) -> list[IndexedFile]:
@@ -156,16 +159,32 @@ async def _get_indexed_files(repo_id: int, session: AsyncSession) -> list[Indexe
     return list(result.all())
 
 
-async def _require_registered_repo(
-    repo_id: int, session: AsyncSession = Depends(get_db_session)
-) -> RegisteredRepo:
-    return await _get_registered_repo_or_404(repo_id, session)
+@router.get("/{repo_id}/files/content")
+async def get_indexed_file_content(
+    file_path: str,
+    repo: RegisteredRepo = Depends(require_registered_repo),
+    _current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> IndexedFileContentRead:
+    file = await session.scalar(
+        select(IndexedFile).where(
+            IndexedFile.repo_id == repo.repo_id,
+            IndexedFile.file_path == file_path,
+            IndexedFile.status == IndexedFileStatus.INDEXED,
+        )
+    )
+    if file is None or file.content is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No indexed content for {file_path} in this repo",
+        )
+    return IndexedFileContentRead.model_validate(file)
 
 
 @router.get("/{repo_id}/files/stream", response_class=EventSourceResponse)
 async def stream_indexed_files(
     request: Request,
-    repo: RegisteredRepo = Depends(_require_registered_repo),
+    repo: RegisteredRepo = Depends(require_registered_repo),
     session: AsyncSession = Depends(get_db_session),
     _current_user: User = Depends(get_current_user),
 ) -> AsyncIterator[ServerSentEvent]:
@@ -201,7 +220,7 @@ def _current_repo_status(repo: RegisteredRepo) -> RepoStatusProgressMessage:
 
 @router.post("/{repo_id}/pause")
 async def pause_repo_indexing(
-    repo: RegisteredRepo = Depends(_require_registered_repo),
+    repo: RegisteredRepo = Depends(require_registered_repo),
     session: AsyncSession = Depends(get_db_session),
     kafka_producer: RepoIndexProducer = Depends(get_kafka_producer),
     _current_user: User = Depends(get_current_user),
@@ -216,7 +235,7 @@ async def pause_repo_indexing(
 
 @router.post("/{repo_id}/resume")
 async def resume_repo_indexing(
-    repo: RegisteredRepo = Depends(_require_registered_repo),
+    repo: RegisteredRepo = Depends(require_registered_repo),
     session: AsyncSession = Depends(get_db_session),
     kafka_producer: RepoIndexProducer = Depends(get_kafka_producer),
     _current_user: User = Depends(get_current_user),
@@ -240,7 +259,7 @@ async def _publish_status_progress(kafka_producer: RepoIndexProducer, repo: Regi
 
 @router.post("/{repo_id}/files/retry")
 async def retry_failed_files(
-    repo: RegisteredRepo = Depends(_require_registered_repo),
+    repo: RegisteredRepo = Depends(require_registered_repo),
     session: AsyncSession = Depends(get_db_session),
     kafka_producer: RepoIndexProducer = Depends(get_kafka_producer),
     _current_user: User = Depends(get_current_user),
@@ -266,7 +285,7 @@ async def _publish_retry(repo: RegisteredRepo, kafka_producer: RepoIndexProducer
         repo_id=repo.repo_id,
         owner_id=repo.owner_id,
         full_name=repo.full_name,
-        default_branch=repo.default_branch,
+        branch=repo.branch,
         registered_by_user_id=repo.registered_by_user_id,
     )
     try:
@@ -280,17 +299,23 @@ async def _publish_retry(repo: RegisteredRepo, kafka_producer: RepoIndexProducer
 
 @router.delete("/{repo_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_registered_repo(
-    repo: RegisteredRepo = Depends(_require_registered_repo),
+    repo: RegisteredRepo = Depends(require_registered_repo),
     session: AsyncSession = Depends(get_db_session),
     rag_manager: LlamaIndexRagManager = Depends(get_rag_manager),
     _current_user: User = Depends(get_current_user),
 ) -> None:
     # Purge the vector store before the registration row: if the purge fails, the repo
     # stays registered (still authorized) rather than leaving unowned content behind.
-    await _purge_vector_store_content(repo.repo_id, rag_manager)
-    await session.execute(delete(IndexedFile).where(IndexedFile.repo_id == repo.repo_id))
+    await _purge_indexed_content(repo.repo_id, session, rag_manager)
     await session.delete(repo)
     await session.commit()
+
+
+async def _purge_indexed_content(repo_id: int, session: AsyncSession, rag_manager: LlamaIndexRagManager) -> None:
+    """Removes every indexed trace of a repo — vector store first, then the IndexedFile rows —
+    without touching the RegisteredRepo row itself, so a deletion and a branch switch share this."""
+    await _purge_vector_store_content(repo_id, rag_manager)
+    await session.execute(delete(IndexedFile).where(IndexedFile.repo_id == repo_id))
 
 
 async def _purge_vector_store_content(repo_id: int, rag_manager: LlamaIndexRagManager) -> None:
@@ -300,4 +325,39 @@ async def _purge_vector_store_content(repo_id: int, rag_manager: LlamaIndexRagMa
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Could not purge this repo's indexed content; repo was not unregistered",
+        ) from error
+
+
+@router.post("/{repo_id}/branch")
+async def switch_repo_branch(
+    request: SwitchBranchRequest,
+    repo: RegisteredRepo = Depends(require_registered_repo),
+    current_user: User = Depends(get_current_user),
+    github_oauth_client: GitHubOAuthClient = Depends(get_github_oauth_client),
+    token_cipher: TokenCipher = Depends(get_token_cipher),
+    kafka_producer: RepoIndexProducer = Depends(get_kafka_producer),
+    rag_manager: LlamaIndexRagManager = Depends(get_rag_manager),
+    session: AsyncSession = Depends(get_db_session),
+) -> RegisteredRepoRead:
+    access_token = token_cipher.decrypt(current_user.encrypted_github_token)
+    await _verify_branch_exists(repo.full_name, request.branch, access_token, github_oauth_client)
+    await _purge_indexed_content(repo.repo_id, session, rag_manager)
+    repo.branch = request.branch
+    repo.status = RepoIndexStatus.PENDING
+    repo.status_reason = None
+    repo.total_files_expected = None
+    repo.commit_sha = None
+    await session.commit()
+    await _publish_repo_registered(repo, kafka_producer)
+    return RegisteredRepoRead.model_validate(repo)
+
+
+async def _verify_branch_exists(
+    full_name: str, branch: str, access_token: str, github_oauth_client: GitHubOAuthClient
+) -> None:
+    try:
+        await github_oauth_client.fetch_branch_commit_sha(access_token, full_name, branch)
+    except GitHubCommitFetchError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"Branch '{branch}' was not found"
         ) from error

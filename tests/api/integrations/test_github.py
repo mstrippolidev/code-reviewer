@@ -6,6 +6,7 @@ import pytest
 import respx
 
 from api.integrations.github import (
+    GitHubBranchFetchError,
     GitHubOAuthClient,
     GitHubOAuthConfig,
     GitHubOAuthLoginError,
@@ -242,3 +243,41 @@ async def test_fetch_user_repos_raises_on_an_http_error() -> None:
 
     with pytest.raises(GitHubRepoFetchError):
         await _client().fetch_user_repos("gho_token", page=1)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_fetch_repo_branches_returns_branch_names() -> None:
+    respx.get("https://api.github.com/repos/octocat/hello-world/branches").mock(
+        return_value=httpx.Response(200, json=[{"name": "main"}, {"name": "develop"}])
+    )
+
+    branches = await _client().fetch_repo_branches("gho_token", "octocat/hello-world")
+
+    assert branches == ["main", "develop"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_fetch_repo_branches_paginates_until_a_short_page() -> None:
+    full_page = [{"name": f"branch-{i}"} for i in range(100)]
+    short_page = [{"name": "last-branch"}]
+    respx.get("https://api.github.com/repos/octocat/hello-world/branches").mock(
+        side_effect=[httpx.Response(200, json=full_page), httpx.Response(200, json=short_page)]
+    )
+
+    branches = await _client().fetch_repo_branches("gho_token", "octocat/hello-world")
+
+    assert len(branches) == 101
+    assert branches[-1] == "last-branch"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_fetch_repo_branches_raises_on_an_http_error() -> None:
+    respx.get("https://api.github.com/repos/octocat/does-not-exist/branches").mock(
+        return_value=httpx.Response(404, text="Not Found")
+    )
+
+    with pytest.raises(GitHubBranchFetchError):
+        await _client().fetch_repo_branches("gho_token", "octocat/does-not-exist")

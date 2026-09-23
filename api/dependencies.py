@@ -3,15 +3,19 @@ from functools import lru_cache
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config.settings import get_api_settings
 from api.db.engine import DatabaseEngine
+from api.db.models.registered_repo import RegisteredRepo
 from api.db.models.user import User
 from api.indexing.producer import RepoIndexProducer
 from api.integrations.github import GitHubOAuthClient, GitHubOAuthConfig
+from api.review.review_progress_broadcaster import ReviewProgressBroadcaster
 from api.security.jwt_service import InvalidAccessTokenError, JwtTokenService
 from api.security.token_cipher import TokenCipher
+from code_reviewer.agents.registry import AgentsContainer
 from code_reviewer.rag.indexer import LlamaIndexRagManager
 
 bearer_scheme = HTTPBearer(auto_error=True)
@@ -55,6 +59,14 @@ def get_rag_manager(request: Request) -> LlamaIndexRagManager:
     return request.app.state.rag_manager
 
 
+def get_agents_container(request: Request) -> AgentsContainer:
+    return request.app.state.agents_container
+
+
+def get_review_broadcaster(request: Request) -> ReviewProgressBroadcaster:
+    return request.app.state.review_progress_broadcaster
+
+
 def get_github_oauth_client(request: Request) -> GitHubOAuthClient:
     settings = get_api_settings()
     config = GitHubOAuthConfig(
@@ -89,3 +101,13 @@ async def _load_user_by_id(user_id: int, session: AsyncSession) -> User:
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired access token")
     return user
+
+
+async def require_registered_repo(
+    repo_id: int, session: AsyncSession = Depends(get_db_session)
+) -> RegisteredRepo:
+    """Shared by any route (repos, reviews) that acts on an already-registered repo."""
+    repo = await session.scalar(select(RegisteredRepo).where(RegisteredRepo.repo_id == repo_id))
+    if repo is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Repo {repo_id} is not registered")
+    return repo

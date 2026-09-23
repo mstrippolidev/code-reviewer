@@ -13,6 +13,7 @@ from code_reviewer.schemas.submission import SubmittedFile
 _MIGRATION_PATH_SEGMENTS = ("migrations/", "alembic/versions/")
 _VENDORED_PATH_SEGMENTS = ("vendor/", "node_modules/", ".venv/", "venv/", "site-packages/")
 _TEST_PATH_SEGMENTS = ("tests/", "test/")
+_TEST_FILE_REASON = "test_file_context_only"
 _LOCK_FILE_NAMES = {
     "poetry.lock",
     "Pipfile.lock",
@@ -51,10 +52,10 @@ def _partition_non_logic_files(
         reason = _non_logic_file_reason(file.file_path)
         if reason is None:
             candidates.append(file)
-        elif reason == "test_file":
+            continue
+        if reason == _TEST_FILE_REASON:
             test_files.append(file)
-        else:
-            excluded.append(SkippedFile(file_path=file.file_path, reason=reason))
+        excluded.append(SkippedFile(file_path=file.file_path, reason=reason))
     return candidates, excluded, test_files
 
 
@@ -67,7 +68,7 @@ def _non_logic_file_reason(file_path: str) -> str | None:
     if _is_vendored_file(file_path):
         return "vendored_file"
     if is_test_file(file_path):
-        return "test_file"
+        return _TEST_FILE_REASON
     return None
 
 

@@ -3,11 +3,16 @@
     agents' work into per-function/class pieces once the file is too
     large for a single call.
 """
+import logging
+import time
+from collections.abc import Awaitable, Callable
+
 from langchain_core.runnables import RunnableLambda, RunnableParallel
 
 from code_reviewer.agents.base import AgentBase, FileReviewMeta, FileSizeAwareAgentBase
 from code_reviewer.agents.coverage_gap import CoverageGapAgent
 from code_reviewer.agents.llm.middleware import rating_from_incidents
+from code_reviewer.agents.llm.timeout import call_with_hard_timeout
 from code_reviewer.agents.registry import AgentsContainer
 from code_reviewer.config.settings import get_settings
 from code_reviewer.pipeline.code_splitter.interface import CodeChunk, CodeSplitterInterface
@@ -19,6 +24,8 @@ from code_reviewer.rag.dry_review import build_dry_review_entry
 from code_reviewer.schemas.paired import Pairing
 from code_reviewer.schemas.review import AgentOutput, AgentReviewEntry, CodeKey, Incident, Priority, SizeStatus
 from code_reviewer.schemas.submission import PreparedFile
+
+logger = logging.getLogger(__name__)
 
 _CHUNKED_SIZE_STATUSES = (SizeStatus.SOFT_LIMIT, SizeStatus.HARD_LIMIT_EXCEEDED)
 
@@ -130,12 +137,15 @@ def _run_dry(agents_container: AgentsContainer, prepared_file: PreparedFile) -> 
     history_matches = _gather_dry_history_matches(agents_container, prepared_file)
     if not intra_pr_groups and not history_matches:
         return AgentReviewEntry(file_path=file_path, code_key=CodeKey.DRY, incidents=[])
-    return build_dry_review_entry(
-        file_path,
-        prepared_file.source_file.content,
-        intra_pr_groups,
-        history_matches,
-        agents_container.dry_judge,
+    return call_with_hard_timeout(
+        lambda: build_dry_review_entry(
+            file_path,
+            prepared_file.source_file.content,
+            intra_pr_groups,
+            history_matches,
+            agents_container.dry_judge,
+        ),
+        timeout=get_settings().dry_agent_timeout_seconds,
     )
 
 
@@ -196,10 +206,11 @@ def _soft_limit_incident(content: str) -> Incident:
     )
 
 
-def review_file_runnable(
+async def review_file_runnable(
     prepared_file: PreparedFile,
     agents_container: AgentsContainer,
     splitter: CodeSplitterInterface | None = None,
+    on_agent_reviewed: Callable[[CodeKey, AgentReviewEntry], Awaitable[None]] | None = None,
 ) -> list[AgentReviewEntry]:
     """Dispatches a prepared file to every built agent, fanned out
     concurrently via a single RunnableParallel instead of sequential calls.
@@ -212,6 +223,9 @@ def review_file_runnable(
         splitter: Splits chunk agents' work into per-function/class
             pieces once the file is too large for one call. Defaults to
             PythonCodeSplit() — this codebase is Python-only today.
+        on_agent_reviewed: Optional progress hook, awaited with one agent's
+            code_key and its finished AgentReviewEntry the instant that
+            branch resolves — other branches may still be running.
 
     Returns:
         One AgentReviewEntry per agent that reviewed this file.
@@ -224,17 +238,52 @@ def review_file_runnable(
         "size_status": prepared_file.size_status,
         "repo_data": prepared_file.repo_data,
     }
-    branches = (
+    raw_branches = (
         {agent.get_agent_key().value: _file_agent_branch(agent) for agent in agents_container.file_agents}
         | {agent.get_agent_key().value: _chunk_agent_branch(agent, splitter) for agent in agents_container.chunk_agents}
         | {"TCASE": _tcase_branch(agents_container.tcase_agent, pairing.get_content())}
         | {"DRY": _dry_branch(agents_container, prepared_file)}
     )
+    branches = {key: branch.with_config({"run_name": key}) for key, branch in raw_branches.items()}
     config = {"max_concurrency": get_settings().max_dispatch_concurrency}
-    results = RunnableParallel(branches).invoke(context, config=config)
+    results: dict[str, AgentOutput | AgentReviewEntry] = {}
+    started_at: dict[str, float] = {}
+    file_path = prepared_file.source_file.file_path
+    logger.info("dispatch started file_path=%s agent_count=%d", file_path, len(branches))
+    async for event in RunnableParallel(branches).astream_events(context, version="v2", config=config):
+        code_key = event["name"]
+        if code_key not in branches:
+            continue
+        if event["event"] == "on_chain_start":
+            started_at[code_key] = time.monotonic()
+            logger.info("agent started code_key=%s file_path=%s", code_key, file_path)
+            continue
+        if event["event"] != "on_chain_end":
+            continue
+        elapsed_seconds = time.monotonic() - started_at.get(code_key, time.monotonic())
+        result = event["data"]["output"]
+        results[code_key] = result
+        logger.info(
+            "agent finished code_key=%s file_path=%s elapsed_seconds=%.2f", code_key, file_path, elapsed_seconds
+        )
+        if on_agent_reviewed is not None:
+            await _report_agent_reviewed(CodeKey(code_key), result, on_agent_reviewed)
+    logger.info("dispatch finished file_path=%s agents_completed=%d", file_path, len(results))
     entries = _unpack_runnable_results(results)
     _apply_cmplx_soft_limit_incident(entries, prepared_file)
     return entries
+
+
+async def _report_agent_reviewed(
+    code_key: CodeKey,
+    result: AgentOutput | AgentReviewEntry,
+    on_agent_reviewed: Callable[[CodeKey, AgentReviewEntry], Awaitable[None]],
+) -> None:
+    """Unwraps one branch's raw result the same way _unpack_runnable_results
+    does, then reports it the instant this one agent finishes rather than
+    waiting for every other branch to also resolve."""
+    entry = result.review[0] if isinstance(result, AgentOutput) else result
+    await on_agent_reviewed(code_key, entry)
 
 
 def _file_agent_branch(agent: FileSizeAwareAgentBase) -> RunnableLambda:

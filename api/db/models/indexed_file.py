@@ -4,7 +4,7 @@
 from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import BigInteger, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import BigInteger, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -43,3 +43,4 @@ class IndexedFile(Base):
     status_reason: Mapped[str | None]
     indexed_at: Mapped[datetime | None]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    content: Mapped[str | None] = mapped_column(Text)

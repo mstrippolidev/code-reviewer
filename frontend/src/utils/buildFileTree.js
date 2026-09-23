@@ -41,6 +41,10 @@ function ensureFolder(root, foldersByPath, segments) {
   return children
 }
 
+export function isSelectableForReview(node) {
+  return node.type === 'file' && node.name.endsWith('.py') && node.status === 'indexed'
+}
+
 export function buildFileTree(files) {
   const root = []
   const foldersByPath = new Map()

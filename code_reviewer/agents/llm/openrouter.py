@@ -7,8 +7,13 @@ from langchain.agents.structured_output import ProviderStrategy, ResponseFormat
 
 from code_reviewer.agents.llm.base import LLMInterface, T
 from code_reviewer.config.settings import get_settings
+from code_reviewer.schemas.review import CodeKey
 
 settings = get_settings()
+
+
+def _fast_code_keys() -> frozenset[str]:
+    return frozenset(key.strip() for key in settings.fast_model_agent_keys.split(",") if key.strip())
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
@@ -27,7 +32,13 @@ class OpenRouter(LLMInterface[T]):
                 disjoint model families — name each one explicitly.
         """
         super().__init__(temperature)
+        self._explicit_model = model_name is not None
         self._model_name = model_name or settings.openrouter_model
+
+    def for_code_key(self, code_key: CodeKey) -> "OpenRouter[T]":
+        if self._explicit_model or code_key.value not in _fast_code_keys():
+            return self
+        return OpenRouter(temperature=self._temperature, model_name=settings.openrouter_fast_model)
 
     def _get_model_name(self) -> str:
         return self._model_name
