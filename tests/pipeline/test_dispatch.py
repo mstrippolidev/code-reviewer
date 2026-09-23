@@ -5,6 +5,7 @@
     dispatch strategies. Agents are faked so these exercise dispatch's
     logic only, never a real LLM.
 """
+import asyncio
 from typing import Callable
 
 import pytest
@@ -209,7 +210,17 @@ def _prepared_file(
 
 
 DispatchFn = Callable[[PreparedFile, AgentsContainer], list[AgentReviewEntry]]
-DISPATCH_FUNCTIONS = pytest.mark.parametrize("dispatch", [review_file, review_file_runnable])
+
+
+def _review_file_runnable_sync(prepared_file: PreparedFile, agents_container: AgentsContainer) -> list[AgentReviewEntry]:
+    """Bridges the now-async review_file_runnable for the shared
+    sync/parallel comparison tests below, so their bodies stay identical
+    for both dispatch strategies rather than sprinkling async/await
+    through every one of them."""
+    return asyncio.run(review_file_runnable(prepared_file, agents_container))
+
+
+DISPATCH_FUNCTIONS = pytest.mark.parametrize("dispatch", [review_file, _review_file_runnable_sync])
 
 
 @DISPATCH_FUNCTIONS
@@ -473,12 +484,28 @@ def _comparable(entries: list[AgentReviewEntry]) -> list[tuple]:
     return sorted(signatures, key=lambda signature: signature[0].value)
 
 
-def test_review_file_and_review_file_runnable_produce_equivalent_results(container: AgentsContainer) -> None:
+@pytest.mark.asyncio
+async def test_review_file_and_review_file_runnable_produce_equivalent_results(container: AgentsContainer) -> None:
     incident = Incident(priority=Priority.HIGH, line_position="1-1", description="d", advice="a")
     container.chunk_agents[1]._incidents = [incident]  # var_agent
     prepared = _prepared_file(size_status=SizeStatus.SOFT_LIMIT, content=SOURCE_WITH_TWO_FUNCTIONS)
 
     sequential = review_file(prepared, container)
-    parallel = review_file_runnable(prepared, container)
+    parallel = await review_file_runnable(prepared, container)
 
     assert _comparable(sequential) == _comparable(parallel)
+
+
+@pytest.mark.asyncio
+async def test_on_agent_reviewed_fires_once_per_branch(container: AgentsContainer) -> None:
+    prepared = _prepared_file(size_status=SizeStatus.NORMAL, content=SOURCE_WITH_TWO_FUNCTIONS)
+    reported: dict[CodeKey, AgentReviewEntry] = {}
+
+    async def on_agent_reviewed(code_key: CodeKey, entry: AgentReviewEntry) -> None:
+        reported[code_key] = entry
+
+    entries = await review_file_runnable(prepared, container, on_agent_reviewed=on_agent_reviewed)
+
+    assert set(reported.keys()) == {entry.code_key for entry in entries}
+    for entry in entries:
+        assert reported[entry.code_key] == entry

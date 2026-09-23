@@ -70,14 +70,15 @@ def test_non_logic_files_are_excluded_even_when_submission_is_under_cap() -> Non
     "test_file_path",
     ["tests/test_service.py", "app/test_service.py", "app/service_test.py"],
 )
-def test_test_files_are_set_aside_as_context_not_skipped(test_file_path: str) -> None:
+def test_test_files_are_set_aside_as_context_and_reported(test_file_path: str) -> None:
     files = [_file(test_file_path), _file("a.py"), _file("b.py"), _file("c.py")]
 
     selected, skipped, test_files = select_pr_files(files)
 
     assert test_file_path not in {file.file_path for file in selected}
-    assert test_file_path not in {entry.file_path for entry in skipped}
     assert test_file_path in {file.file_path for file in test_files}
+    skipped_by_path = {entry.file_path: entry.reason for entry in skipped}
+    assert skipped_by_path[test_file_path] == "test_file_context_only"
 
 
 def test_test_files_are_set_aside_even_when_submission_is_under_cap() -> None:
@@ -86,8 +87,8 @@ def test_test_files_are_set_aside_even_when_submission_is_under_cap() -> None:
     selected, skipped, test_files = select_pr_files(files)
 
     assert selected == [files[0]]
-    assert skipped == []
     assert test_files == [files[1]]
+    assert [entry.file_path for entry in skipped] == ["test_login.py"]
 
 
 def test_test_files_never_count_against_the_cap() -> None:
@@ -102,8 +103,8 @@ def test_test_files_never_count_against_the_cap() -> None:
 
     selected_paths = {file.file_path for file in selected}
     assert selected_paths == {"small.py", "largest.py"}
-    assert skipped == []
     assert {file.file_path for file in test_files} == {"test_small.py", "test_largest.py"}
+    assert {entry.reason for entry in skipped} == {"test_file_context_only"}
 
 
 def test_over_cap_keeps_top_n_candidates_by_line_count() -> None:
