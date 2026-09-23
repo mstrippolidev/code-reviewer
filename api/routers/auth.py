@@ -15,6 +15,7 @@ from api.dependencies import (
     get_token_cipher,
 )
 from api.integrations.github import (
+    GitHubBranchFetchError,
     GitHubOAuthClient,
     GitHubOAuthLoginError,
     GitHubProfileFetchError,
@@ -97,6 +98,23 @@ async def list_repos(
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Could not fetch the GitHub repo list",
+        ) from error
+
+
+@router.get("/repos/branches")
+async def list_repo_branches(
+    full_name: str = Query(),
+    current_user: User = Depends(get_current_user),
+    github_oauth_client: GitHubOAuthClient = Depends(get_github_oauth_client),
+    token_cipher: TokenCipher = Depends(get_token_cipher),
+) -> list[str]:
+    access_token = token_cipher.decrypt(current_user.encrypted_github_token)
+    try:
+        return await github_oauth_client.fetch_repo_branches(access_token, full_name)
+    except GitHubBranchFetchError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not fetch the repo's branch list",
         ) from error
 
 

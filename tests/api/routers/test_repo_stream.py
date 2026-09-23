@@ -87,6 +87,8 @@ def _make_registered_repo(**overrides) -> RegisteredRepo:
         "owner_id": 99,
         "full_name": "octocat/hello-world",
         "default_branch": "main",
+        "branch": "main",
+        "commit_sha": None,
         "registered_by_user_id": 1,
         "status": RepoIndexStatus.INDEXING,
         "created_at": datetime(2026, 1, 1),

@@ -41,7 +41,7 @@ def _make_message(**overrides) -> RepoRegisteredMessage:
         "repo_id": 10,
         "owner_id": 99,
         "full_name": "octocat/hello-world",
-        "default_branch": "main",
+        "branch": "main",
         "registered_by_user_id": 1,
     }
     defaults.update(overrides)

@@ -134,6 +134,7 @@ class RepoFileIndexConsumer(ConsumerInterface[RepoFileIndexMessage]):
         else:
             indexed_file.status = IndexedFileStatus.INDEXED
             indexed_file.indexed_at = datetime.now(UTC).replace(tzinfo=None)
+            indexed_file.content = file_msg.content
         logger.info(
             "Embedding finished file_path=%s repo_id=%s status=%s",
             file_msg.file_path, file_msg.repo_id, indexed_file.status,

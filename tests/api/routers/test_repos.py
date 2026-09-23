@@ -19,7 +19,7 @@ from api.dependencies import (
     get_token_cipher,
 )
 from api.indexing.producer import PublishError
-from api.integrations.github import GitHubRepo, GitHubRepoFetchError
+from api.integrations.github import GitHubCommitFetchError, GitHubRepo, GitHubRepoFetchError
 from api.routers.repos import router as repos_router
 from api.schemas.indexing import RepoRegisteredMessage
 from api.schemas.repos import RepoStatusProgressMessage
@@ -28,14 +28,28 @@ from code_reviewer.rag.errors import VectorStoreDeletionError
 
 
 class FakeGitHubOAuthClient:
-    def __init__(self, *, repo: GitHubRepo | None = None, fetch_error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        repo: GitHubRepo | None = None,
+        fetch_error: Exception | None = None,
+        commit_sha: str | None = "def456",
+        commit_fetch_error: Exception | None = None,
+    ) -> None:
         self._repo = repo
         self._fetch_error = fetch_error
+        self._commit_sha = commit_sha
+        self._commit_fetch_error = commit_fetch_error
 
     async def fetch_repo(self, access_token: str, full_name: str) -> GitHubRepo:
         if self._fetch_error:
             raise self._fetch_error
         return self._repo
+
+    async def fetch_branch_commit_sha(self, access_token: str, full_name: str, ref: str) -> str:
+        if self._commit_fetch_error:
+            raise self._commit_fetch_error
+        return self._commit_sha
 
 
 class FakeRepoIndexProducer:
@@ -161,6 +175,8 @@ def _make_registered_repo(**overrides) -> RegisteredRepo:
         "owner_id": 99,
         "full_name": "octocat/hello-world",
         "default_branch": "main",
+        "branch": "main",
+        "commit_sha": None,
         "registered_by_user_id": 1,
         "status": RepoIndexStatus.COMPLETED,
         "created_at": datetime(2026, 1, 1),
@@ -280,6 +296,7 @@ def test_register_repo_rejects_a_repo_id_already_registered() -> None:
         owner_id=99,
         full_name="octocat/hello-world",
         default_branch="main",
+        branch="main",
         registered_by_user_id=1,
         status=RepoIndexStatus.COMPLETED,
         created_at=datetime(2026, 1, 1),
@@ -324,6 +341,7 @@ def test_list_registered_repos_returns_every_row() -> None:
         owner_id=99,
         full_name="octocat/hello-world",
         default_branch="main",
+        branch="main",
         registered_by_user_id=1,
         status=RepoIndexStatus.COMPLETED,
         created_at=datetime(2026, 1, 1),
@@ -433,6 +451,40 @@ def test_list_indexed_files_returns_404_for_an_unregistered_repo() -> None:
     client = TestClient(app)
 
     response = client.get("/api/repos/999/files")
+
+    assert response.status_code == 404
+
+
+def test_get_indexed_file_content_returns_the_stored_source() -> None:
+    registered = _make_registered_repo()
+    stored = _make_indexed_file(file_path="src/a.py", content="def add(a, b):\n    return a + b\n")
+    user, cipher = _make_authenticated_user()
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(),
+        session=FakeAsyncSession(existing=[registered], indexed_files=[stored]),
+        current_user=user,
+        token_cipher=cipher,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/repos/10/files/content", params={"file_path": "src/a.py"})
+
+    assert response.status_code == 200
+    assert response.json() == {"file_path": "src/a.py", "content": "def add(a, b):\n    return a + b\n"}
+
+
+def test_get_indexed_file_content_returns_404_when_the_file_has_no_indexed_content() -> None:
+    registered = _make_registered_repo()
+    user, cipher = _make_authenticated_user()
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(),
+        session=FakeAsyncSession(existing=[registered], indexed_files=[]),
+        current_user=user,
+        token_cipher=cipher,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/repos/10/files/content", params={"file_path": "src/missing.py"})
 
     assert response.status_code == 404
 
@@ -760,3 +812,48 @@ def test_retry_failed_files_returns_404_for_an_unregistered_repo() -> None:
     response = client.post("/api/repos/999/files/retry")
 
     assert response.status_code == 404
+
+
+def test_switch_repo_branch_purges_and_republishes() -> None:
+    registered = _make_registered_repo(branch="main", commit_sha="abc123", status=RepoIndexStatus.COMPLETED)
+    files = [_make_indexed_file()]
+    user, cipher = _make_authenticated_user()
+    kafka_producer = FakeRepoIndexProducer()
+    rag_manager = FakeRagManager()
+    session = FakeAsyncSession(existing=[registered], indexed_files=files)
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(commit_sha="feature-sha"),
+        session=session,
+        current_user=user,
+        token_cipher=cipher,
+        kafka_producer=kafka_producer,
+        rag_manager=rag_manager,
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/repos/10/branch", json={"branch": "feature"})
+
+    assert response.status_code == 200
+    assert response.json()["branch"] == "feature"
+    assert response.json()["status"] == "pending"
+    assert rag_manager.deleted_repo_ids == ["10"]
+    assert session._indexed_files == []
+    [message] = kafka_producer.published
+    assert message.branch == "feature"
+
+
+def test_switch_repo_branch_rejects_a_branch_github_cannot_find() -> None:
+    registered = _make_registered_repo(branch="main")
+    user, cipher = _make_authenticated_user()
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(commit_fetch_error=GitHubCommitFetchError("not found")),
+        session=FakeAsyncSession(existing=[registered]),
+        current_user=user,
+        token_cipher=cipher,
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/repos/10/branch", json={"branch": "does-not-exist"})
+
+    assert response.status_code == 400
+    assert registered.branch == "main"
