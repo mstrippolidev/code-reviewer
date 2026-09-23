@@ -13,9 +13,9 @@ _R = TypeVar("_R")
 _LLM_CALL_EXECUTOR = ThreadPoolExecutor(thread_name_prefix="llm-call")
 
 
-def call_with_hard_timeout(call: Callable[[], _R]) -> _R:
+def call_with_hard_timeout(call: Callable[[], _R], timeout: float | None = None) -> _R:
     future: Future[_R] = _LLM_CALL_EXECUTOR.submit(call)
-    timeout = get_settings().llm_call_timeout_seconds
+    timeout = timeout if timeout is not None else get_settings().llm_call_timeout_seconds
     try:
         return future.result(timeout=timeout)
     except FutureTimeoutError as error:

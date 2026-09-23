@@ -28,6 +28,7 @@ from code_reviewer.rag.indexer import LlamaIndexRagManager
 from code_reviewer.rag.rerank import HistoryMatchReranker
 from code_reviewer.rag.shared_exemplars import SharedExemplarStore
 from code_reviewer.rag.structural_hash_store import StructuralHashStore
+from code_reviewer.schemas.review import CodeKey
 
 
 @dataclass(frozen=True)
@@ -95,24 +96,24 @@ def build_agent_roster(
     shared_exemplar_store = shared_exemplar_store or SharedExemplarStore()
     corpora = ExemplarCorpora(repo=exemplar_store, shared=shared_exemplar_store)
     file_agents = [
-        SolidSrpOcpAgent(llm, corpora),
-        SolidLspDipAgent(llm, corpora),
-        CohesionAgent(llm, corpora),
-        CouplingAgent(llm, rag_manager, corpora),
-        ArchitectureAgent(llm, rag_manager),
-        BoundariesAgent(llm),
+        SolidSrpOcpAgent(_llm_for(CodeKey.SOLID1, llm), corpora),
+        SolidLspDipAgent(_llm_for(CodeKey.SOLID2, llm), corpora),
+        CohesionAgent(_llm_for(CodeKey.COH, llm), corpora),
+        CouplingAgent(_llm_for(CodeKey.COUP, llm), rag_manager, corpora),
+        ArchitectureAgent(_llm_for(CodeKey.ARCH, llm), rag_manager),
+        BoundariesAgent(_llm_for(CodeKey.BOUND, llm)),
     ]
     chunk_agents = [
-        NamingAgent(llm),
-        ErrorsAgent(llm),
-        CommentsAgent(llm),
-        ConcurrencyAgent(llm),
-        ComplexityAgent(llm),
-        TestabilityAgent(llm),
+        NamingAgent(_llm_for(CodeKey.VAR, llm)),
+        ErrorsAgent(_llm_for(CodeKey.ERR, llm)),
+        CommentsAgent(_llm_for(CodeKey.CMT, llm)),
+        ConcurrencyAgent(_llm_for(CodeKey.CONC, llm)),
+        ComplexityAgent(_llm_for(CodeKey.CMPLX, llm)),
+        TestabilityAgent(_llm_for(CodeKey.TEST, llm)),
     ]
-    tcase_agent = CoverageGapAgent(llm)
+    tcase_agent = CoverageGapAgent(_llm_for(CodeKey.TCASE, llm))
     dry_judge: DryJudgeLike = SizeGuardedDryJudge(
-        DryJudge(llm),
+        DryJudge(_llm_for(CodeKey.DRY, llm)),
         SplitConfig(
             max_pair_chars=get_settings().dry_judge_max_pair_chars,
             overlap_chars=get_settings().dry_judge_split_overlap_chars,
@@ -131,3 +132,7 @@ def build_agent_roster(
         exemplar_store=exemplar_store,
         shared_exemplar_store=shared_exemplar_store,
     )
+
+
+def _llm_for(code_key: CodeKey, llm: LLMInterface | None) -> LLMInterface | None:
+    return llm.for_code_key(code_key) if llm is not None else None

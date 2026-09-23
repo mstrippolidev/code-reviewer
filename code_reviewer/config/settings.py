@@ -38,7 +38,9 @@ class Settings(BaseSettings):
 
     openrouter_api_key: str
     openrouter_model: str
+    openrouter_fast_model: str = "google/gemini-3.8-flash"
     openrouter_judge_models: str = ""
+    fast_model_agent_keys: str = ""
 
     pg_host: str
     pg_port: int
@@ -61,12 +63,13 @@ class Settings(BaseSettings):
     exemplar_relevance_floor: float = 0.5
     exemplar_top_k: int = 2
 
-    dry_rerank_max_candidates: int = 5
+    dry_rerank_max_candidates: int = 3
 
     dry_judge_max_pair_chars: int = 4000
     dry_judge_split_overlap_chars: int = 400
 
     llm_call_timeout_seconds: float = 60.0
+    dry_agent_timeout_seconds: float = 300.0
 
 
 
