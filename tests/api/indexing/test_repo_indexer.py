@@ -89,6 +89,14 @@ class FakeAsyncSession:
             return next((row for row in self.indexed_files if row.file_path in params), None)
         return self.registered_repo
 
+    async def scalars(self, statement) -> "_FakeScalarResult":
+        entity = statement.column_descriptions[0]["entity"]
+        if entity is IndexedFile:
+            return _FakeScalarResult(
+                [row.file_path for row in self.indexed_files if row.status == IndexedFileStatus.FAILED]
+            )
+        return _FakeScalarResult([])
+
     def add(self, row: object) -> None:
         self.added.append(row)
 
@@ -105,6 +113,14 @@ class FakeAsyncSession:
     def indexed_file(self, file_path: str) -> IndexedFile:
         [match] = [row for row in self.indexed_files if row.file_path == file_path]
         return match
+
+
+class _FakeScalarResult:
+    def __init__(self, items: list) -> None:
+        self._items = items
+
+    def all(self) -> list:
+        return self._items
 
 
 class FakeDatabaseEngine:
@@ -574,3 +590,105 @@ def test_walk_repo_files_prunes_hidden_directories(tmp_path) -> None:
     relative_paths = _walk_repo_files(str(tmp_path))
 
     assert relative_paths == [os.path.join("src", "main.py")]
+
+
+@pytest.mark.asyncio
+async def test_retry_failed_files_redispatches_only_failed_files() -> None:
+    tarball = _make_tarball({"good.py": b"x = 1", "broken.py": b"y = 2"})
+    session = FakeAsyncSession(
+        users={1: _make_user()}, registered_repo=RegisteredRepo(repo_id=10, status=RepoIndexStatus.COMPLETED)
+    )
+    session.added.append(IndexedFile(repo_id=10, file_path="good.py", status=IndexedFileStatus.INDEXED))
+    session.added.append(
+        IndexedFile(repo_id=10, file_path="broken.py", status=IndexedFileStatus.FAILED, status_reason="boom")
+    )
+    indexer, producer = _make_indexer(session=session, github_client=FakeGitHubClient(tarball=tarball))
+
+    await indexer.retry_failed_files(_make_repo_msg())
+
+    assert {message.file_path for message in producer.file_index_messages} == {"broken.py"}
+
+
+@pytest.mark.asyncio
+async def test_retry_failed_files_publishes_fresh_content_for_the_retried_file() -> None:
+    tarball = _make_tarball({"broken.py": b"print('fixed now')"})
+    session = FakeAsyncSession(
+        users={1: _make_user()}, registered_repo=RegisteredRepo(repo_id=10, status=RepoIndexStatus.FAILED)
+    )
+    session.added.append(IndexedFile(repo_id=10, file_path="broken.py", status=IndexedFileStatus.FAILED))
+    indexer, producer = _make_indexer(
+        session=session, github_client=FakeGitHubClient(tarball=tarball, commit_sha="fixed-sha")
+    )
+
+    await indexer.retry_failed_files(_make_repo_msg(repo_id=10, owner_id=99))
+
+    [message] = producer.file_index_messages
+    assert message == RepoFileIndexMessage(
+        repo_id=10, owner_id=99, commit_sha="fixed-sha", file_path="broken.py", content="print('fixed now')"
+    )
+
+
+@pytest.mark.asyncio
+async def test_retry_failed_files_does_not_touch_an_already_indexed_file() -> None:
+    tarball = _make_tarball({"good.py": b"x = 1"})
+    session = FakeAsyncSession(
+        users={1: _make_user()}, registered_repo=RegisteredRepo(repo_id=10, status=RepoIndexStatus.COMPLETED)
+    )
+    session.added.append(IndexedFile(repo_id=10, file_path="good.py", status=IndexedFileStatus.INDEXED))
+    indexer, producer = _make_indexer(session=session, github_client=FakeGitHubClient(tarball=tarball))
+
+    await indexer.retry_failed_files(_make_repo_msg())
+
+    assert producer.file_index_messages == []
+    assert session.indexed_file("good.py").status == IndexedFileStatus.INDEXED
+
+
+@pytest.mark.asyncio
+async def test_retry_failed_files_marks_a_file_failed_again_when_it_no_longer_exists_in_the_tarball() -> None:
+    tarball = _make_tarball({})
+    session = FakeAsyncSession(
+        users={1: _make_user()}, registered_repo=RegisteredRepo(repo_id=10, status=RepoIndexStatus.FAILED)
+    )
+    session.added.append(IndexedFile(repo_id=10, file_path="removed.py", status=IndexedFileStatus.FAILED))
+    indexer, producer = _make_indexer(session=session, github_client=FakeGitHubClient(tarball=tarball))
+
+    await indexer.retry_failed_files(_make_repo_msg())
+
+    removed = session.indexed_file("removed.py")
+    assert removed.status == IndexedFileStatus.FAILED
+    assert removed.status_reason
+    assert producer.file_index_messages == []
+    [progress] = [message for message in producer.progress_messages if message.file_path == "removed.py"]
+    assert progress.status == IndexedFileStatus.FAILED
+
+
+@pytest.mark.asyncio
+async def test_retry_failed_files_calls_the_completion_finalizer_on_success() -> None:
+    tarball = _make_tarball({"broken.py": b"y = 2"})
+    session = FakeAsyncSession(
+        users={1: _make_user()}, registered_repo=RegisteredRepo(repo_id=10, status=RepoIndexStatus.FAILED)
+    )
+    session.added.append(IndexedFile(repo_id=10, file_path="broken.py", status=IndexedFileStatus.FAILED))
+    finalizer = FakeCompletionFinalizer()
+    indexer, _ = _make_indexer(
+        session=session, github_client=FakeGitHubClient(tarball=tarball), completion_finalizer=finalizer
+    )
+
+    await indexer.retry_failed_files(_make_repo_msg())
+
+    assert finalizer.finalize_calls == [10]
+
+
+@pytest.mark.asyncio
+async def test_retry_failed_files_raises_and_marks_repo_failed_when_tarball_download_fails() -> None:
+    session = FakeAsyncSession(
+        users={1: _make_user()}, registered_repo=RegisteredRepo(repo_id=10, status=RepoIndexStatus.FAILED)
+    )
+    session.added.append(IndexedFile(repo_id=10, file_path="broken.py", status=IndexedFileStatus.FAILED))
+    github_client = FakeGitHubClient(tarball_error=RuntimeError("download timed out"))
+    indexer, _ = _make_indexer(session=session, github_client=github_client)
+
+    with pytest.raises(RuntimeError):
+        await indexer.retry_failed_files(_make_repo_msg())
+
+    assert session.registered_repo.status == RepoIndexStatus.FAILED

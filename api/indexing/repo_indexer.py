@@ -6,6 +6,8 @@ import asyncio
 import logging
 import os
 import tarfile
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from io import BytesIO
 from tempfile import TemporaryDirectory
@@ -82,6 +84,31 @@ class RepoIndexer:
                 await self._dependencies.completion_finalizer.finalize_if_complete(repo_msg.repo_id, session)
 
     async def _fetch_and_index(self, repo_msg: RepoRegisteredMessage, session: AsyncSession) -> None:
+        async with self._extracted_repo(repo_msg, session) as (commit_sha, repo_root):
+            context = _IndexingContext(repo_msg=repo_msg, commit_sha=commit_sha, repo_root=repo_root, session=session)
+            await self._index_repo_files(context)
+
+    async def retry_failed_files(self, repo_msg: RepoRegisteredMessage) -> None:
+        """Re-fetches the repo's tarball and re-dispatches only its currently-FAILED files."""
+        async with self._dependencies.database_engine.new_session() as session:
+            try:
+                async with self._extracted_repo(repo_msg, session) as (commit_sha, repo_root):
+                    context = _IndexingContext(
+                        repo_msg=repo_msg, commit_sha=commit_sha, repo_root=repo_root, session=session
+                    )
+                    await self._redispatch_failed_files(context)
+            except Exception as error:
+                logger.error("Failed to retry failed files for repo_id=%s", repo_msg.repo_id, exc_info=error)
+                await session.rollback()
+                await self._mark_repo_failed(repo_msg.repo_id, str(error), session)
+                raise
+            else:
+                await self._dependencies.completion_finalizer.finalize_if_complete(repo_msg.repo_id, session)
+
+    @asynccontextmanager
+    async def _extracted_repo(
+        self, repo_msg: RepoRegisteredMessage, session: AsyncSession
+    ) -> AsyncIterator[tuple[str, str]]:
         access_token = await self._fetch_access_token(repo_msg.registered_by_user_id, session)
         commit_sha = await self._dependencies.github_client.fetch_branch_commit_sha(
             access_token, repo_msg.full_name, repo_msg.default_branch
@@ -89,9 +116,7 @@ class RepoIndexer:
         tarball = await self._dependencies.github_client.download_tarball(access_token, repo_msg.full_name, commit_sha)
         with TemporaryDirectory() as extract_dir:
             await asyncio.to_thread(_extract_tarball_safely, tarball, extract_dir)
-            repo_root = _find_extracted_repo_root(extract_dir)
-            context = _IndexingContext(repo_msg=repo_msg, commit_sha=commit_sha, repo_root=repo_root, session=session)
-            await self._index_repo_files(context)
+            yield commit_sha, _find_extracted_repo_root(extract_dir)
 
     async def _fetch_access_token(self, user_id: int, session: AsyncSession) -> str:
         user = await session.get(User, user_id)
@@ -198,6 +223,83 @@ class RepoIndexer:
         else:
             logger.info(
                 "Dispatched file_path=%s for repo_id=%s to repo.file.index", message.file_path, context.repo_msg.repo_id
+            )
+
+    async def _redispatch_failed_files(self, context: _IndexingContext) -> None:
+        failed_paths = await self._get_failed_file_paths(context.repo_msg.repo_id)
+        semaphore = asyncio.Semaphore(self._dependencies.max_concurrent_file_dispatch)
+        await asyncio.gather(*(self._retry_one_file(context, path, semaphore) for path in failed_paths))
+
+    async def _get_failed_file_paths(self, repo_id: int) -> list[str]:
+        async with self._dependencies.database_engine.new_session() as session:
+            rows = await session.scalars(
+                select(IndexedFile.file_path).where(
+                    IndexedFile.repo_id == repo_id, IndexedFile.status == IndexedFileStatus.FAILED
+                )
+            )
+            return list(rows.all())
+
+    async def _retry_one_file(
+        self, context: _IndexingContext, relative_path: str, semaphore: asyncio.Semaphore
+    ) -> None:
+        async with semaphore:
+            try:
+                content = await asyncio.to_thread(_read_file, os.path.join(context.repo_root, relative_path))
+            except Exception as error:
+                await self._update_existing_terminal(context, relative_path, IndexedFileStatus.FAILED, str(error))
+                return
+            message = RepoFileIndexMessage(
+                repo_id=context.repo_msg.repo_id,
+                owner_id=context.repo_msg.owner_id,
+                commit_sha=context.commit_sha,
+                file_path=relative_path,
+                content=content,
+            )
+            await self._dispatch_retry_or_mark_failed(context, relative_path, message)
+
+    async def _dispatch_retry_or_mark_failed(
+        self, context: _IndexingContext, relative_path: str, message: RepoFileIndexMessage
+    ) -> None:
+        key = f"{context.repo_msg.repo_id}:{relative_path}".encode()
+        try:
+            await self._dependencies.repo_producer.publish(REPO_FILE_INDEX, message, key)
+        except Exception as error:
+            logger.exception(
+                "Failed to dispatch retry for %s repo_id=%s", relative_path, context.repo_msg.repo_id
+            )
+            await self._update_existing_terminal(
+                context, relative_path, IndexedFileStatus.FAILED, f"could not dispatch retry: {error}"
+            )
+        else:
+            logger.info("Dispatched retry for file_path=%s repo_id=%s", relative_path, context.repo_msg.repo_id)
+
+    async def _update_existing_terminal(
+        self, context: _IndexingContext, relative_path: str, status: IndexedFileStatus, reason: str
+    ) -> None:
+        """Like _record_terminal, but updates the row a retry is re-processing instead of inserting a new one."""
+        async with self._dependencies.database_engine.new_session() as session:
+            indexed_file = await session.scalar(
+                select(IndexedFile).where(
+                    IndexedFile.repo_id == context.repo_msg.repo_id, IndexedFile.file_path == relative_path
+                )
+            )
+            if indexed_file is None:
+                return
+            indexed_file.status = status
+            indexed_file.status_reason = reason
+            await session.commit()
+        try:
+            await self._dependencies.repo_producer.publish(
+                REPO_FILE_PROGRESS,
+                RepoFileProgressMessage(
+                    repo_id=context.repo_msg.repo_id, file_path=relative_path, status=status, status_reason=reason
+                ),
+                f"{context.repo_msg.repo_id}:{relative_path}".encode(),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to publish repo.file.progress for repo_id=%s file_path=%s",
+                context.repo_msg.repo_id, relative_path,
             )
 
     async def _record_terminal(

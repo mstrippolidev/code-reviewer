@@ -5,11 +5,16 @@ from api.indexing.consumers.dlq_consumer import RepoIndexDlqConsumer
 from api.indexing.consumers.dlq_notifier import DlqNotifier
 from api.indexing.consumers.interface import ConsumerInterface
 from api.indexing.consumers.repo_file_index_consumer import RepoFileIndexConsumer, RepoFileIndexConsumerDependencies
+from api.indexing.consumers.repo_file_retry_consumer import RepoFileRetryConsumer, RepoFileRetryConsumerDependencies
 from api.indexing.consumers.repo_index_consumer import RepoIndexConsumer, RepoIndexConsumerDependencies
 from api.indexing.consumers.repo_progress_consumer import RepoProgressConsumer, RepoProgressConsumerDependencies
 
 ConsumerDependencies = (
-    RepoIndexConsumerDependencies | RepoFileIndexConsumerDependencies | RepoProgressConsumerDependencies | DlqNotifier
+    RepoIndexConsumerDependencies
+    | RepoFileIndexConsumerDependencies
+    | RepoFileRetryConsumerDependencies
+    | RepoProgressConsumerDependencies
+    | DlqNotifier
 )
 
 class FactoryError(Exception):
@@ -29,6 +34,8 @@ class FactoryConsumer:
             return RepoIndexDlqConsumer(dependencies)
         if key == 'repo_file_indexing':
             return RepoFileIndexConsumer(dependencies)
+        if key == 'repo_file_retry':
+            return RepoFileRetryConsumer(dependencies)
         if key == 'repo_progress':
             return RepoProgressConsumer(dependencies)
         raise FactoryError(f"{key} does not exists")

@@ -49,7 +49,14 @@ export function buildFileTree(files) {
     const segments = file.path.split('/')
     const fileName = segments.pop()
     const children = ensureFolder(root, foldersByPath, segments)
-    children.push({ name: fileName, path: file.path, type: 'file', status: file.status })
+    children.push({
+      name: fileName,
+      path: file.path,
+      type: 'file',
+      status: file.status,
+      statusReason: file.statusReason ?? null,
+      indexedAt: file.indexedAt ?? null,
+    })
   }
 
   for (const node of root) {

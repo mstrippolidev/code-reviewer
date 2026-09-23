@@ -9,7 +9,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.models.indexed_file import IndexedFile
+from api.db.models.indexed_file import IndexedFile, IndexedFileStatus
 from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 from api.db.models.user import User
 from api.dependencies import (
@@ -22,7 +22,7 @@ from api.dependencies import (
 )
 from api.indexing.producer import PublishError, RepoIndexProducer
 from api.indexing.repo_progress_broadcaster import RepoProgressBroadcaster
-from api.indexing.topics import REPO_REGISTERED, REPO_STATUS_PROGRESS
+from api.indexing.topics import REPO_FILE_RETRY, REPO_REGISTERED, REPO_STATUS_PROGRESS
 from api.integrations.github import PYTHON_PERCENTAGE_THRESHOLD, GitHubOAuthClient, GitHubRepo, GitHubRepoFetchError
 from api.schemas.indexing import RepoRegisteredMessage
 from api.schemas.repos import (
@@ -236,6 +236,46 @@ async def _publish_status_progress(kafka_producer: RepoIndexProducer, repo: Regi
     except Exception:
         # A lost notification, not a lost result — repo.status above is already committed.
         logger.exception("Failed to publish repo.status.progress for repo_id=%s", repo.repo_id)
+
+
+@router.post("/{repo_id}/files/retry")
+async def retry_failed_files(
+    repo: RegisteredRepo = Depends(_require_registered_repo),
+    session: AsyncSession = Depends(get_db_session),
+    kafka_producer: RepoIndexProducer = Depends(get_kafka_producer),
+    _current_user: User = Depends(get_current_user),
+) -> RegisteredRepoRead:
+    if repo.status not in _TERMINAL_REPO_STATUSES:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Repo indexing has not finished yet")
+    has_failed_files = await session.scalar(
+        select(IndexedFile.id)
+        .where(IndexedFile.repo_id == repo.repo_id, IndexedFile.status == IndexedFileStatus.FAILED)
+        .limit(1)
+    )
+    if has_failed_files is None:
+        return RegisteredRepoRead.model_validate(repo)
+    await _publish_retry(repo, kafka_producer)
+    repo.status = RepoIndexStatus.INDEXING
+    await session.commit()
+    await _publish_status_progress(kafka_producer, repo)
+    return RegisteredRepoRead.model_validate(repo)
+
+
+async def _publish_retry(repo: RegisteredRepo, kafka_producer: RepoIndexProducer) -> None:
+    message = RepoRegisteredMessage(
+        repo_id=repo.repo_id,
+        owner_id=repo.owner_id,
+        full_name=repo.full_name,
+        default_branch=repo.default_branch,
+        registered_by_user_id=repo.registered_by_user_id,
+    )
+    try:
+        await kafka_producer.publish(REPO_FILE_RETRY, message, str(repo.repo_id).encode())
+    except PublishError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not schedule a retry of this repo's failed files",
+        ) from error
 
 
 @router.delete("/{repo_id}", status_code=status.HTTP_204_NO_CONTENT)
