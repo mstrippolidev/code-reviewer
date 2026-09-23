@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { isSelectableForReview } from '../utils/buildFileTree'
 
 const STATUS_GLYPH = {
   pending: '⏳',
@@ -23,6 +24,10 @@ function formatTimestamp(value) {
     return '—'
   }
   return new Date(value).toLocaleString()
+}
+
+function isPythonFile(node) {
+  return node.type === 'file' && node.name.endsWith('.py')
 }
 
 function FileInfoModal({ node, onClose }) {
@@ -50,9 +55,11 @@ function FileInfoModal({ node, onClose }) {
   )
 }
 
-function FileTreeNode({ node, depth, expandedPaths, onToggle, onNodeClick, onShowInfo }) {
+function FileTreeNode({ node, depth, expandedPaths, onToggle, onNodeClick, onShowInfo, selectedPaths, onToggleSelect }) {
   const isFolder = node.type === 'folder'
   const isExpanded = expandedPaths.has(node.path)
+
+  const isDraggableForReview = selectedPaths && isSelectableForReview(node)
 
   return (
     <li>
@@ -60,8 +67,21 @@ function FileTreeNode({ node, depth, expandedPaths, onToggle, onNodeClick, onSho
         className={`file-tree-node file-tree-${node.type} file-tree-status-${node.status ?? 'pending'}`}
         style={{ paddingLeft: `${depth * 1.25}rem` }}
         onClick={() => (isFolder ? onToggle(node.path) : onNodeClick?.(node))}
+        draggable={isDraggableForReview}
+        onDragStart={(event) => event.dataTransfer.setData('text/plain', node.path)}
       >
         <span className="file-tree-caret">{isFolder ? (isExpanded ? '▾' : '▸') : ''}</span>
+        {selectedPaths && isPythonFile(node) ? (
+          <input
+            type="checkbox"
+            className="file-tree-select"
+            checked={selectedPaths.has(node.path)}
+            disabled={node.status !== 'indexed'}
+            title={node.status !== 'indexed' ? 'Only indexed files can be reviewed' : undefined}
+            onClick={(event) => event.stopPropagation()}
+            onChange={() => onToggleSelect(node)}
+          />
+        ) : null}
         <span className="file-tree-name">{node.name}</span>
         <span className="file-tree-glyph">{STATUS_GLYPH[node.status] ?? ''}</span>
         {!isFolder ? (
@@ -89,6 +109,8 @@ function FileTreeNode({ node, depth, expandedPaths, onToggle, onNodeClick, onSho
               onToggle={onToggle}
               onNodeClick={onNodeClick}
               onShowInfo={onShowInfo}
+              selectedPaths={selectedPaths}
+              onToggleSelect={onToggleSelect}
             />
           ))}
         </ul>
@@ -97,7 +119,7 @@ function FileTreeNode({ node, depth, expandedPaths, onToggle, onNodeClick, onSho
   )
 }
 
-export function FileTree({ nodes, onNodeClick }) {
+export function FileTree({ nodes, onNodeClick, selectedPaths, onToggleSelect }) {
   const [expandedPaths, setExpandedPaths] = useState(() => collectFolderPaths(nodes, new Set()))
   const [infoNode, setInfoNode] = useState(null)
 
@@ -125,6 +147,8 @@ export function FileTree({ nodes, onNodeClick }) {
             onToggle={handleToggle}
             onNodeClick={onNodeClick}
             onShowInfo={setInfoNode}
+            selectedPaths={selectedPaths}
+            onToggleSelect={onToggleSelect}
           />
         ))}
       </ul>
