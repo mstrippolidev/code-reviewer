@@ -17,13 +17,13 @@ def offset_incidents(incidents: list[Incident], start_line: int) -> list[Inciden
 
 def offset_line_position(line_position: str, start_line: int) -> str:
     try:
-        chunk_start, chunk_end = _parse_line_range(line_position)
+        chunk_start, chunk_end = parse_line_range(line_position)
     except ValueError:
         return line_position
     file_offset = start_line - 1
     return f"{chunk_start + file_offset}-{chunk_end + file_offset}"
 
 
-def _parse_line_range(line_position: str) -> tuple[int, int]:
+def parse_line_range(line_position: str) -> tuple[int, int]:
     start_text, end_text = line_position.split("-")
     return int(start_text), int(end_text)

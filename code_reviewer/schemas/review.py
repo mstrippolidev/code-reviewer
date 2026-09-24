@@ -97,6 +97,19 @@ class AgentReviewEntry(BaseModel):
             "Never invent or pad an incident just to return a non-empty list."
         )
     )
+    failed: bool = Field(
+        default=False,
+        description=(
+            "True when this agent's dispatch raised and never produced a "
+            "real review (provider outage, tool-recursion limit, etc.) — "
+            "rating and incidents carry no signal when true. Distinct from "
+            "the hard-size-limit case, which stays rating 0 with failed=False."
+        ),
+    )
+    failure_reason: str | None = Field(
+        default=None,
+        description="Cause of the failure when failed is true; null otherwise.",
+    )
 
 
 class AgentOutput(BaseModel):
@@ -124,6 +137,13 @@ class AggregatedReviewEntry(BaseModel):
     )
     agents_skipped: list[CodeKey] = Field(
         description="File agents that returned rating 0 for this file because it exceeded the hard limit."
+    )
+    agents_failed: list[CodeKey] = Field(
+        description=(
+            "Agents whose dispatch failed for this file at runtime (provider "
+            "error, tool-recursion limit, etc.). Distinct from agents_skipped, "
+            "which is the deterministic hard-size-limit case."
+        )
     )
     skip_reason: str | None = Field(
         description="Why agents were skipped for this file, or null if none were."

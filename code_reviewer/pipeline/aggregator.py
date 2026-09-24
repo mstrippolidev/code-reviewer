@@ -55,17 +55,25 @@ class Aggregator:
         return grouped
 
     def _build_file_entry(self, prepared_file: PreparedFile, entries: list[AgentReviewEntry]) -> AggregatedReviewEntry:
-        agents_skipped = [entry.code_key for entry in entries if entry.rating == 0]
+        rated_entries = self._exclude_failed(entries)
+        agents_skipped = [entry.code_key for entry in rated_entries if entry.rating == 0]
         return AggregatedReviewEntry(
             file_path=prepared_file.source_file.file_path,
-            rating=round(self._weighted_rating(entries)),
-            code_key=sorted({entry.code_key for entry in entries if entry.incidents}),
+            rating=round(self._weighted_rating(rated_entries)),
+            code_key=sorted({entry.code_key for entry in rated_entries if entry.incidents}),
             file_lines=f"1-{prepared_file.source_file.content.count(chr(10))}",
             size_status=prepared_file.size_status,
             agents_skipped=agents_skipped,
+            agents_failed=[entry.code_key for entry in entries if entry.failed],
             skip_reason=_HARD_LIMIT_SKIP_REASON if agents_skipped else None,
-            incidents=self._merge_incidents(entries),
+            incidents=self._merge_incidents(rated_entries),
         )
+
+    def _exclude_failed(self, entries: list[AgentReviewEntry]) -> list[AgentReviewEntry]:
+        """Drops a failed agent's weight from rating/incidents entirely,
+        rather than counting it as a rating-0 result — that would wrongly
+        read as the deterministic hard-limit case to every caller below."""
+        return [entry for entry in entries if not entry.failed]
 
     def _merge_incidents(self, entries: list[AgentReviewEntry]) -> list[Incident]:
         return [
@@ -87,7 +95,7 @@ class Aggregator:
         review: list[AggregatedReviewEntry],
         skipped_files: list[SkippedFile],
     ) -> Meta:
-        overall_rating = self._weighted_rating(entries)
+        overall_rating = self._weighted_rating(self._exclude_failed(entries))
         recommendation, rejection_reason = self._recommend(overall_rating, review)
         incident_counts = self._count_incidents_by_priority(review)
         return Meta(

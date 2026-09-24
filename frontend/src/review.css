@@ -163,6 +163,35 @@
   border-radius: 12px;
 }
 
+/* ---------- intake screening banner ---------- */
+
+.intake-screening-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.25rem;
+  border: 1px solid var(--accent-border);
+  border-radius: 14px;
+  background: var(--accent-bg);
+}
+
+.intake-screening-title {
+  margin: 0 0 0.2rem;
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.intake-screening-spinner {
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 3px solid var(--accent-border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
 /* ---------- summary ---------- */
 
 .review-summary {
