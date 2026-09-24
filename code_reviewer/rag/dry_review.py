@@ -3,8 +3,13 @@
     exact structural-hash match directly, and asks the DRY judge to
     confirm the fuzzy, re-ranked candidates a search only guessed at.
 """
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+
 from code_reviewer.agents.llm.middleware import rating_from_incidents
+from code_reviewer.config.settings import get_settings
 from code_reviewer.pipeline.line_offset import offset_incidents
+from code_reviewer.rag.dry_clustering import ClusterLocation, cluster_history_matches, location_key
 from code_reviewer.rag.dry_evidence import extract_snippet
 from code_reviewer.rag.dry_judge import DryJudge, JudgeCandidate, format_location
 from code_reviewer.rag.dry_matching import ChunkHistoryMatch
@@ -68,24 +73,41 @@ def _exact_match_incident(own: StructuralMatch, duplicates_of: list[StructuralMa
     )
 
 
+@dataclass
+class _JudgeTask:
+    chunk: StructuralMatch
+    query_code: str
+    candidates: list[JudgeCandidate]
+
+
 def _judged_incidents(file_content: str, history_matches: list[ChunkHistoryMatch], dry_judge: DryJudge) -> list[Incident]:
-    incidents = []
+    tasks = _build_judge_tasks(file_content, history_matches)
+    if not tasks:
+        return []
+    with ThreadPoolExecutor(max_workers=get_settings().max_batch_concurrency) as executor:
+        results = executor.map(lambda task: _run_judge_task(dry_judge, task), tasks)
+    return [incident for incidents in results for incident in incidents]
+
+
+def _build_judge_tasks(file_content: str, history_matches: list[ChunkHistoryMatch]) -> list[_JudgeTask]:
+    clusters = cluster_history_matches(history_matches)
+    tasks = []
     for match in history_matches:
-        candidates = _fuzzy_candidates(match)
-        if not candidates:
+        cluster_locations = clusters[location_key(match.chunk)]
+        if not cluster_locations:
             continue
-        query_code = extract_snippet(file_content, match.chunk)
-        confirmed = dry_judge.judge(query_code, candidates)
-        incidents += offset_incidents(confirmed, match.chunk.start_line)
-    return incidents
+        candidates = [_as_judge_candidate(cluster_location, file_content) for cluster_location in cluster_locations]
+        tasks.append(_JudgeTask(match.chunk, extract_snippet(file_content, match.chunk), candidates))
+    return tasks
 
 
-def _fuzzy_candidates(match: ChunkHistoryMatch) -> list[JudgeCandidate]:
-    """Deduplicated by location: the same location surviving more than one
-    search route is stronger evidence, not a second thing to ask about."""
-    seen: dict[tuple[str, str, int, int], JudgeCandidate] = {}
-    for bucket in (match.semantic_matches, match.code_matches, match.lexical_matches):
-        for candidate in bucket:
-            key = (candidate.file_path, candidate.chunk_name, candidate.start_line, candidate.end_line)
-            seen.setdefault(key, JudgeCandidate(location=format_location(candidate), code=candidate.code))
-    return list(seen.values())
+def _run_judge_task(dry_judge: DryJudge, task: _JudgeTask) -> list[Incident]:
+    confirmed = dry_judge.judge(task.query_code, task.candidates)
+    return offset_incidents(confirmed, task.chunk.start_line)
+
+
+def _as_judge_candidate(cluster_location: ClusterLocation, file_content: str) -> JudgeCandidate:
+    code = cluster_location.code
+    if code is None:
+        code = extract_snippet(file_content, cluster_location.location)
+    return JudgeCandidate(location=format_location(cluster_location.location), code=code)

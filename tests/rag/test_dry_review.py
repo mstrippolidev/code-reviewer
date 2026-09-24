@@ -172,6 +172,35 @@ def test_no_fuzzy_candidates_skips_the_judge_call() -> None:
     assert entry.incidents == []
 
 
+def test_pooled_cluster_candidates_include_indirectly_connected_siblings() -> None:
+    """chunk_a only finds chunk_b in its own semantic bucket; chunk_b finds
+    chunk_c. Clustering must still hand chunk_a's judge call chunk_c —
+    transitively connected, not just what chunk_a's own search surfaced."""
+    chunk_a = StructuralMatch(file_path="handlers.py", chunk_name="bad_request", start_line=1, end_line=5)
+    chunk_b = StructuralMatch(file_path="handlers.py", chunk_name="not_found", start_line=10, end_line=14)
+    chunk_c = StructuralMatch(file_path="handlers.py", chunk_name="conflict", start_line=20, end_line=24)
+    match_a = ChunkHistoryMatch(
+        chunk=chunk_a,
+        structural_matches=[],
+        semantic_matches=[_semantic_match(file_path="handlers.py", chunk_name="not_found", start_line=10, end_line=14)],
+    )
+    match_b = ChunkHistoryMatch(
+        chunk=chunk_b,
+        structural_matches=[],
+        semantic_matches=[_semantic_match(file_path="handlers.py", chunk_name="conflict", start_line=20, end_line=24)],
+    )
+    match_c = ChunkHistoryMatch(chunk=chunk_c, structural_matches=[], semantic_matches=[])
+    judge = FakeDryJudge()
+    lines = ["x"] * 25
+    lines[0] = "def bad_request(): pass"
+    file_content = "\n".join(lines) + "\n"
+
+    build_dry_review_entry("handlers.py", file_content, [], [match_a, match_b, match_c], judge)
+
+    candidates_for_a = next(candidates for query_code, candidates in judge.judge_calls if "bad_request" in query_code)
+    assert any(candidate.location.startswith("handlers.py:conflict") for candidate in candidates_for_a)
+
+
 def test_rating_reflects_every_incident_source_combined() -> None:
     group = [
         LocatedChunk(

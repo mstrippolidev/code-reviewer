@@ -44,7 +44,15 @@ export function buildFileReports({ job, agentProgress, reviewedFiles, failedFile
     const incidents = agents.flatMap((agent) => agent.incidents)
     return {
       filePath,
-      status: fileStatus({ filePath, reviewedFiles, failedFiles, liveAgents, skipReasons, isSettled }),
+      status: fileStatus({
+        filePath,
+        reviewedFiles,
+        failedFiles,
+        liveAgents,
+        skipReasons,
+        isSettled,
+        hasResultEntry: resultEntries.has(filePath),
+      }),
       skipReason: skipReasons.has(filePath) ? describeSkipReason(skipReasons.get(filePath)) : null,
       rating: resultEntry?.rating ?? null,
       fileLines: resultEntry?.file_lines ?? null,
@@ -57,11 +65,11 @@ export function buildFileReports({ job, agentProgress, reviewedFiles, failedFile
   })
 }
 
-function fileStatus({ filePath, reviewedFiles, failedFiles, liveAgents, skipReasons, isSettled }) {
+function fileStatus({ filePath, reviewedFiles, failedFiles, liveAgents, skipReasons, isSettled, hasResultEntry }) {
   if (failedFiles.has(filePath)) {
     return FILE_STATUS.FAILED
   }
-  if (reviewedFiles.has(filePath)) {
+  if (reviewedFiles.has(filePath) || hasResultEntry) {
     return FILE_STATUS.REVIEWED
   }
   if (skipReasons.has(filePath)) {

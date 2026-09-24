@@ -166,10 +166,11 @@ async def test_on_agent_reviewed_fires_per_agent_per_file(container: AgentsConta
 
 
 @pytest.mark.asyncio
-async def test_agent_dispatch_failure_skips_the_file_and_continues() -> None:
-    """One file's agent raising must not fail the whole submission — it's
-    reported as a skip, like any other pipeline guard rejection, and every
-    other file still gets reviewed."""
+async def test_agent_dispatch_failure_isolates_to_that_agent_only() -> None:
+    """One agent raising on one file must not destroy every other agent's
+    already-finished result for that same file, or skip the file entirely —
+    only that agent's own entry comes back marked failed, everything else
+    about the file is reported normally."""
     engine = create_engine("sqlite:///:memory:", poolclass=StaticPool, connect_args={"check_same_thread": False})
     container = AgentsContainer(
         file_agents=[RaisingOnFileAgent(CodeKey.COH, failing_file_path="broken.py")],
@@ -192,12 +193,17 @@ async def test_agent_dispatch_failure_skips_the_file_and_continues() -> None:
         [_file("broken.py"), _file("a.py")], container, on_file_reviewed=on_file_reviewed
     )
 
-    assert {entry.file_path for entry in result.review} == {"a.py"}
-    assert [skipped.file_path for skipped in result.meta.skipped_files] == ["broken.py"]
-    assert [skipped.reason for skipped in result.meta.skipped_files] == ["agent_execution_failed"]
-    assert reviewed == [("broken.py", True), ("a.py", False)]
-    assert entries_by_file["broken.py"] == []
-    assert entries_by_file["a.py"] != []
+    assert {entry.file_path for entry in result.review} == {"broken.py", "a.py"}
+    assert result.meta.skipped_files == []
+    assert reviewed == [("broken.py", False), ("a.py", False)]
+
+    broken_file_entry = next(entry for entry in result.review if entry.file_path == "broken.py")
+    assert broken_file_entry.agents_failed == [CodeKey.COH]
+    assert broken_file_entry.agents_skipped == []
+
+    broken_agent_entries = {entry.code_key: entry for entry in entries_by_file["broken.py"]}
+    assert broken_agent_entries[CodeKey.COH].failed is True
+    assert broken_agent_entries[CodeKey.VAR].failed is False
 
 
 def test_intra_pr_duplicate_groups_are_attached_per_file() -> None:

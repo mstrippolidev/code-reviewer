@@ -98,6 +98,45 @@ def test_found_chunks_are_formatted_with_explanation_and_code() -> None:
     rag_manager.get_file_chunks.assert_called_once_with("repo-1", "owner-1", "infra/db.py")
 
 
+def test_repeated_lookup_of_the_same_file_hits_the_cache_not_the_store() -> None:
+    """Verify a second call for the same (repo_id, owner_id, file_path)
+    reuses the first call's result instead of querying the vector store
+    again — ARCH/COUP routinely re-verify the same file within one review."""
+    rag_manager = Mock(spec=LlamaIndexRagManager)
+    rag_manager.get_file_chunks.return_value = [
+        FileChunk(
+            file_path="infra/db.py", chunk_name="get_connection", start_line=1, end_line=2, text="...", code="def get_connection():\n    pass"
+        )
+    ]
+    tool = _make_tool(rag_manager)
+    context = ReviewContext(repo_id="repo-1", owner_id="owner-1")
+
+    tool._run(file_path="infra/db.py", runtime=_make_runtime(context))
+    tool._run(file_path="infra/db.py", runtime=_make_runtime(context))
+
+    rag_manager.get_file_chunks.assert_called_once_with("repo-1", "owner-1", "infra/db.py")
+
+
+def test_failed_lookup_is_not_cached_and_can_succeed_on_retry() -> None:
+    """Verify a transient vector-store failure isn't remembered as
+    permanently empty — the next call for the same file must retry the
+    store rather than replaying the earlier failure from cache."""
+    rag_manager = Mock(spec=LlamaIndexRagManager)
+    rag_manager.get_file_chunks.side_effect = [
+        VectorStoreQueryError("connection reset"),
+        [FileChunk(file_path="infra/db.py", chunk_name="get_connection", start_line=1, end_line=2, text="...", code="def get_connection():\n    pass")],
+    ]
+    tool = _make_tool(rag_manager)
+    context = ReviewContext(repo_id="repo-1", owner_id="owner-1")
+
+    first_result = tool._run(file_path="infra/db.py", runtime=_make_runtime(context))
+    second_result = tool._run(file_path="infra/db.py", runtime=_make_runtime(context))
+
+    assert "judge this dependency on what's visible in this file alone" in first_result
+    assert "get_connection (1-2):" in second_result
+    assert rag_manager.get_file_chunks.call_count == 2
+
+
 def test_no_matching_chunks_reports_nothing_indexed() -> None:
     """Verify a third-party/stdlib import (or anything simply not indexed)
     gets a clear message instead of an empty, ambiguous string."""

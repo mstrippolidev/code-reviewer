@@ -9,7 +9,7 @@ import re
 
 from langchain.tools import ToolRuntime
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from code_reviewer.agents.base import ReviewContext
 from code_reviewer.rag.errors import VectorStoreQueryError
@@ -62,7 +62,11 @@ class GetFileChunksTool(BaseTool):
     can verify what a suspicious dependency actually does before
     finalizing a finding. rag_manager is constructor-injected and shared
     across every call this tool makes; repo scoping arrives per call via
-    ToolRuntime.context instead."""
+    ToolRuntime.context instead.
+
+    Fetched chunks are cached in memory for the lifetime of this tool
+    instance (one per agent, reused across every review the process
+    handles)"""
 
     name: str = "get_file_chunks"
     description: str = (
@@ -74,6 +78,8 @@ class GetFileChunksTool(BaseTool):
     args_schema: type[BaseModel] = GetFileChunksArgs
     rag_manager: LlamaIndexRagManager
 
+    _chunk_cache: dict[tuple[str, str | None, str], list[FileChunk]] = PrivateAttr(default_factory=dict)
+
     def _run(
         self, file_path: str, runtime: ToolRuntime[ReviewContext], imported_symbol_name: str | None = None
     ) -> str:
@@ -82,7 +88,7 @@ class GetFileChunksTool(BaseTool):
             return _NO_REPO_CONTEXT
 
         try:
-            chunks = self.rag_manager.get_file_chunks(context.repo_id, context.owner_id, file_path)
+            chunks = self._get_cached_chunks(context.repo_id, context.owner_id, file_path)
         except VectorStoreQueryError:
             return (
                 f"Could not look up {file_path!r} right now — judge this "
@@ -94,6 +100,16 @@ class GetFileChunksTool(BaseTool):
         if imported_symbol_name is None:
             return _format_chunks(chunks)
         return _narrow_to_symbol(chunks, imported_symbol_name, file_path)
+
+    def _get_cached_chunks(self, repo_id: str, owner_id: str | None, file_path: str) -> list[FileChunk]:
+        """Returns this file's chunks from cache when already fetched this
+        process, otherwise queries the vector store and caches the result.
+        A failed lookup is never cached, so a transient outage isn't
+        remembered as permanently empty."""
+        cache_key = (repo_id, owner_id, file_path)
+        if cache_key not in self._chunk_cache:
+            self._chunk_cache[cache_key] = self.rag_manager.get_file_chunks(repo_id, owner_id, file_path)
+        return self._chunk_cache[cache_key]
 
 
 def _narrow_to_symbol(chunks: list[FileChunk], symbol_name: str, file_path: str) -> str:

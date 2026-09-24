@@ -268,6 +268,7 @@ async def review_file_runnable(
         )
         if on_agent_reviewed is not None:
             await _report_agent_reviewed(CodeKey(code_key), result, on_agent_reviewed)
+
     logger.info("dispatch finished file_path=%s agents_completed=%d", file_path, len(results))
     entries = _unpack_runnable_results(results)
     _apply_cmplx_soft_limit_incident(entries, prepared_file)
@@ -286,32 +287,79 @@ async def _report_agent_reviewed(
     await on_agent_reviewed(code_key, entry)
 
 
+_AGENT_FAILURE_CLIENT_MESSAGE = "This agent failed to complete its review due to an internal error."
+
+
+def _isolate_agent_failure(
+    code_key: CodeKey, file_path: str | None, produce: Callable[[], AgentOutput | AgentReviewEntry]
+) -> AgentOutput | AgentReviewEntry:
+    """Runs one branch's own call, converting a raised exception into a
+    failed AgentReviewEntry instead of letting it escape RunnableParallel —
+    one agent's provider outage or tool-recursion timeout must never destroy
+    every other agent's already-finished result for this same file. The raw
+    exception is logged server-side only; the client-facing entry carries a
+    fixed, generic message so internal error detail is never exposed to it."""
+    try:
+        return produce()
+    except Exception as error:
+        logger.error("agent dispatch failed code_key=%s file_path=%s error=%s", code_key, file_path, error)
+        return _agent_failure_entry(code_key, file_path)
+
+
+def _agent_failure_entry(code_key: CodeKey, file_path: str | None) -> AgentReviewEntry:
+    return AgentReviewEntry(
+        file_path=file_path,
+        code_key=code_key,
+        rating=0,
+        incidents=[],
+        failed=True,
+        failure_reason=_AGENT_FAILURE_CLIENT_MESSAGE,
+    )
+
+
 def _file_agent_branch(agent: FileSizeAwareAgentBase) -> RunnableLambda:
-    """Builds a branch that runs one file agent against the shared context."""
+    """Builds a branch that runs one file agent against the shared context,
+    isolated so its own failure can't take down the other branches."""
+    code_key = agent.get_agent_key()
     return RunnableLambda(
-        lambda ctx: agent.execute_agent(
-            ctx["code"],
+        lambda ctx: _isolate_agent_failure(
+            code_key,
             ctx["file_path"],
-            FileReviewMeta(size_status=ctx["size_status"], repo_data=ctx.get("repo_data")),
+            lambda: agent.execute_agent(
+                ctx["code"],
+                ctx["file_path"],
+                FileReviewMeta(size_status=ctx["size_status"], repo_data=ctx.get("repo_data")),
+            ),
         )
     )
 
 
 def _chunk_agent_branch(agent: AgentBase, splitter: CodeSplitterInterface) -> RunnableLambda:
-    """Builds a branch that runs one chunk agent against the shared context."""
-    return RunnableLambda(lambda ctx: _run_chunk_agent(agent, ctx, splitter))
+    """Builds a branch that runs one chunk agent against the shared context,
+    isolated so its own failure can't take down the other branches."""
+    code_key = agent.get_agent_key()
+    return RunnableLambda(
+        lambda ctx: _isolate_agent_failure(code_key, ctx["file_path"], lambda: _run_chunk_agent(agent, ctx, splitter))
+    )
 
 
 def _tcase_branch(agent: CoverageGapAgent, pairing_content: str) -> RunnableLambda:
     """Builds a branch that runs TCASE against its own paired content,
-    ignoring the shared context's raw source code."""
-    return RunnableLambda(lambda ctx: agent.execute_agent(pairing_content, ctx["file_path"]))
+    isolated so its own failure can't take down the other branches."""
+    return RunnableLambda(
+        lambda ctx: _isolate_agent_failure(
+            CodeKey.TCASE, ctx["file_path"], lambda: agent.execute_agent(pairing_content, ctx["file_path"])
+        )
+    )
 
 
 def _dry_branch(agents_container: AgentsContainer, prepared_file: PreparedFile) -> RunnableLambda:
     """Builds a branch that runs DRY against its own assembled evidence,
-    ignoring the shared context's raw source code."""
-    return RunnableLambda(lambda ctx: _run_dry(agents_container, prepared_file))
+    isolated so its own failure can't take down the other branches."""
+    file_path = prepared_file.source_file.file_path
+    return RunnableLambda(
+        lambda ctx: _isolate_agent_failure(CodeKey.DRY, file_path, lambda: _run_dry(agents_container, prepared_file))
+    )
 
 
 def _unpack_runnable_results(results: dict[str, AgentOutput | AgentReviewEntry]) -> list[AgentReviewEntry]:
