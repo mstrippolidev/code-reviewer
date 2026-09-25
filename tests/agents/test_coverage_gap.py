@@ -7,7 +7,7 @@ import pytest
 
 from code_reviewer.agents.coverage_gap import CoverageGapAgent
 from code_reviewer.agents.llm.base import LLMInterface
-from code_reviewer.schemas.paired import Pairing
+from code_reviewer.schemas.paired import Pairing, build_standalone_test_file_content
 from code_reviewer.schemas.review import CodeKey, Priority
 from code_reviewer.schemas.submission import SubmittedFile
 from tests.helpers import load_fixture
@@ -161,3 +161,44 @@ def test_file_path_is_stamped_from_the_source_file(test_gap_agent: CoverageGapAg
     result = test_gap_agent.execute_agent(pairing.get_content(), file_path=pairing.source_file.file_path)
 
     assert all(entry.file_path == "partially_tested_source.py" for entry in result.review)
+
+
+def _standalone_test_file_content(fixture_name: str) -> str:
+    test_file = SubmittedFile(file_path=f"tests/{fixture_name}", content=load_fixture(f"tcase/{fixture_name}"))
+    return build_standalone_test_file_content(test_file)
+
+
+def test_standalone_well_designed_test_file_is_not_flagged(test_gap_agent: CoverageGapAgent) -> None:
+    """Verify a well-designed test file reviewed on its own gets no incidents.
+
+    With no source in scope, TCASE must not invent coverage gaps against
+    code it can't see.
+    """
+    content = _standalone_test_file_content("standalone_well_designed_suite.py")
+
+    result = test_gap_agent.execute_agent(content, file_path="tests/standalone_well_designed_suite.py")
+
+    assert result.review[0].incidents == []
+
+
+def test_standalone_poorly_designed_test_file_is_flagged(test_gap_agent: CoverageGapAgent) -> None:
+    """Verify vacuous assertions, opaque names, and shared state in a lone test file are reported."""
+    content = _standalone_test_file_content("standalone_poorly_designed_suite.py")
+
+    result = test_gap_agent.execute_agent(content, file_path="tests/standalone_poorly_designed_suite.py")
+
+    assert result.review[0].incidents != []
+
+
+def test_standalone_test_file_review_never_claims_a_missing_test_file(test_gap_agent: CoverageGapAgent) -> None:
+    """Verify the model takes the test-design branch, not the no-test-file-submitted branch.
+
+    Stating that no test file was submitted would mean the model misread
+    the test file under review as a source file with no tests.
+    """
+    content = _standalone_test_file_content("standalone_poorly_designed_suite.py")
+
+    result = test_gap_agent.execute_agent(content, file_path="tests/standalone_poorly_designed_suite.py")
+
+    descriptions = " ".join(incident.description.lower() for incident in result.review[0].incidents)
+    assert "no test file" not in descriptions

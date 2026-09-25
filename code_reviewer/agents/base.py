@@ -13,6 +13,7 @@ from langchain_core.tools import BaseTool
 from code_reviewer.agents.llm.base import LLMInterface
 from code_reviewer.agents.llm.middleware import (
     dedupe_tool_calls,
+    retry_missing_structured_output,
     retry_model,
     retry_transient_call,
     calculate_rating,
@@ -111,7 +112,9 @@ class AgentBase:
         handle_errors — stacking both on a tool-carrying agent would just
         retry the same failure twice. retry_transient_call applies either
         way, since neither strategy retries a rate limit or a timeout."""
-        return [retry_transient_call] if tools else [retry_transient_call, retry_model]
+        if tools:
+            return [retry_transient_call, retry_missing_structured_output]
+        return [retry_transient_call, retry_model]
 
     def _tool_loop_guard(self, tools: list[BaseTool] | None) -> list[AgentMiddleware]:
         """A model with no reasoning trace can lose track of already having
@@ -193,7 +196,7 @@ class AgentBase:
             results = call_with_hard_timeout(lambda: self._agent.batch(payloads, config=config))
             return [result["structured_response"] for result in results]
         except Exception as error:
-            logger.error("Agent %s failed to review the given code.", self._code_agent)
+            logger.error("Agent %s failed to review the given code.", self._code_agent, exc_info=True)
             raise AgentInvocationError(
                 f"Agent {self._code_agent} failed to review the given code."
             ) from error
@@ -252,7 +255,7 @@ class AgentBase:
             result = call_with_hard_timeout(lambda: self._agent.invoke(messages, **invoke_kwargs))
             return result["structured_response"]
         except Exception as error:
-            logger.error("Agent %s failed to review the given code.", self._code_agent)
+            logger.error("Agent %s failed to review the given code.", self._code_agent, exc_info=True)
             raise AgentInvocationError(
                 f"Agent {self._code_agent} failed to review the given code."
             ) from error

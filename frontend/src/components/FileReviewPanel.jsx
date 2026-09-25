@@ -80,16 +80,18 @@ function AgentChip({ agent, catalogEntry, isSelected, onSelect }) {
       <span className="agent-chip-caption">
         {agent.pending
           ? 'running'
-          : hasIncidents
-            ? `${agent.incidents.length} incident${agent.incidents.length === 1 ? '' : 's'}`
-            : 'clean'}
+          : agent.failed
+            ? 'failed to process'
+            : hasIncidents
+              ? `${agent.incidents.length} incident${agent.incidents.length === 1 ? '' : 's'}`
+              : 'clean'}
       </span>
     </li>
   )
 }
 
 function agentTone(agent) {
-  if (agent.pending) {
+  if (agent.pending || agent.failed) {
     return 'unknown'
   }
   if (typeof agent.rating === 'number') {
@@ -99,6 +101,9 @@ function agentTone(agent) {
 }
 
 function scoreGlyph(agent) {
+  if (agent.failed) {
+    return '⚠'
+  }
   if (typeof agent.rating === 'number') {
     return agent.rating
   }
@@ -115,7 +120,9 @@ function AgentIncidents({ agent, catalogEntry, onOpenInFile }) {
         </h3>
         {catalogEntry ? <p className="note">{catalogEntry.summary}</p> : null}
       </div>
-      {agent.incidents.length === 0 ? (
+      {agent.failed ? (
+        <p className="note error">{agent.failureReason ?? 'This agent failed to process the file.'}</p>
+      ) : agent.incidents.length === 0 ? (
         <p className="note">No issues found by this agent.</p>
       ) : (
         <ul className="incident-list">

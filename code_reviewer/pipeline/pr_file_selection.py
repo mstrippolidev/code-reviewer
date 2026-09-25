@@ -4,9 +4,11 @@
     and keeps only the top N. Runs once per PR, before any per-file pipeline
     step (raw character guard, intake screen, file size guard, 14 agents).
 """
+from dataclasses import dataclass
 from pathlib import Path
 
 from code_reviewer.config.settings import get_settings
+from code_reviewer.pipeline.pairing_stem import pairing_stem
 from code_reviewer.schemas.review import SkippedFile
 from code_reviewer.schemas.submission import SubmittedFile
 
@@ -25,38 +27,57 @@ _LOCK_FILE_NAMES = {
 }
 
 
+@dataclass(frozen=True)
+class _PartitionedFiles:
+    source_candidates: list[SubmittedFile]
+    standalone_test_files: list[SubmittedFile]
+    paired_test_files: list[SubmittedFile]
+    excluded: list[SkippedFile]
+
+
 def select_pr_files(files: list[SubmittedFile]) -> tuple[list[SubmittedFile], list[SkippedFile], list[SubmittedFile]]:
-    """Returns the files to review, the files skipped (with a reason for each), and the test files set aside as TCASE context."""
-    candidates, excluded, test_files = _partition_non_logic_files(files)
+    """Returns the files to review, the files skipped (with a reason for each), and the test files set aside as TCASE context.
 
+    A test file with no source file in the submission to pair it to is
+    reviewed as its own target, but source files always claim cap slots
+    first — a standalone test file only fills a slot left over after them.
+    """
+    partitioned = _partition_files(files)
     max_files = get_settings().max_files_per_submission
-    if len(candidates) <= max_files:
-        return candidates, excluded, test_files
 
-    ranked = sorted(candidates, key=lambda file: file.content.count("\n"), reverse=True)
-    selected, cut = ranked[:max_files], ranked[max_files:]
+    selected_sources, cut_sources = _rank_and_cap(partitioned.source_candidates, max_files)
+    remaining_slots = max_files - len(selected_sources)
+    selected_tests, cut_tests = _rank_and_cap(partitioned.standalone_test_files, remaining_slots)
+
     skipped_for_cap = [
-        SkippedFile(file_path=file.file_path, reason="exceeded_pr_file_cap") for file in cut
+        SkippedFile(file_path=file.file_path, reason="exceeded_pr_file_cap") for file in cut_sources + cut_tests
     ]
-    return selected, excluded + skipped_for_cap, test_files
+    return selected_sources + selected_tests, partitioned.excluded + skipped_for_cap, partitioned.paired_test_files
 
 
-def _partition_non_logic_files(
-    files: list[SubmittedFile],
-) -> tuple[list[SubmittedFile], list[SkippedFile], list[SubmittedFile]]:
-    """Splits files into review candidates and non-logic files excluded outright."""
-    candidates: list[SubmittedFile] = []
+def _partition_files(files: list[SubmittedFile]) -> _PartitionedFiles:
+    source_candidates: list[SubmittedFile] = []
+    test_candidates: list[SubmittedFile] = []
     excluded: list[SkippedFile] = []
-    test_files: list[SubmittedFile] = []
     for file in files:
         reason = _non_logic_file_reason(file.file_path)
-        if reason is None:
-            candidates.append(file)
-            continue
-        if reason == _TEST_FILE_REASON:
-            test_files.append(file)
-        excluded.append(SkippedFile(file_path=file.file_path, reason=reason))
-    return candidates, excluded, test_files
+        if reason is not None:
+            excluded.append(SkippedFile(file_path=file.file_path, reason=reason))
+        elif is_test_file(file.file_path):
+            test_candidates.append(file)
+        else:
+            source_candidates.append(file)
+
+    source_stems = {pairing_stem(file.file_path) for file in source_candidates}
+    paired = [file for file in test_candidates if pairing_stem(file.file_path) in source_stems]
+    standalone = [file for file in test_candidates if pairing_stem(file.file_path) not in source_stems]
+    excluded += [SkippedFile(file_path=file.file_path, reason=_TEST_FILE_REASON) for file in paired]
+    return _PartitionedFiles(source_candidates, standalone, paired, excluded)
+
+
+def _rank_and_cap(files: list[SubmittedFile], cap: int) -> tuple[list[SubmittedFile], list[SubmittedFile]]:
+    ranked = sorted(files, key=lambda file: file.content.count("\n"), reverse=True)
+    return ranked[:cap], ranked[cap:]
 
 
 def _non_logic_file_reason(file_path: str) -> str | None:
@@ -67,8 +88,6 @@ def _non_logic_file_reason(file_path: str) -> str | None:
         return "lock_file"
     if _is_vendored_file(file_path):
         return "vendored_file"
-    if is_test_file(file_path):
-        return _TEST_FILE_REASON
     return None
 
 

@@ -6,6 +6,13 @@ from pydantic import BaseModel, Field
 
 from code_reviewer.schemas.submission import SubmittedFile
 
+STANDALONE_TEST_FILE_HEADER = "TEST FILE UNDER REVIEW (no source file was submitted):"
+
+
+def build_standalone_test_file_content(test_file: SubmittedFile) -> str:
+    """TCASE's prompt keys its test-design branch off this header."""
+    return f"{STANDALONE_TEST_FILE_HEADER}\n{test_file.content}"
+
 
 class Pairing(BaseModel):
     """A source file paired with its submitted test files, if any."""

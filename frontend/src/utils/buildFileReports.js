@@ -86,7 +86,13 @@ function fileStatus({ filePath, reviewedFiles, failedFiles, liveAgents, skipReas
 function mergeAgents(liveAgents, resultEntry, agentsRun) {
   const byCodeKey = new Map()
   for (const [codeKey, entry] of Object.entries(liveAgents)) {
-    byCodeKey.set(codeKey, { codeKey, rating: entry.rating, incidents: withCodeKey(entry.incidents, codeKey) })
+    byCodeKey.set(codeKey, {
+      codeKey,
+      rating: entry.rating,
+      incidents: withCodeKey(entry.incidents, codeKey),
+      failed: entry.failed ?? false,
+      failureReason: entry.failure_reason ?? null,
+    })
   }
   const reportedLive = new Set(byCodeKey.keys())
   for (const incident of resultEntry?.incidents ?? []) {
@@ -94,14 +100,14 @@ function mergeAgents(liveAgents, resultEntry, agentsRun) {
     if (reportedLive.has(codeKey)) {
       continue
     }
-    const agent = byCodeKey.get(codeKey) ?? { codeKey, rating: null, incidents: [] }
+    const agent = byCodeKey.get(codeKey) ?? { codeKey, rating: null, incidents: [], failed: false, failureReason: null }
     agent.incidents.push(incident)
     byCodeKey.set(codeKey, agent)
   }
   if (resultEntry) {
     for (const codeKey of agentsRun) {
       if (!byCodeKey.has(codeKey)) {
-        byCodeKey.set(codeKey, { codeKey, rating: null, incidents: [] })
+        byCodeKey.set(codeKey, { codeKey, rating: null, incidents: [], failed: false, failureReason: null })
       }
     }
   }

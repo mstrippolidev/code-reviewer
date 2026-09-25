@@ -14,7 +14,7 @@ from code_reviewer.pipeline.aggregator import Aggregator
 from code_reviewer.pipeline.dispatch import review_file_runnable
 from code_reviewer.pipeline.errors import FileTooLargeError, SubmissionTooLargeError
 from code_reviewer.pipeline.file_size import run_file_size_guard
-from code_reviewer.pipeline.pr_file_selection import select_pr_files
+from code_reviewer.pipeline.pr_file_selection import is_test_file, select_pr_files
 from code_reviewer.pipeline.raw_character_guard import run_raw_character_guard
 from code_reviewer.pipeline.test_file_pairing import pair_source_files_with_tests
 from code_reviewer.rag.dry_evidence import attach_code, groups_for_file
@@ -22,7 +22,14 @@ from code_reviewer.rag.dry_matching import find_intra_pr_duplicates
 from code_reviewer.rag.errors import DryMatchingChunkingError
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.rag.structural_hash_store import LocatedChunk
-from code_reviewer.schemas.review import AgentReviewEntry, AggregatorOutput, CodeKey, SizeStatus, SkippedFile
+from code_reviewer.schemas.review import (
+    AgentReviewEntry,
+    AggregatorOutput,
+    CodeKey,
+    ReviewScope,
+    SizeStatus,
+    SkippedFile,
+)
 from code_reviewer.schemas.submission import PreparedFile, SubmittedFile
 
 logger = logging.getLogger(__name__)
@@ -125,6 +132,7 @@ def prepare_files_for_pipeline(
                 source_file=pairing.source_file,
                 test_files=screened_test_files,
                 size_status=size_status,
+                review_scope=_review_scope(pairing.source_file.file_path),
                 repo_data=repo_data,
                 intra_pr_duplicates=groups_for_file(intra_pr_groups, pairing.source_file.file_path),
             ))
@@ -141,6 +149,10 @@ def _intra_pr_duplicate_groups(selected_files: list[SubmittedFile]) -> list[list
     except DryMatchingChunkingError:
         logger.warning("Skipping intra-PR duplicate detection: a file could not be chunked.")
         return []
+
+def _review_scope(file_path: str) -> ReviewScope:
+    """A test file only reaches this point as a review target when select_pr_files found no source to pair it with."""
+    return ReviewScope.TEST_FILE_STANDALONE if is_test_file(file_path) else ReviewScope.FULL
 
 def _run_source_file_guards(content: str) -> SizeStatus:
     """Runs the three per-file guards in cost-ascending order, returning

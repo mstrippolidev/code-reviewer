@@ -19,7 +19,7 @@ from code_reviewer.rag.indexer import SimilarChunk
 from code_reviewer.rag.rerank import HistoryMatchReranker
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.rag.structural_hash_store import StructuralHashStore
-from code_reviewer.schemas.review import AgentOutput, AgentReviewEntry, CodeKey, Incident, SizeStatus
+from code_reviewer.schemas.review import AgentOutput, AgentReviewEntry, CodeKey, Incident, ReviewScope, SizeStatus
 from code_reviewer.schemas.submission import SubmittedFile
 
 
@@ -246,3 +246,31 @@ async def test_file_over_the_hard_line_limit_is_skipped_not_reviewed(
 
     assert result.review == []
     assert [skipped_file.file_path for skipped_file in result.meta.skipped_files] == ["too_big.py"]
+
+
+@pytest.mark.asyncio
+async def test_lone_test_file_is_reviewed_instead_of_skipped(container: AgentsContainer) -> None:
+    """Verify a test file submitted with no source file comes back with its own review entry.
+
+    This is the original repro: the file used to vanish into
+    meta.skipped_files as test_file_context_only, reviewed by nobody.
+    """
+    result = await run_pipeline([_file("tests/test_payment.py")], container)
+
+    assert [entry.file_path for entry in result.review] == ["tests/test_payment.py"]
+
+
+@pytest.mark.asyncio
+async def test_lone_test_file_is_marked_as_a_standalone_test_review(container: AgentsContainer) -> None:
+    """Verify the aggregated entry tells a client why fewer agents reviewed this file."""
+    result = await run_pipeline([_file("tests/test_payment.py")], container)
+
+    assert result.review[0].review_scope == ReviewScope.TEST_FILE_STANDALONE
+
+
+@pytest.mark.asyncio
+async def test_source_file_keeps_full_review_scope_when_its_test_file_rides_along(container: AgentsContainer) -> None:
+    """Verify a paired test file stays TCASE context and its source keeps the full agent set."""
+    result = await run_pipeline([_file("payment.py"), _file("tests/test_payment.py")], container)
+
+    assert [(entry.file_path, entry.review_scope) for entry in result.review] == [("payment.py", ReviewScope.FULL)]

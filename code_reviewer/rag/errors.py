@@ -52,3 +52,11 @@ class ChunkExplanationError(Exception):
 
 class UnsupportedExemplarPrincipleError(Exception):
     """Raised when promoting a candidate for a principle whose exemplars no agent retrieves."""
+
+
+class PairingJudgeInvocationError(Exception):
+    """Raised when the TCASE pairing judge's LLM call fails or its output cannot be validated."""
+
+
+class PairingQueryRewriteError(Exception):
+    """Raised when rewriting the TCASE pairing search query fails."""
