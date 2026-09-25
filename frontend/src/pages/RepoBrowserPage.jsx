@@ -97,7 +97,6 @@ export function RepoBrowserPage() {
   const { repos, status } = useGithubRepos(token, handleUnauthorized)
   const { registeredRepos, refresh } = useRegisteredRepos(token, handleUnauthorized)
   const [selectedRepoId, setSelectedRepoId] = useState(null)
-  const [registeringRepoId, setRegisteringRepoId] = useState(null)
   const [registerError, setRegisterError] = useState(null)
   const [viewedRepoId, setViewedRepoId] = useState(null)
   const [notAvailableExpanded, setNotAvailableExpanded] = useState(false)
@@ -257,7 +256,6 @@ export function RepoBrowserPage() {
     setRegisterError(null)
     try {
       const registered = await registerRepo(token, { repo_id: repo.repo_id, full_name: repo.full_name, branch })
-      setRegisteringRepoId(registered.repo_id)
       setViewedRepoId(registered.repo_id)
       refresh()
     } catch (error) {
@@ -351,9 +349,9 @@ export function RepoBrowserPage() {
             ) : null}
           </div>
           <button
-            className={`button${selectedRepo && !registeringRepoId ? '' : ' disabled'}`}
+            className={`button${selectedRepo ? '' : ' disabled'}`}
             type="button"
-            disabled={!selectedRepo || Boolean(registeringRepoId)}
+            disabled={!selectedRepo}
             onClick={handlePrimaryAction}
           >
             Continue
