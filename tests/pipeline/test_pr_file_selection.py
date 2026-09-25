@@ -71,7 +71,7 @@ def test_non_logic_files_are_excluded_even_when_submission_is_under_cap() -> Non
     ["tests/test_service.py", "app/test_service.py", "app/service_test.py"],
 )
 def test_test_files_are_set_aside_as_context_and_reported(test_file_path: str) -> None:
-    files = [_file(test_file_path), _file("a.py"), _file("b.py"), _file("c.py")]
+    files = [_file(test_file_path), _file("app/service.py"), _file("b.py"), _file("c.py")]
 
     selected, skipped, test_files = select_pr_files(files)
 
@@ -91,7 +91,7 @@ def test_test_files_are_set_aside_even_when_submission_is_under_cap() -> None:
     assert [entry.file_path for entry in skipped] == ["test_login.py"]
 
 
-def test_test_files_never_count_against_the_cap() -> None:
+def test_paired_test_files_never_count_against_the_cap() -> None:
     files = [
         _file("test_small.py"),
         _file("test_largest.py"),
@@ -105,6 +105,72 @@ def test_test_files_never_count_against_the_cap() -> None:
     assert selected_paths == {"small.py", "largest.py"}
     assert {file.file_path for file in test_files} == {"test_small.py", "test_largest.py"}
     assert {entry.reason for entry in skipped} == {"test_file_context_only"}
+
+
+def test_lone_test_file_with_no_source_partner_is_selected_for_review() -> None:
+    """Verify a test file submitted without its source file becomes a review target.
+
+    With no source file to pair it to, setting it aside as TCASE context
+    would leave it reviewed by nobody.
+    """
+    files = [_file("tests/test_payment.py")]
+
+    selected, _, _ = select_pr_files(files)
+
+    assert selected == files
+
+
+def test_lone_test_file_with_no_source_partner_is_not_reported_as_skipped() -> None:
+    """Verify a promoted standalone test file carries no test_file_context_only skip."""
+    files = [_file("tests/test_payment.py")]
+
+    _, skipped, _ = select_pr_files(files)
+
+    assert skipped == []
+
+
+def test_lone_test_file_with_no_source_partner_is_not_used_as_tcase_context() -> None:
+    """Verify a promoted standalone test file is not also returned as pairing context."""
+    files = [_file("tests/test_payment.py"), _file("orders.py")]
+
+    _, _, test_files = select_pr_files(files)
+
+    assert test_files == []
+
+
+def test_standalone_test_file_never_displaces_a_shorter_source_file_from_the_cap() -> None:
+    """Verify source files claim cap slots before any standalone test file, regardless of length."""
+    files = [
+        _file("test_huge_suite.py", line_count=900),
+        _file("small.py", line_count=5),
+        _file("tiny.py", line_count=2),
+    ]
+
+    selected, _, _ = select_pr_files(files)
+
+    assert {file.file_path for file in selected} == {"small.py", "tiny.py"}
+
+
+def test_standalone_test_file_cut_by_the_cap_is_reported_as_exceeding_it() -> None:
+    """Verify a standalone test file left without a slot is reported, not silently dropped."""
+    files = [_file("test_huge_suite.py", line_count=900), _file("small.py"), _file("tiny.py")]
+
+    _, skipped, _ = select_pr_files(files)
+
+    assert {entry.file_path: entry.reason for entry in skipped} == {"test_huge_suite.py": "exceeded_pr_file_cap"}
+
+
+def test_standalone_test_files_fill_leftover_slots_ranked_by_line_count() -> None:
+    """Verify leftover cap slots go to the longest standalone test files first."""
+    files = [
+        _file("orders.py", line_count=50),
+        _file("test_short.py", line_count=5),
+        _file("test_long.py", line_count=200),
+    ]
+
+    selected, _, _ = select_pr_files(files)
+
+    assert {file.file_path for file in selected} == {"orders.py", "test_long.py"}
 
 
 def test_over_cap_keeps_top_n_candidates_by_line_count() -> None:

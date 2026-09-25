@@ -10,6 +10,7 @@ from code_reviewer.schemas.review import (
     Incident,
     PrRecommendation,
     Priority,
+    ReviewScope,
     SizeStatus,
     SkippedFile,
 )
@@ -439,3 +440,16 @@ def test_empty_submission_is_approved() -> None:
     result = _build([], [])
 
     assert result.meta.pr_recommendation == PrRecommendation.APPROVED
+
+
+def test_file_entry_carries_the_prepared_files_review_scope() -> None:
+    """Verify review_scope passes through so a client can tell a standalone test review apart."""
+    prepared = PreparedFile(
+        source_file=SubmittedFile(file_path="tests/test_a.py", content="x = 1\n"),
+        size_status=SizeStatus.NORMAL,
+        review_scope=ReviewScope.TEST_FILE_STANDALONE,
+    )
+
+    result = _build([_entry(CodeKey.VAR, 100, file_path="tests/test_a.py")], [prepared])
+
+    assert result.review[0].review_scope == ReviewScope.TEST_FILE_STANDALONE

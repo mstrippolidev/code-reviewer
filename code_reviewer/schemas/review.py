@@ -33,6 +33,11 @@ class SizeStatus(str, Enum):
     HARD_LIMIT_EXCEEDED = "hard_limit_exceeded"
 
 
+class ReviewScope(str, Enum):
+    FULL = "full"
+    TEST_FILE_STANDALONE = "test_file_standalone"
+
+
 class PrRecommendation(str, Enum):
     APPROVED = "APPROVED"
     NEEDS_WORK = "NEEDS_WORK"
@@ -134,6 +139,13 @@ class AggregatedReviewEntry(BaseModel):
     )
     size_status: SizeStatus = Field(
         description="Which file-size bucket this file falls into: normal, soft_limit, or hard_limit_exceeded."
+    )
+    review_scope: ReviewScope = Field(
+        description=(
+            "Which agent subset reviewed this file: full for a source file, "
+            "test_file_standalone for a test file submitted with no source "
+            "file to pair it to, reviewed only by VAR, ERR, CMT and TCASE."
+        )
     )
     agents_skipped: list[CodeKey] = Field(
         description="File agents that returned rating 0 for this file because it exceeded the hard limit."

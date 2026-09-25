@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.rag.structural_hash_store import LocatedChunk
-from code_reviewer.schemas.review import SizeStatus
+from code_reviewer.schemas.review import ReviewScope, SizeStatus
 
 
 class SubmittedFile(BaseModel):
@@ -20,6 +20,7 @@ class PreparedFile(BaseModel):
     source_file: SubmittedFile
     test_files: list[SubmittedFile] = []
     size_status: SizeStatus
+    review_scope: ReviewScope = ReviewScope.FULL
     repo_data: RepoData | None = Field(
         default=None,
         description=(

@@ -63,6 +63,7 @@ class Aggregator:
             code_key=sorted({entry.code_key for entry in rated_entries if entry.incidents}),
             file_lines=f"1-{prepared_file.source_file.content.count(chr(10))}",
             size_status=prepared_file.size_status,
+            review_scope=prepared_file.review_scope,
             agents_skipped=agents_skipped,
             agents_failed=[entry.code_key for entry in entries if entry.failed],
             skip_reason=_HARD_LIMIT_SKIP_REASON if agents_skipped else None,
