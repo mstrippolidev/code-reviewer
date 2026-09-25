@@ -59,6 +59,7 @@ class Settings(BaseSettings):
 
     max_batch_concurrency: int = 4
     max_dispatch_concurrency: int = 4
+    max_intake_screen_concurrency: int = 4
 
     exemplar_relevance_floor: float = 0.5
     exemplar_top_k: int = 2

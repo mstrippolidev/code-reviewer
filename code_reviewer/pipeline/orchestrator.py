@@ -6,8 +6,10 @@
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from concurrent.futures import ThreadPoolExecutor
 
 from code_reviewer.agents.registry import AgentsContainer
+from code_reviewer.config.settings import get_settings
 from code_reviewer.guardrails.errors import IntakeRejectedError
 from code_reviewer.guardrails.intake_screen import run_intake_screen
 from code_reviewer.pipeline.aggregator import Aggregator
@@ -22,6 +24,7 @@ from code_reviewer.rag.dry_matching import find_intra_pr_duplicates
 from code_reviewer.rag.errors import DryMatchingChunkingError
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.rag.structural_hash_store import LocatedChunk
+from code_reviewer.schemas.paired import Pairing
 from code_reviewer.schemas.review import (
     AgentReviewEntry,
     AggregatorOutput,
@@ -118,26 +121,43 @@ def prepare_files_for_pipeline(
     selected_files, skipped_files, test_files = select_pr_files(files)
     intra_pr_groups = _intra_pr_duplicate_groups(selected_files)
     pairings = pair_source_files_with_tests(selected_files, test_files)
-    prepared_files = []
 
-    for pairing in pairings:
-        try:
-            size_status = _run_source_file_guards(pairing.source_file.content)
-        except (SubmissionTooLargeError, FileTooLargeError, IntakeRejectedError) as error:
-            skipped_files.append(_skipped_file(pairing.source_file.file_path, error))
-        else:
-            screened_test_files, rejected_test_files = _screen_test_files(pairing.test_files)
-            skipped_files.extend(rejected_test_files)
-            prepared_files.append(PreparedFile(
-                source_file=pairing.source_file,
-                test_files=screened_test_files,
-                size_status=size_status,
-                review_scope=_review_scope(pairing.source_file.file_path),
-                repo_data=repo_data,
-                intra_pr_duplicates=groups_for_file(intra_pr_groups, pairing.source_file.file_path),
-            ))
+    with ThreadPoolExecutor(max_workers=get_settings().max_intake_screen_concurrency) as executor:
+        results = list(executor.map(
+            lambda pairing: _prepare_pairing(pairing, repo_data, intra_pr_groups), pairings
+        ))
+
+    prepared_files = []
+    for prepared_file, rejected_files in results:
+        skipped_files.extend(rejected_files)
+        if prepared_file is not None:
+            prepared_files.append(prepared_file)
 
     return prepared_files, skipped_files
+
+
+def _prepare_pairing(
+    pairing: Pairing, repo_data: RepoData | None, intra_pr_groups: list[list[LocatedChunk]]
+) -> tuple[PreparedFile | None, list[SkippedFile]]:
+    """Runs one source file's guards (and its paired test files' guards)
+    independently of every other pairing, so callers can run every pairing
+    across a submission concurrently: a rejection here only ever drops this
+    one file, never the pairings running alongside it."""
+    try:
+        size_status = _run_source_file_guards(pairing.source_file.content)
+    except (SubmissionTooLargeError, FileTooLargeError, IntakeRejectedError) as error:
+        return None, [_skipped_file(pairing.source_file.file_path, error)]
+
+    screened_test_files, rejected_test_files = _screen_test_files(pairing.test_files)
+    prepared_file = PreparedFile(
+        source_file=pairing.source_file,
+        test_files=screened_test_files,
+        size_status=size_status,
+        review_scope=_review_scope(pairing.source_file.file_path),
+        repo_data=repo_data,
+        intra_pr_duplicates=groups_for_file(intra_pr_groups, pairing.source_file.file_path),
+    )
+    return prepared_file, rejected_test_files
 
 def _intra_pr_duplicate_groups(selected_files: list[SubmittedFile]) -> list[list[LocatedChunk]]:
     """Computed once for the whole PR rather than per file, since a

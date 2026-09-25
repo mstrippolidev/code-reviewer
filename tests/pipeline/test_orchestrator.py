@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 from code_reviewer.agents.registry import AgentsContainer
 from code_reviewer.config.settings import get_settings
+from code_reviewer.guardrails.errors import IntakeRejectedError
 from code_reviewer.pipeline import orchestrator
 from code_reviewer.pipeline.orchestrator import run_pipeline
 from code_reviewer.rag.code_similarity_index import CodeMatch, LexicalMatch
@@ -233,6 +234,26 @@ def test_intra_pr_duplicate_detection_degrades_gracefully_on_unparseable_file() 
 
     assert len(prepared_files) == 2
     assert all(prepared.intra_pr_duplicates == [] for prepared in prepared_files)
+
+
+def test_intake_rejection_only_skips_its_own_file_when_screened_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify the intake screen runs across every file independently: one
+    file failing it is skipped, without stopping the others from being
+    prepared — the isolation guarantee that matters once screening a
+    submission's files runs concurrently rather than one at a time."""
+    def reject_one_file(content: str) -> None:
+        if content == "malicious":
+            raise IntakeRejectedError("rejected")
+
+    monkeypatch.setattr(orchestrator, "run_intake_screen", reject_one_file)
+    files = [_file("a.py", "clean"), _file("bad.py", "malicious"), _file("c.py", "clean")]
+
+    prepared_files, skipped_files = orchestrator.prepare_files_for_pipeline(files)
+
+    assert {prepared.source_file.file_path for prepared in prepared_files} == {"a.py", "c.py"}
+    assert [(skipped.file_path, skipped.reason) for skipped in skipped_files] == [("bad.py", "intake_rejected")]
 
 
 @pytest.mark.asyncio
