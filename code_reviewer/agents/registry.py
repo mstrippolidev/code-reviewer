@@ -28,6 +28,11 @@ from code_reviewer.rag.indexer import LlamaIndexRagManager
 from code_reviewer.rag.rerank import HistoryMatchReranker
 from code_reviewer.rag.shared_exemplars import SharedExemplarStore
 from code_reviewer.rag.structural_hash_store import StructuralHashStore
+from code_reviewer.rag.tcase_pairing import PairingCandidateFinder, PairingEvidenceSources
+from code_reviewer.rag.tcase_pairing_judge import PairingJudge
+from code_reviewer.rag.tcase_pairing_query_rewrite import PairingQueryRewriter
+from code_reviewer.rag.tcase_pairing_rerank import PAIRING_RERANK_MAX_CANDIDATES, PairingReranker
+from code_reviewer.rag.tcase_pairing_retry import CorrectiveTestPairingFinder, PairingCorrectionTools
 from code_reviewer.schemas.review import CodeKey
 
 
@@ -45,6 +50,7 @@ class AgentsContainer:
     history_match_reranker: HistoryMatchReranker
     exemplar_store: ExemplarStore | None = None
     shared_exemplar_store: SharedExemplarStore | None = None
+    test_pairing_finder: CorrectiveTestPairingFinder | None = None
 
 
 def build_agent_roster(
@@ -131,8 +137,24 @@ def build_agent_roster(
         history_match_reranker=history_match_reranker,
         exemplar_store=exemplar_store,
         shared_exemplar_store=shared_exemplar_store,
+        test_pairing_finder=_build_test_pairing_finder(llm, PairingEvidenceSources(rag_manager, code_similarity_index)),
     )
 
 
 def _llm_for(code_key: CodeKey, llm: LLMInterface | None) -> LLMInterface | None:
     return llm.for_code_key(code_key) if llm is not None else None
+
+
+def _fast_llm(llm: LLMInterface | None) -> LLMInterface | None:
+    return llm.for_fast_tier() if llm is not None else None
+
+
+def _build_test_pairing_finder(
+    llm: LLMInterface | None, evidence_sources: PairingEvidenceSources
+) -> CorrectiveTestPairingFinder:
+    fast_llm = _fast_llm(llm)
+    return CorrectiveTestPairingFinder(
+        finder=PairingCandidateFinder(evidence_sources),
+        reranker=PairingReranker(max_candidates=PAIRING_RERANK_MAX_CANDIDATES),
+        correction=PairingCorrectionTools(judge=PairingJudge(fast_llm), query_rewriter=PairingQueryRewriter(fast_llm)),
+    )

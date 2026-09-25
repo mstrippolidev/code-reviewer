@@ -202,12 +202,21 @@ class LlamaIndexRagManager:
             VectorStoreQueryError: If querying the vector store fails.
         """
         explanation = self._explainer.explain(code)
+        return self.find_similar_by_query(repo_data, explanation, top_k)
+
+    def find_similar_by_query(self, repo_data: RepoData, query: str, top_k: int = 5) -> list[SimilarChunk]:
+        """Like find_similar, but for a caller that already holds a
+        natural-language query: query is embedded as-is, with no explain step.
+
+        Raises:
+            VectorStoreQueryError: If querying the vector store fails.
+        """
         retriever = self._get_index().as_retriever(
             similarity_top_k=top_k,
             filters=self._scope_filters(repo_data.repo_id, owner_id=repo_data.owner_id),
         )
         try:
-            nodes = retriever.retrieve(explanation)
+            nodes = retriever.retrieve(query)
         except Exception as error:
             logger.exception("Similarity search failed for repo %r", repo_data.repo_id)
             raise VectorStoreQueryError(f"Similarity search failed for repo {repo_data.repo_id!r}") from error
@@ -224,6 +233,20 @@ class LlamaIndexRagManager:
             )
             for node in nodes
         ]
+
+    def list_indexed_file_paths(self, repo_id: str, owner_id: str | None) -> list[str]:
+        """Every distinct file_path with at least one chunk indexed for this repo.
+
+        Raises:
+            VectorStoreQueryError: If the lookup fails.
+        """
+        try:
+            nodes = self._vector_store.get_nodes(filters=self._scope_filters(repo_id, owner_id=owner_id))
+        except Exception as error:
+            logger.exception("Failed to list indexed files for repo %r", repo_id)
+            raise VectorStoreQueryError(f"Failed to list indexed files for repo {repo_id!r}") from error
+
+        return sorted({node.metadata["file_path"] for node in nodes})
 
     def get_file_chunks(self, repo_id: str, owner_id: str | None, file_path: str) -> list[FileChunk]:
         """Exact lookup of one file's indexed content, for the multi-hop
