@@ -10,7 +10,6 @@ from collections.abc import Awaitable, Callable
 from langchain_core.runnables import RunnableLambda, RunnableParallel
 
 from code_reviewer.agents.base import AgentBase, FileReviewMeta, FileSizeAwareAgentBase
-from code_reviewer.agents.coverage_gap import CoverageGapAgent
 from code_reviewer.agents.llm.middleware import rating_from_incidents
 from code_reviewer.agents.llm.timeout import call_with_hard_timeout
 from code_reviewer.agents.registry import AgentsContainer
@@ -21,13 +20,35 @@ from code_reviewer.pipeline.line_offset import offset_incidents
 from code_reviewer.rag.dry_evidence import extract_snippet
 from code_reviewer.rag.dry_matching import ChunkHistoryMatch, CrossHistoryDuplicateFinder, DuplicateEvidenceSources
 from code_reviewer.rag.dry_review import build_dry_review_entry
-from code_reviewer.schemas.paired import Pairing
-from code_reviewer.schemas.review import AgentOutput, AgentReviewEntry, CodeKey, Incident, Priority, SizeStatus
-from code_reviewer.schemas.submission import PreparedFile
+from code_reviewer.rag.errors import (
+    ChunkExplanationError,
+    PairingJudgeInvocationError,
+    PairingQueryRewriteError,
+    VectorStoreQueryError,
+)
+from code_reviewer.rag.tcase_pairing_retry import CorrectiveTestPairingFinder
+from code_reviewer.schemas.paired import Pairing, build_standalone_test_file_content
+from code_reviewer.schemas.review import (
+    AgentOutput,
+    AgentReviewEntry,
+    CodeKey,
+    Incident,
+    Priority,
+    ReviewScope,
+    SizeStatus,
+)
+from code_reviewer.schemas.submission import PreparedFile, SubmittedFile
 
 logger = logging.getLogger(__name__)
 
 _CHUNKED_SIZE_STATUSES = (SizeStatus.SOFT_LIMIT, SizeStatus.HARD_LIMIT_EXCEEDED)
+_TEST_FILE_HYGIENE_KEYS = frozenset({CodeKey.VAR, CodeKey.ERR, CodeKey.CMT})
+_PAIRING_LOOKUP_ERRORS = (
+    VectorStoreQueryError,
+    ChunkExplanationError,
+    PairingJudgeInvocationError,
+    PairingQueryRewriteError,
+)
 
 
 def review_file(
@@ -50,13 +71,33 @@ def review_file(
         One AgentReviewEntry per agent that reviewed this file.
     """
     splitter = splitter or PythonCodeSplit()
-    entries = _run_file_agents(prepared_file, agents_container.file_agents)
-    chunk_entries = _run_chunk_agents(prepared_file, agents_container.chunk_agents, splitter)
+    standalone = _is_standalone_test_review(prepared_file)
+    entries = [] if standalone else _run_file_agents(prepared_file, agents_container.file_agents)
+    chunk_agents = _scoped_chunk_agents(agents_container.chunk_agents, standalone)
+    chunk_entries = _run_chunk_agents(prepared_file, chunk_agents, splitter)
     _apply_cmplx_soft_limit_incident(chunk_entries, prepared_file)
     entries += chunk_entries
-    entries.append(_run_tcase_agent(prepared_file, agents_container.tcase_agent))
-    entries.append(_run_dry(agents_container, prepared_file))
+    entries.append(_run_tcase_agent(prepared_file, agents_container))
+    if not standalone:
+        entries.append(_run_dry(agents_container, prepared_file))
     return entries
+
+
+def _is_standalone_test_review(prepared_file: PreparedFile) -> bool:
+    return prepared_file.review_scope == ReviewScope.TEST_FILE_STANDALONE
+
+
+def _scoped_chunk_agents(chunk_agents: list[AgentBase], standalone: bool) -> list[AgentBase]:
+    if not standalone:
+        return chunk_agents
+    return [agent for agent in chunk_agents if agent.get_agent_key() in _TEST_FILE_HYGIENE_KEYS]
+
+
+def _tcase_content(prepared_file: PreparedFile, test_pairing_finder: CorrectiveTestPairingFinder | None) -> str:
+    if _is_standalone_test_review(prepared_file):
+        return build_standalone_test_file_content(prepared_file.source_file)
+    test_files = _tcase_test_files(prepared_file, test_pairing_finder)
+    return Pairing(source_file=prepared_file.source_file, test_files=test_files).get_content()
 
 
 def _run_file_agents(
@@ -119,12 +160,31 @@ def _run_chunked_agent(agent: AgentBase, file_path: str, chunks: list[CodeChunk]
     )
 
 
-def _run_tcase_agent(prepared_file: PreparedFile, tcase_agent: CoverageGapAgent) -> AgentReviewEntry:
+def _run_tcase_agent(prepared_file: PreparedFile, agents_container: AgentsContainer) -> AgentReviewEntry:
     """Runs TCASE once, whole-file, via its paired test-file content —
     never chunked, regardless of size band."""
-    pairing = Pairing(source_file=prepared_file.source_file, test_files=prepared_file.test_files)
-    content = pairing.get_content()
-    return tcase_agent.execute_agent(content, prepared_file.source_file.file_path).review[0]
+    content = _tcase_content(prepared_file, agents_container.test_pairing_finder)
+    return agents_container.tcase_agent.execute_agent(content, prepared_file.source_file.file_path).review[0]
+
+
+def _tcase_test_files(
+    prepared_file: PreparedFile, test_pairing_finder: CorrectiveTestPairingFinder | None
+) -> list[SubmittedFile]:
+    """Falls back to the repo's indexed corpus only when no test file rode along in the submission.
+
+    A failed corpus lookup degrades to no test files, never to a failed TCASE review.
+    """
+    if prepared_file.test_files or prepared_file.repo_data is None or test_pairing_finder is None:
+        return prepared_file.test_files
+    try:
+        return test_pairing_finder.find_test_files(prepared_file.repo_data, prepared_file.source_file)
+    except _PAIRING_LOOKUP_ERRORS:
+        logger.warning(
+            "corpus test-file pairing failed file_path=%s; reviewing without test files",
+            prepared_file.source_file.file_path,
+            exc_info=True,
+        )
+        return []
 
 
 def _run_dry(agents_container: AgentsContainer, prepared_file: PreparedFile) -> AgentReviewEntry:
@@ -231,7 +291,9 @@ async def review_file_runnable(
         One AgentReviewEntry per agent that reviewed this file.
     """
     splitter = splitter or PythonCodeSplit()
-    pairing = Pairing(source_file=prepared_file.source_file, test_files=prepared_file.test_files)
+    standalone = _is_standalone_test_review(prepared_file)
+    file_agents = [] if standalone else agents_container.file_agents
+    chunk_agents = _scoped_chunk_agents(agents_container.chunk_agents, standalone)
     context = {
         "code": prepared_file.source_file.content,
         "file_path": prepared_file.source_file.file_path,
@@ -239,11 +301,12 @@ async def review_file_runnable(
         "repo_data": prepared_file.repo_data,
     }
     raw_branches = (
-        {agent.get_agent_key().value: _file_agent_branch(agent) for agent in agents_container.file_agents}
-        | {agent.get_agent_key().value: _chunk_agent_branch(agent, splitter) for agent in agents_container.chunk_agents}
-        | {"TCASE": _tcase_branch(agents_container.tcase_agent, pairing.get_content())}
-        | {"DRY": _dry_branch(agents_container, prepared_file)}
+        {agent.get_agent_key().value: _file_agent_branch(agent) for agent in file_agents}
+        | {agent.get_agent_key().value: _chunk_agent_branch(agent, splitter) for agent in chunk_agents}
+        | {"TCASE": _tcase_branch(agents_container, prepared_file)}
     )
+    if not standalone:
+        raw_branches["DRY"] = _dry_branch(agents_container, prepared_file)
     branches = {key: branch.with_config({"run_name": key}) for key, branch in raw_branches.items()}
     config = {"max_concurrency": get_settings().max_dispatch_concurrency}
     results: dict[str, AgentOutput | AgentReviewEntry] = {}
@@ -343,12 +406,12 @@ def _chunk_agent_branch(agent: AgentBase, splitter: CodeSplitterInterface) -> Ru
     )
 
 
-def _tcase_branch(agent: CoverageGapAgent, pairing_content: str) -> RunnableLambda:
+def _tcase_branch(agents_container: AgentsContainer, prepared_file: PreparedFile) -> RunnableLambda:
     """Builds a branch that runs TCASE against its own paired content,
     isolated so its own failure can't take down the other branches."""
     return RunnableLambda(
         lambda ctx: _isolate_agent_failure(
-            CodeKey.TCASE, ctx["file_path"], lambda: agent.execute_agent(pairing_content, ctx["file_path"])
+            CodeKey.TCASE, ctx["file_path"], lambda: _run_tcase_agent(prepared_file, agents_container)
         )
     )
 
