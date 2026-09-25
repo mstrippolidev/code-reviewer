@@ -29,7 +29,9 @@ class ReviewJob(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     review_id: Mapped[uuid.UUID] = mapped_column(Uuid, unique=True, index=True, default=uuid.uuid4)
-    repo_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("api.registered_repos.repo_id"), index=True)
+    repo_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("api.registered_repos.repo_id", ondelete="CASCADE"), index=True
+    )
     requested_by_user_id: Mapped[int] = mapped_column(ForeignKey("api.users.id"))
     file_paths: Mapped[list[str]] = mapped_column(JSON)
     status: Mapped[ReviewJobStatus] = mapped_column(
