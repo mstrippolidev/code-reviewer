@@ -21,8 +21,8 @@ function authHeaders(token) {
   return { Authorization: `Bearer ${token}` }
 }
 
-async function getJson(url, token, ErrorClass) {
-  const response = await fetch(url, { headers: authHeaders(token) })
+async function getJson(url, token, ErrorClass, signal) {
+  const response = await fetch(url, { headers: authHeaders(token), signal })
   if (response.status === 401) {
     throw new UnauthorizedError('Session expired')
   }
@@ -148,19 +148,16 @@ export async function submitReview(token, repoId, filePaths) {
   return response.json()
 }
 
-export async function fetchReview(token, reviewId) {
-  return getJson(`${API_BASE_URL}/api/reviews/${reviewId}`, token, SubmitReviewError)
-}
-
 export async function fetchAgents(token) {
   return getJson(`${API_BASE_URL}/api/agents`, token, AgentCatalogFetchError)
 }
 
-export async function fetchIndexedFileContent(token, repoId, filePath) {
+export async function fetchIndexedFileContent(token, repoId, filePath, signal) {
   return getJson(
     `${API_BASE_URL}/api/repos/${repoId}/files/content?file_path=${encodeURIComponent(filePath)}`,
     token,
-    FileContentFetchError
+    FileContentFetchError,
+    signal
   )
 }
 
