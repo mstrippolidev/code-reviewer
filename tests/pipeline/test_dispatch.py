@@ -277,15 +277,29 @@ def test_file_agent_receives_no_repo_data_for_a_standalone_review(
 
 
 @DISPATCH_FUNCTIONS
-def test_chunk_agent_receives_whole_file_when_size_is_normal(
+def test_chunk_agent_batches_a_single_whole_file_chunk_with_no_functions(
     dispatch: DispatchFn, container: AgentsContainer, var_agent: FakeAgent
 ) -> None:
     prepared = _prepared_file(size_status=SizeStatus.NORMAL, content="x = 1\n")
 
     dispatch(prepared, container)
 
-    assert var_agent.execute_agent_calls == [("x = 1\n", "f.py", None)]
-    assert var_agent.execute_agent_batch_calls == []
+    assert var_agent.execute_agent_calls == []
+    assert var_agent.execute_agent_batch_calls == [(["x = 1\n"], "f.py")]
+
+
+@DISPATCH_FUNCTIONS
+def test_chunk_agent_is_split_and_batched_regardless_of_file_size(
+    dispatch: DispatchFn, container: AgentsContainer, var_agent: FakeAgent
+) -> None:
+    prepared = _prepared_file(size_status=SizeStatus.NORMAL, content=SOURCE_WITH_TWO_FUNCTIONS)
+
+    dispatch(prepared, container)
+
+    assert var_agent.execute_agent_calls == []
+    chunks, file_path = var_agent.execute_agent_batch_calls[0]
+    assert file_path == "f.py"
+    assert chunks == ["def foo():\n    return 1", "def bar():\n    return 2"]
 
 
 @DISPATCH_FUNCTIONS
@@ -377,6 +391,22 @@ def test_tcase_is_never_chunked_even_at_hard_limit(
 
     assert len(tcase_agent.execute_agent_calls) == 1
     assert tcase_agent.execute_agent_batch_calls == []
+
+
+@DISPATCH_FUNCTIONS
+def test_tcase_incidents_are_offset_past_its_content_header(
+    dispatch: DispatchFn, container: AgentsContainer, tcase_agent: FakeAgent
+) -> None:
+    """_tcase_content always prepends one header line (SOURCE FILE: or
+    TEST FILE UNDER REVIEW:) before the reviewed file's own content, so a
+    line TCASE reports as 3 is really line 2 of the real file."""
+    tcase_agent._incidents = [Incident(priority=Priority.MEDIUM, line_position="3-4", description="d", advice="a")]
+    prepared = _prepared_file()
+
+    entries = dispatch(prepared, container)
+
+    tcase_entry = next(entry for entry in entries if entry.code_key == CodeKey.TCASE)
+    assert [incident.line_position for incident in tcase_entry.incidents] == ["2-3"]
 
 
 @DISPATCH_FUNCTIONS

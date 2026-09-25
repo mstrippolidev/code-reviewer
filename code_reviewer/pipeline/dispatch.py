@@ -1,7 +1,6 @@
 """
     Dispatches one prepared file to every built agent, splitting chunk
-    agents' work into per-function/class pieces once the file is too
-    large for a single call.
+    agents' work into per-function/class pieces.
 """
 import logging
 import time
@@ -41,8 +40,8 @@ from code_reviewer.schemas.submission import PreparedFile, SubmittedFile
 
 logger = logging.getLogger(__name__)
 
-_CHUNKED_SIZE_STATUSES = (SizeStatus.SOFT_LIMIT, SizeStatus.HARD_LIMIT_EXCEEDED)
 _TEST_FILE_HYGIENE_KEYS = frozenset({CodeKey.VAR, CodeKey.ERR, CodeKey.CMT})
+_TCASE_HEADER_LINE_COUNT = 1
 _PAIRING_LOOKUP_ERRORS = (
     VectorStoreQueryError,
     ChunkExplanationError,
@@ -64,8 +63,8 @@ def review_file(
         agents_container: The complete set of built agents, grouped for
             dispatch.
         splitter: Splits chunk agents' work into per-function/class
-            pieces once the file is too large for one call. Defaults to
-            PythonCodeSplit() — this codebase is Python-only today.
+            pieces. Defaults to PythonCodeSplit() — this codebase is
+            Python-only today.
 
     Returns:
         One AgentReviewEntry per agent that reviewed this file.
@@ -114,13 +113,7 @@ def _run_chunk_agent(
     ctx: dict[str, str | SizeStatus],
     splitter: CodeSplitterInterface,
 ) -> AgentReviewEntry:
-    """Runs one chunk agent on a shared context, splitting into per-
-    function/class chunks once the file is at or past the soft size limit."""
-    size_status = ctx["size_status"]
-    if size_status not in _CHUNKED_SIZE_STATUSES:
-        return agent.execute_agent(ctx["code"], ctx["file_path"]).review[0]
-
-    code_chunks = splitter.split_code(ctx["code"])
+    code_chunks = _chunks_or_whole_file(splitter, ctx["code"])
     return _run_chunked_agent(agent, ctx["file_path"], code_chunks)
 
 
@@ -129,14 +122,18 @@ def _run_chunk_agents(
     chunk_agents: list[AgentBase],
     splitter: CodeSplitterInterface,
 ) -> list[AgentReviewEntry]:
-    """Runs every chunk agent once per file, splitting into per-function/
-    class chunks once the file is at or past the soft size limit."""
-    source = prepared_file.source_file
-    if prepared_file.size_status not in _CHUNKED_SIZE_STATUSES:
-        return [agent.execute_agent(source.content, source.file_path).review[0] for agent in chunk_agents]
+    code_chunks = _chunks_or_whole_file(splitter, prepared_file.source_file.content)
+    return [_run_chunked_agent(agent, prepared_file.source_file.file_path, code_chunks) for agent in chunk_agents]
 
-    code_chunks = splitter.split_code(source.content)
-    return [_run_chunked_agent(agent, source.file_path, code_chunks) for agent in chunk_agents]
+
+def _chunks_or_whole_file(splitter: CodeSplitterInterface, content: str) -> list[CodeChunk]:
+    """Falls back to one chunk covering the whole file when it has no top-level function or class."""
+    code_chunks = splitter.split_code(content)
+    if code_chunks:
+        return code_chunks
+    return [CodeChunk(
+        chunk_type="Module", name="<module>", code=content, start_line=1, end_line=content.count("\n") + 1
+    )]
 
 
 def _get_chunks(chunks: list[CodeChunk]) -> list[str]:
@@ -162,9 +159,15 @@ def _run_chunked_agent(agent: AgentBase, file_path: str, chunks: list[CodeChunk]
 
 def _run_tcase_agent(prepared_file: PreparedFile, agents_container: AgentsContainer) -> AgentReviewEntry:
     """Runs TCASE once, whole-file, via its paired test-file content —
-    never chunked, regardless of size band."""
+    never chunked, regardless of size band. Both _tcase_content branches
+    (SOURCE FILE:/TEST FILE UNDER REVIEW:) prepend exactly one header line
+    before the reviewed file's own content, so TCASE's line numbers are
+    always one line ahead of the real file and need the same offsetting
+    every chunk agent already gets."""
     content = _tcase_content(prepared_file, agents_container.test_pairing_finder)
-    return agents_container.tcase_agent.execute_agent(content, prepared_file.source_file.file_path).review[0]
+    entry = agents_container.tcase_agent.execute_agent(content, prepared_file.source_file.file_path).review[0]
+    entry.incidents = offset_incidents(entry.incidents, start_line=1 - _TCASE_HEADER_LINE_COUNT)
+    return entry
 
 
 def _tcase_test_files(
@@ -281,8 +284,8 @@ async def review_file_runnable(
         agents_container: The complete set of built agents, grouped for
             dispatch.
         splitter: Splits chunk agents' work into per-function/class
-            pieces once the file is too large for one call. Defaults to
-            PythonCodeSplit() — this codebase is Python-only today.
+            pieces. Defaults to PythonCodeSplit() — this codebase is
+            Python-only today.
         on_agent_reviewed: Optional progress hook, awaited with one agent's
             code_key and its finished AgentReviewEntry the instant that
             branch resolves — other branches may still be running.
