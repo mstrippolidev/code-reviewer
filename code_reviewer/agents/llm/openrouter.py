@@ -40,6 +40,11 @@ class OpenRouter(LLMInterface[T]):
             return self
         return OpenRouter(temperature=self._temperature, model_name=settings.openrouter_fast_model)
 
+    def for_fast_tier(self) -> "OpenRouter[T]":
+        if self._explicit_model:
+            return self
+        return OpenRouter(temperature=self._temperature, model_name=settings.openrouter_fast_model)
+
     def _get_model_name(self) -> str:
         return self._model_name
 

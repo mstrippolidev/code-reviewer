@@ -32,6 +32,10 @@ class LLMInterface(ABC, Generic[T]):
     def for_code_key(self, code_key: CodeKey) -> "LLMInterface[T]":
         return self
 
+    def for_fast_tier(self) -> "LLMInterface[T]":
+        """The provider's cheap, fast model for short judgment calls; this same instance when it has none."""
+        return self
+
     def create_model(
         self, output_schema: type[T], include_raw: bool = False
     ) -> Runnable[LanguageModelInput, T | dict[str, Any]]:
