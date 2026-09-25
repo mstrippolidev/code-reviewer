@@ -1,12 +1,17 @@
 """
-    Tests for dedupe_tool_calls: short-circuits a tool call that exactly
-    repeats one already in the conversation, without re-executing it. No
-    LLM involved — pure logic against a hand-built ToolCallRequest.
+    Tests for dedupe_tool_calls and retry_missing_structured_output. No LLM
+    involved — pure logic against hand-built middleware requests.
 """
-from langchain.agents.middleware import ToolCallRequest
+import pytest
+from langchain.agents.middleware import ModelRequest, ModelResponse, ToolCallRequest
 from langchain_core.messages import AIMessage
 
-from code_reviewer.agents.llm.middleware import _already_called, dedupe_tool_calls
+from code_reviewer.agents.llm.middleware import (
+    StructuredOutputNotCalledError,
+    _already_called,
+    dedupe_tool_calls,
+    retry_missing_structured_output,
+)
 
 FILE_PATH_ARGS = {"file_path": "infra/db.py"}
 
@@ -81,3 +86,68 @@ def test_dedupe_calls_the_handler_when_not_a_repeat() -> None:
     result = dedupe_tool_calls.wrap_tool_call(_request(call, messages), lambda request: "real result")
 
     assert result == "real result"
+
+
+def _model_request() -> ModelRequest:
+    return ModelRequest(model=None, messages=[])
+
+
+def _no_tool_call_response() -> ModelResponse:
+    return ModelResponse(result=[AIMessage(content="Here is my review in words.")])
+
+
+def _tool_call_response() -> ModelResponse:
+    return ModelResponse(result=[AIMessage(content="", tool_calls=[{"name": "get_file_chunks", "args": {}, "id": "1"}])])
+
+
+def _structured_response() -> ModelResponse:
+    return ModelResponse(result=[AIMessage(content="")], structured_response="done")
+
+
+def test_returns_immediately_when_tool_call_present() -> None:
+    handler_calls = []
+
+    def handler(request):
+        handler_calls.append(request)
+        return _tool_call_response()
+
+    result = retry_missing_structured_output.wrap_model_call(_model_request(), handler)
+
+    assert len(handler_calls) == 1
+    assert result.result[0].tool_calls
+
+
+def test_returns_immediately_when_structured_response_present() -> None:
+    handler_calls = []
+
+    def handler(request):
+        handler_calls.append(request)
+        return _structured_response()
+
+    result = retry_missing_structured_output.wrap_model_call(_model_request(), handler)
+
+    assert len(handler_calls) == 1
+    assert result.structured_response == "done"
+
+
+def test_retries_once_then_succeeds_when_first_turn_has_no_tool_call() -> None:
+    responses = [_no_tool_call_response(), _tool_call_response()]
+    handler_calls = []
+
+    def handler(request):
+        handler_calls.append(request)
+        return responses.pop(0)
+
+    result = retry_missing_structured_output.wrap_model_call(_model_request(), handler)
+
+    assert len(handler_calls) == 2
+    assert "no tool call" in handler_calls[1].messages[-1].content.lower()
+    assert result.result[0].tool_calls
+
+
+def test_raises_after_exhausting_retries_with_no_tool_call() -> None:
+    def handler(request):
+        return _no_tool_call_response()
+
+    with pytest.raises(StructuredOutputNotCalledError):
+        retry_missing_structured_output.wrap_model_call(_model_request(), handler)

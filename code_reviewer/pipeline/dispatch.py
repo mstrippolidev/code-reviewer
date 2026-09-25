@@ -365,7 +365,9 @@ def _isolate_agent_failure(
     try:
         return produce()
     except Exception as error:
-        logger.error("agent dispatch failed code_key=%s file_path=%s error=%s", code_key, file_path, error)
+        logger.error(
+            "agent dispatch failed code_key=%s file_path=%s error=%s", code_key, file_path, error, exc_info=True
+        )
         return _agent_failure_entry(code_key, file_path)
 
 

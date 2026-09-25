@@ -76,6 +76,51 @@ def _append_correction(
     return request.override(messages=[*request.messages, error.ai_message, correction])
 
 
+class StructuredOutputNotCalledError(Exception):
+    """Raised when a tool-carrying agent answers in plain text instead of
+    calling any tool, including the structured-output tool, and still hasn't
+    after MAX_RETRIES corrective retries."""
+
+
+_NO_TOOL_CALL_CORRECTION = (
+    "Your last response was plain text with no tool call. You must call the "
+    "structured-output tool to submit your final review — do not describe it "
+    "in words instead."
+)
+
+
+@wrap_model_call
+def retry_missing_structured_output(
+    request: ModelRequest,
+    handler: Callable[[ModelRequest], ModelResponse],
+) -> ModelResponse:
+    """Retry a turn that answered in plain text instead of calling any tool.
+
+    Raises:
+        StructuredOutputNotCalledError: If the model still hasn't called any
+            tool after MAX_RETRIES corrective retries.
+    """
+    for attempt in range(MAX_RETRIES + 1):
+        response = handler(request)
+        if response.structured_response is not None or _made_a_tool_call(response):
+            return response
+        if attempt == MAX_RETRIES:
+            raise StructuredOutputNotCalledError(
+                f"Model did not call any tool after {MAX_RETRIES} corrective retries."
+            )
+        request = _append_no_tool_call_correction(request, response)
+    raise RuntimeError("Unreachable: retry loop completed without returning.")
+
+
+def _made_a_tool_call(response: ModelResponse) -> bool:
+    return any(getattr(message, "tool_calls", None) for message in response.result)
+
+
+def _append_no_tool_call_correction(request: ModelRequest, response: ModelResponse) -> ModelRequest:
+    correction = HumanMessage(_NO_TOOL_CALL_CORRECTION)
+    return request.override(messages=[*request.messages, *response.result, correction])
+
+
 _TRANSIENT_EXCEPTION_TYPES = (
     openai.APITimeoutError,
     openai.APIConnectionError,
