@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     ollama_embed_model: str
     ollama_code_embed_model: str
     ollama_embed_num_ctx: int = 8192
+    ollama_llm_num_ctx: int = 8192
 
     openrouter_api_key: str
     openrouter_model: str

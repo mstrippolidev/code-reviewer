@@ -29,6 +29,9 @@ class OllamaLLM(LLMInterface[T]):
         timeout = get_settings().llm_call_timeout_seconds
         return {"client_kwargs": {"timeout": timeout}}
 
+    def _get_context_window_kwargs(self) -> dict[str, Any]:
+        return {"num_ctx": get_settings().ollama_llm_num_ctx}
+
     def build_response_format(self, schema: type[T]) -> ResponseFormat[T]:
         """Use provider-native structured output instead of a tool call.
 

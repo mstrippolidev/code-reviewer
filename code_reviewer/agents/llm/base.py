@@ -61,6 +61,7 @@ class LLMInterface(ABC, Generic[T]):
             "model_provider": self._get_model_provider(),
             "base_url": self._get_base_url(),
             **self._get_timeout_kwargs(),
+            **self._get_context_window_kwargs(),
         }
         api_key = self._get_api_key()
         if api_key is not None:
@@ -90,6 +91,13 @@ class LLMInterface(ABC, Generic[T]):
         provider's chat model exposes this under a different name (or a
         nested client config), so there is no single shared kwarg — empty
         by default, concrete providers override with their own mechanism."""
+        return {}
+
+    def _get_context_window_kwargs(self) -> dict[str, Any]:
+        """Provider-specific kwarg(s) sizing the model's context window.
+        Only a local Ollama model needs this — a hosted provider sizes its
+        own context server-side, and forwarding an Ollama-only kwarg like
+        num_ctx to it would raise. Empty by default; OllamaLLM overrides."""
         return {}
 
     @abstractmethod
