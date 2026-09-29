@@ -8,11 +8,12 @@ from datetime import datetime
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from api.db.models.guest_review_file import GuestReviewFile
 from api.db.models.indexed_file import IndexedFile, IndexedFileStatus
 from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 from api.db.models.review_job import ReviewJob, ReviewJobStatus
 from api.db.models.user import User
-from api.dependencies import get_current_user, get_db_session, get_kafka_producer
+from api.dependencies import get_current_user, get_db_session, get_kafka_producer, require_user_or_guest
 from api.routers.reviews import router as reviews_router
 from api.schemas.reviews import ReviewRequestedMessage
 
@@ -45,16 +46,20 @@ class FakeAsyncSession:
         registered_repo: RegisteredRepo | None = None,
         indexed_files: list[IndexedFile] | None = None,
         review_job: ReviewJob | None = None,
+        guest_file: GuestReviewFile | None = None,
     ) -> None:
         self.registered_repo = registered_repo
         self.indexed_files = indexed_files or []
         self.review_job = review_job
+        self.guest_file = guest_file
         self.added: list[object] = []
 
     async def scalar(self, statement) -> object | None:
         entity = statement.column_descriptions[0]["entity"]
         if entity is ReviewJob:
             return self.review_job
+        if entity is GuestReviewFile:
+            return self.guest_file
         return self.registered_repo
 
     async def scalars(self, statement) -> _ScalarsResult:
@@ -133,6 +138,7 @@ def _build_app(*, session: FakeAsyncSession, kafka_producer: FakeReviewProducer 
     app.dependency_overrides[get_db_session] = _fake_db_session
     app.dependency_overrides[get_kafka_producer] = lambda: kafka_producer or FakeReviewProducer()
     app.dependency_overrides[get_current_user] = lambda: _make_user()
+    app.dependency_overrides[require_user_or_guest] = lambda: None
     return app
 
 
@@ -189,5 +195,25 @@ def test_get_review_404s_for_an_unknown_review_id() -> None:
     client = TestClient(app)
 
     response = client.get(f"/api/reviews/{uuid.uuid4()}")
+
+    assert response.status_code == 404
+
+
+def test_get_review_file_content_returns_a_guest_files_stored_source() -> None:
+    job = _make_review_job(repo_id=None, requested_by_user_id=None, guest_session_id=7, file_paths=["example.py"])
+    guest_file = GuestReviewFile(id=1, review_job_id=job.id, file_path="example.py", content="def f(): ...\n")
+    client = TestClient(_build_app(session=FakeAsyncSession(review_job=job, guest_file=guest_file)))
+
+    response = client.get(f"/api/reviews/{job.review_id}/files/content", params={"file_path": "example.py"})
+
+    assert response.json() == {"file_path": "example.py", "content": "def f(): ...\n"}
+
+
+def test_get_review_file_content_404s_for_a_file_with_no_stored_source() -> None:
+    """Verify a repo review (whose source lives in indexed files, not here) gets a clean 404."""
+    job = _make_review_job()
+    client = TestClient(_build_app(session=FakeAsyncSession(review_job=job)))
+
+    response = client.get(f"/api/reviews/{job.review_id}/files/content", params={"file_path": "src/module.py"})
 
     assert response.status_code == 404

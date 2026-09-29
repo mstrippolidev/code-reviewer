@@ -1,7 +1,6 @@
 """
     Dispatches one prepared file to every built agent, splitting chunk
-    agents' work into per-function/class pieces once the file is too
-    large for a single call.
+    agents' work into per-function/class pieces.
 """
 import logging
 import time
@@ -41,8 +40,12 @@ from code_reviewer.schemas.submission import PreparedFile, SubmittedFile
 
 logger = logging.getLogger(__name__)
 
-_CHUNKED_SIZE_STATUSES = (SizeStatus.SOFT_LIMIT, SizeStatus.HARD_LIMIT_EXCEEDED)
 _TEST_FILE_HYGIENE_KEYS = frozenset({CodeKey.VAR, CodeKey.ERR, CodeKey.CMT})
+_TCASE_HEADER_LINE_COUNT = 1
+DRY_REQUIRES_REPO_REASON = (
+    "Duplication checks compare against a registered repository's indexed history, "
+    "so DRY is only available for GitHub-connected reviews."
+)
 _PAIRING_LOOKUP_ERRORS = (
     VectorStoreQueryError,
     ChunkExplanationError,
@@ -64,15 +67,16 @@ def review_file(
         agents_container: The complete set of built agents, grouped for
             dispatch.
         splitter: Splits chunk agents' work into per-function/class
-            pieces once the file is too large for one call. Defaults to
-            PythonCodeSplit() — this codebase is Python-only today.
+            pieces. Defaults to PythonCodeSplit() — this codebase is
+            Python-only today.
 
     Returns:
         One AgentReviewEntry per agent that reviewed this file.
     """
     splitter = splitter or PythonCodeSplit()
     standalone = _is_standalone_test_review(prepared_file)
-    entries = [] if standalone else _run_file_agents(prepared_file, agents_container.file_agents)
+    file_agents = _file_agents_for(prepared_file, agents_container)
+    entries = [] if standalone else _run_file_agents(prepared_file, file_agents)
     chunk_agents = _scoped_chunk_agents(agents_container.chunk_agents, standalone)
     chunk_entries = _run_chunk_agents(prepared_file, chunk_agents, splitter)
     _apply_cmplx_soft_limit_incident(chunk_entries, prepared_file)
@@ -85,6 +89,19 @@ def review_file(
 
 def _is_standalone_test_review(prepared_file: PreparedFile) -> bool:
     return prepared_file.review_scope == ReviewScope.TEST_FILE_STANDALONE
+
+
+def _file_agents_for(
+    prepared_file: PreparedFile, agents_container: AgentsContainer
+) -> list[FileSizeAwareAgentBase]:
+    """COUP and ARCH each have a repo-aware build (cross-file evidence
+    tool) and a repo-less one (no tool), selected per file by whether this
+    review has repo context."""
+    repo_aware = prepared_file.repo_data is not None
+    coupling = agents_container.coupling_agent if repo_aware else agents_container.coupling_agent_repoless
+    architecture = agents_container.architecture_agent if repo_aware else agents_container.architecture_agent_repoless
+    variants = [agent for agent in (coupling, architecture) if agent is not None]
+    return [*agents_container.file_agents, *variants]
 
 
 def _scoped_chunk_agents(chunk_agents: list[AgentBase], standalone: bool) -> list[AgentBase]:
@@ -114,13 +131,7 @@ def _run_chunk_agent(
     ctx: dict[str, str | SizeStatus],
     splitter: CodeSplitterInterface,
 ) -> AgentReviewEntry:
-    """Runs one chunk agent on a shared context, splitting into per-
-    function/class chunks once the file is at or past the soft size limit."""
-    size_status = ctx["size_status"]
-    if size_status not in _CHUNKED_SIZE_STATUSES:
-        return agent.execute_agent(ctx["code"], ctx["file_path"]).review[0]
-
-    code_chunks = splitter.split_code(ctx["code"])
+    code_chunks = _chunks_or_whole_file(splitter, ctx["code"])
     return _run_chunked_agent(agent, ctx["file_path"], code_chunks)
 
 
@@ -129,19 +140,31 @@ def _run_chunk_agents(
     chunk_agents: list[AgentBase],
     splitter: CodeSplitterInterface,
 ) -> list[AgentReviewEntry]:
-    """Runs every chunk agent once per file, splitting into per-function/
-    class chunks once the file is at or past the soft size limit."""
-    source = prepared_file.source_file
-    if prepared_file.size_status not in _CHUNKED_SIZE_STATUSES:
-        return [agent.execute_agent(source.content, source.file_path).review[0] for agent in chunk_agents]
+    code_chunks = _chunks_or_whole_file(splitter, prepared_file.source_file.content)
+    return [_run_chunked_agent(agent, prepared_file.source_file.file_path, code_chunks) for agent in chunk_agents]
 
-    code_chunks = splitter.split_code(source.content)
-    return [_run_chunked_agent(agent, source.file_path, code_chunks) for agent in chunk_agents]
+
+def _chunks_or_whole_file(splitter: CodeSplitterInterface, content: str) -> list[CodeChunk]:
+    """Falls back to one chunk covering the whole file when it has no top-level function or class."""
+    code_chunks = splitter.split_code(content)
+    if code_chunks:
+        return code_chunks
+    return [CodeChunk(
+        chunk_type="Module", name="<module>", code=content, start_line=1, end_line=content.count("\n") + 1
+    )]
 
 
 def _get_chunks(chunks: list[CodeChunk]) -> list[str]:
-    """Converts code chunks to their raw text, in source order."""
-    return [chunk.code for chunk in chunks]
+    """Converts code chunks to their text, in source order, each line
+    prefixed with its chunk-relative line number so a chunk agent reads
+    line_position off the prefix instead of counting from the top of the
+    chunk — offset_incidents still expects that same 1-indexed
+    chunk-relative numbering back."""
+    return [_number_lines(chunk.code) for chunk in chunks]
+
+
+def _number_lines(code: str) -> str:
+    return "\n".join(f"{i}: {line}" for i, line in enumerate(code.splitlines(), start=1))
 
 
 def _run_chunked_agent(agent: AgentBase, file_path: str, chunks: list[CodeChunk]) -> AgentReviewEntry:
@@ -162,9 +185,15 @@ def _run_chunked_agent(agent: AgentBase, file_path: str, chunks: list[CodeChunk]
 
 def _run_tcase_agent(prepared_file: PreparedFile, agents_container: AgentsContainer) -> AgentReviewEntry:
     """Runs TCASE once, whole-file, via its paired test-file content —
-    never chunked, regardless of size band."""
+    never chunked, regardless of size band. Both _tcase_content branches
+    (SOURCE FILE:/TEST FILE UNDER REVIEW:) prepend exactly one header line
+    before the reviewed file's own content, so TCASE's line numbers are
+    always one line ahead of the real file and need the same offsetting
+    every chunk agent already gets."""
     content = _tcase_content(prepared_file, agents_container.test_pairing_finder)
-    return agents_container.tcase_agent.execute_agent(content, prepared_file.source_file.file_path).review[0]
+    entry = agents_container.tcase_agent.execute_agent(content, prepared_file.source_file.file_path).review[0]
+    entry.incidents = offset_incidents(entry.incidents, start_line=1 - _TCASE_HEADER_LINE_COUNT)
+    return entry
 
 
 def _tcase_test_files(
@@ -193,6 +222,14 @@ def _run_dry(agents_container: AgentsContainer, prepared_file: PreparedFile) -> 
     reach the DRY judge; a file with no evidence of either kind short-
     circuits to a clean result with no LLM call at all."""
     file_path = prepared_file.source_file.file_path
+    if prepared_file.repo_data is None:
+        return AgentReviewEntry(
+            file_path=file_path,
+            code_key=CodeKey.DRY,
+            incidents=[],
+            skipped=True,
+            skip_reason=DRY_REQUIRES_REPO_REASON,
+        )
     intra_pr_groups = prepared_file.intra_pr_duplicates
     history_matches = _gather_dry_history_matches(agents_container, prepared_file)
     if not intra_pr_groups and not history_matches:
@@ -281,8 +318,8 @@ async def review_file_runnable(
         agents_container: The complete set of built agents, grouped for
             dispatch.
         splitter: Splits chunk agents' work into per-function/class
-            pieces once the file is too large for one call. Defaults to
-            PythonCodeSplit() — this codebase is Python-only today.
+            pieces. Defaults to PythonCodeSplit() — this codebase is
+            Python-only today.
         on_agent_reviewed: Optional progress hook, awaited with one agent's
             code_key and its finished AgentReviewEntry the instant that
             branch resolves — other branches may still be running.
@@ -292,7 +329,7 @@ async def review_file_runnable(
     """
     splitter = splitter or PythonCodeSplit()
     standalone = _is_standalone_test_review(prepared_file)
-    file_agents = [] if standalone else agents_container.file_agents
+    file_agents = [] if standalone else _file_agents_for(prepared_file, agents_container)
     chunk_agents = _scoped_chunk_agents(agents_container.chunk_agents, standalone)
     context = {
         "code": prepared_file.source_file.content,

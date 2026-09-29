@@ -1,6 +1,7 @@
 """
     System prompt for the VAR agent: naming quality.
 """
+from code_reviewer.prompts.agents.line_numbering import CHUNK_LINE_NUMBERING_INSTRUCTION
 
 VAR_CRITICAL_CRITERION = """a name doesn't just fail to reveal
   intent but actively states the opposite of what the code does — e.g. a
@@ -54,7 +55,7 @@ For each name you flag, report one incident with:
   with limited reach, or any real finding outside the four categories
   above.
 - line_position: a "start-end" string (e.g. "42-42" for a single line),
-  never a bare number.
+  never a bare number. {CHUNK_LINE_NUMBERING_INSTRUCTION}
 - description: one sentence naming the actual identifier and what's
   unclear about it, not a restatement of the rule.
 - advice: a concrete replacement name, not a vague instruction to

@@ -13,6 +13,7 @@ from langchain_core.tools import BaseTool
 from code_reviewer.agents.llm.base import LLMInterface
 from code_reviewer.agents.llm.middleware import (
     dedupe_tool_calls,
+    discard_model_reported_failure,
     retry_missing_structured_output,
     retry_model,
     retry_transient_call,
@@ -90,6 +91,7 @@ class AgentBase:
                 *self._tool_loop_guard(tools),
                 *self._extra_middleware(),
                 calculate_rating,
+                discard_model_reported_failure,
             ],
             response_format=self._response_format(llm_factory, tools),
             context_schema=self._context_schema(),

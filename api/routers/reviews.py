@@ -7,16 +7,25 @@ from fastapi.sse import ServerSentEvent
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.models.guest_review_file import GuestReviewFile
 from api.db.models.indexed_file import IndexedFile, IndexedFileStatus
 from api.db.models.registered_repo import RegisteredRepo
 from api.db.models.review_job import ReviewJob, ReviewJobStatus
 from api.db.models.user import User
-from api.dependencies import get_current_user, get_db_session, get_kafka_producer, require_registered_repo
+from api.dependencies import (
+    get_current_user,
+    get_db_session,
+    get_kafka_producer,
+    require_registered_repo,
+    require_user_or_guest,
+    short_lived_db_session,
+)
 from api.indexing.producer import PublishError, RepoIndexProducer
 from api.review.review_progress_broadcaster import ReviewProgressBroadcaster
 from api.review.topics import REVIEW_REQUESTED
 from api.schemas.reviews import (
     ReviewAgentProgressMessage,
+    ReviewFileContentRead,
     ReviewJobRead,
     ReviewRequestedMessage,
     ReviewStatusMessage,
@@ -88,10 +97,30 @@ async def _publish_review_requested(job: ReviewJob, repo: RegisteredRepo, kafka_
 @router.get("/reviews/{review_id}")
 async def get_review(
     review_id: uuid.UUID,
-    _current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
+    _identity: None = Depends(require_user_or_guest),
 ) -> ReviewJobRead:
     return ReviewJobRead.model_validate(await _require_review_job(review_id, session))
+
+
+@router.get("/reviews/{review_id}/files/content")
+async def get_review_file_content(
+    review_id: uuid.UUID,
+    file_path: str,
+    session: AsyncSession = Depends(get_db_session),
+    _identity: None = Depends(require_user_or_guest),
+) -> ReviewFileContentRead:
+    """Serves a guest review's own submitted source; a repo review's source is served per repo instead."""
+    job = await _require_review_job(review_id, session)
+    guest_file = await session.scalar(
+        select(GuestReviewFile).where(GuestReviewFile.review_job_id == job.id, GuestReviewFile.file_path == file_path)
+    )
+    if guest_file is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No submitted content for {file_path} in review {review_id}",
+        )
+    return ReviewFileContentRead.model_validate(guest_file)
 
 
 async def _require_review_job(review_id: uuid.UUID, session: AsyncSession) -> ReviewJob:
@@ -105,8 +134,7 @@ async def _require_review_job(review_id: uuid.UUID, session: AsyncSession) -> Re
 async def stream_review(
     request: Request,
     review_id: uuid.UUID,
-    session: AsyncSession = Depends(get_db_session),
-    _current_user: User = Depends(get_current_user),
+    _identity: None = Depends(require_user_or_guest),
 ) -> AsyncIterator[ServerSentEvent]:
     broadcaster: ReviewProgressBroadcaster = request.app.state.review_progress_broadcaster
     # Subscribing before reading the job closes the window where a review reaching a
@@ -114,7 +142,8 @@ async def stream_review(
     # backfilled with a stale status and then blocked on a queue that never fills again.
     queue = broadcaster.subscribe(review_id)
     try:
-        job = await _require_review_job(review_id, session)
+        async with short_lived_db_session(request) as session:
+            job = await _require_review_job(review_id, session)
         yield ServerSentEvent(event="status", data=_current_job_status(job))
         if job.status in _TERMINAL_JOB_STATUSES:
             return

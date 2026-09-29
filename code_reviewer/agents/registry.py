@@ -51,6 +51,11 @@ class AgentsContainer:
     exemplar_store: ExemplarStore | None = None
     shared_exemplar_store: SharedExemplarStore | None = None
     test_pairing_finder: CorrectiveTestPairingFinder | None = None
+    intake_llm: LLMInterface | None = None
+    coupling_agent: CouplingAgent | None = None
+    coupling_agent_repoless: CouplingAgent | None = None
+    architecture_agent: ArchitectureAgent | None = None
+    architecture_agent_repoless: ArchitectureAgent | None = None
 
 
 def build_agent_roster(
@@ -105,10 +110,12 @@ def build_agent_roster(
         SolidSrpOcpAgent(_llm_for(CodeKey.SOLID1, llm), corpora),
         SolidLspDipAgent(_llm_for(CodeKey.SOLID2, llm), corpora),
         CohesionAgent(_llm_for(CodeKey.COH, llm), corpora),
-        CouplingAgent(_llm_for(CodeKey.COUP, llm), rag_manager, corpora),
-        ArchitectureAgent(_llm_for(CodeKey.ARCH, llm), rag_manager),
         BoundariesAgent(_llm_for(CodeKey.BOUND, llm)),
     ]
+    coupling_agent = CouplingAgent(_llm_for(CodeKey.COUP, llm), rag_manager, corpora)
+    coupling_agent_repoless = CouplingAgent(_llm_for(CodeKey.COUP, llm), corpora=corpora)
+    architecture_agent = ArchitectureAgent(_llm_for(CodeKey.ARCH, llm), rag_manager)
+    architecture_agent_repoless = ArchitectureAgent(_llm_for(CodeKey.ARCH, llm))
     chunk_agents = [
         NamingAgent(_llm_for(CodeKey.VAR, llm)),
         ErrorsAgent(_llm_for(CodeKey.ERR, llm)),
@@ -138,6 +145,11 @@ def build_agent_roster(
         exemplar_store=exemplar_store,
         shared_exemplar_store=shared_exemplar_store,
         test_pairing_finder=_build_test_pairing_finder(llm, PairingEvidenceSources(rag_manager, code_similarity_index)),
+        intake_llm=_fast_llm(llm),
+        coupling_agent=coupling_agent,
+        coupling_agent_repoless=coupling_agent_repoless,
+        architecture_agent=architecture_agent,
+        architecture_agent_repoless=architecture_agent_repoless,
     )
 
 

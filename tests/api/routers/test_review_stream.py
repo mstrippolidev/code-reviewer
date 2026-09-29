@@ -16,10 +16,10 @@ from httpx import ASGITransport, AsyncClient
 
 from api.db.models.review_job import ReviewJob, ReviewJobStatus
 from api.db.models.user import User
-from api.dependencies import get_current_user, get_db_session
+from api.dependencies import get_current_user, require_user_or_guest
 from api.review.review_progress_broadcaster import ReviewProgressBroadcaster
 from api.routers.reviews import router as reviews_router
-from api.schemas.reviews import ReviewAgentProgressMessage, ReviewStatusMessage
+from api.schemas.reviews import ReviewAgentProgressMessage, ReviewFileProgressMessage, ReviewStatusMessage
 from code_reviewer.schemas.review import AgentReviewEntry, CodeKey
 
 _TIMEOUT = 2
@@ -31,6 +31,21 @@ class FakeAsyncSession:
 
     async def scalar(self, statement) -> ReviewJob | None:
         return self.review_job
+
+    async def close(self) -> None:
+        pass
+
+
+class FakeDatabaseEngine:
+    """Stands in for DatabaseEngine: hands out the one fake session this
+    test configured, matching the real new_session()'s own contract of
+    returning a plain session rather than a context manager."""
+
+    def __init__(self, session: FakeAsyncSession) -> None:
+        self._session = session
+
+    def new_session(self) -> FakeAsyncSession:
+        return self._session
 
 
 def _make_review_job(**overrides) -> ReviewJob:
@@ -58,12 +73,10 @@ def _build_app(*, session: FakeAsyncSession, broadcaster: ReviewProgressBroadcas
     app = FastAPI()
     app.include_router(reviews_router)
     app.state.review_progress_broadcaster = broadcaster or ReviewProgressBroadcaster()
+    app.state.database_engine = FakeDatabaseEngine(session)
 
-    async def _fake_db_session():
-        yield session
-
-    app.dependency_overrides[get_db_session] = _fake_db_session
     app.dependency_overrides[get_current_user] = lambda: _make_user()
+    app.dependency_overrides[require_user_or_guest] = lambda: None
     return app
 
 
@@ -120,3 +133,72 @@ async def test_stream_relays_a_live_agent_progress_event() -> None:
     assert events[0]["file_path"] == "a.py"
     assert events[0]["code_key"] == "VAR"
     assert events[0]["entry"]["rating"] == 100
+
+
+@pytest.mark.asyncio
+async def test_stream_replays_agent_events_published_before_this_client_subscribed() -> None:
+    job = _make_review_job()
+    broadcaster = ReviewProgressBroadcaster()
+    app = _build_app(session=FakeAsyncSession(review_job=job), broadcaster=broadcaster)
+    entry = AgentReviewEntry(file_path="a.py", code_key=CodeKey.VAR, incidents=[], rating=100)
+
+    await broadcaster.publish(
+        job.review_id,
+        ReviewAgentProgressMessage(review_id=job.review_id, file_path="a.py", code_key=CodeKey.VAR, entry=entry),
+    )
+
+    async with _client_for(app) as client:
+        task = asyncio.create_task(client.get(f"/api/reviews/{job.review_id}/stream"))
+        await asyncio.sleep(0.05)
+        await broadcaster.publish(
+            job.review_id,
+            ReviewStatusMessage(
+                review_id=job.review_id,
+                repo_id=job.repo_id,
+                status=ReviewJobStatus.COMPLETED,
+                status_reason=None,
+                file_paths=job.file_paths,
+                result=None,
+            ),
+        )
+        response = await asyncio.wait_for(task, timeout=_TIMEOUT)
+
+    events = _agent_events(response.text)
+    assert len(events) == 1
+    assert events[0]["file_path"] == "a.py"
+    assert events[0]["code_key"] == "VAR"
+
+
+@pytest.mark.asyncio
+async def test_stream_does_not_replay_agent_events_for_a_file_that_already_settled() -> None:
+    job = _make_review_job()
+    broadcaster = ReviewProgressBroadcaster()
+    app = _build_app(session=FakeAsyncSession(review_job=job), broadcaster=broadcaster)
+    entry = AgentReviewEntry(file_path="a.py", code_key=CodeKey.VAR, incidents=[], rating=100)
+
+    await broadcaster.publish(
+        job.review_id,
+        ReviewAgentProgressMessage(review_id=job.review_id, file_path="a.py", code_key=CodeKey.VAR, entry=entry),
+    )
+    await broadcaster.publish(
+        job.review_id,
+        ReviewFileProgressMessage(review_id=job.review_id, file_path="a.py", failed=False),
+    )
+
+    async with _client_for(app) as client:
+        task = asyncio.create_task(client.get(f"/api/reviews/{job.review_id}/stream"))
+        await asyncio.sleep(0.05)
+        await broadcaster.publish(
+            job.review_id,
+            ReviewStatusMessage(
+                review_id=job.review_id,
+                repo_id=job.repo_id,
+                status=ReviewJobStatus.COMPLETED,
+                status_reason=None,
+                file_paths=job.file_paths,
+                result=None,
+            ),
+        )
+        response = await asyncio.wait_for(task, timeout=_TIMEOUT)
+
+    assert _agent_events(response.text) == []

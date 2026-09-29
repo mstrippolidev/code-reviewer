@@ -1,6 +1,7 @@
 """
     System prompt for the TEST agent: testability and isolation.
 """
+from code_reviewer.prompts.agents.line_numbering import CHUNK_LINE_NUMBERING_INSTRUCTION
 
 TEST_CRITICAL_CRITERION = """a hard-coded dependency makes it
   impossible to write any unit test at all without hitting a live
@@ -61,7 +62,7 @@ For each issue you flag, report one incident with:
   a static method with only trivial logic — or any real finding outside
   the four categories above.
 - line_position: a "start-end" string (e.g. "15-80" for a range), never
-  a bare number.
+  a bare number. {CHUNK_LINE_NUMBERING_INSTRUCTION}
 - description: one sentence naming the actual function or class and
   what specifically blocks isolating it in a test, not a restatement of
   the rule.

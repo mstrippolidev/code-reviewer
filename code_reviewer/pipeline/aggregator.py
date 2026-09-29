@@ -55,7 +55,7 @@ class Aggregator:
         return grouped
 
     def _build_file_entry(self, prepared_file: PreparedFile, entries: list[AgentReviewEntry]) -> AggregatedReviewEntry:
-        rated_entries = self._exclude_failed(entries)
+        rated_entries = self._exclude_unrated(entries)
         agents_skipped = [entry.code_key for entry in rated_entries if entry.rating == 0]
         return AggregatedReviewEntry(
             file_path=prepared_file.source_file.file_path,
@@ -70,11 +70,11 @@ class Aggregator:
             incidents=self._merge_incidents(rated_entries),
         )
 
-    def _exclude_failed(self, entries: list[AgentReviewEntry]) -> list[AgentReviewEntry]:
-        """Drops a failed agent's weight from rating/incidents entirely,
-        rather than counting it as a rating-0 result — that would wrongly
-        read as the deterministic hard-limit case to every caller below."""
-        return [entry for entry in entries if not entry.failed]
+    def _exclude_unrated(self, entries: list[AgentReviewEntry]) -> list[AgentReviewEntry]:
+        """Drops a failed or skipped agent's weight from rating/incidents
+        entirely, rather than counting it as a rating-0 result — that would
+        wrongly read as the deterministic hard-limit case to every caller below."""
+        return [entry for entry in entries if not entry.failed and not entry.skipped]
 
     def _merge_incidents(self, entries: list[AgentReviewEntry]) -> list[Incident]:
         return [
@@ -96,7 +96,7 @@ class Aggregator:
         review: list[AggregatedReviewEntry],
         skipped_files: list[SkippedFile],
     ) -> Meta:
-        overall_rating = self._weighted_rating(self._exclude_failed(entries))
+        overall_rating = self._weighted_rating(self._exclude_unrated(entries))
         recommendation, rejection_reason = self._recommend(overall_rating, review)
         incident_counts = self._count_incidents_by_priority(review)
         return Meta(

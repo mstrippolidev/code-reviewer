@@ -27,6 +27,7 @@ from api.review.review_consumer import ReviewRequestConsumer, ReviewRequestConsu
 from api.review.review_progress_broadcaster import ReviewProgressBroadcaster
 from api.routers.agents import router as agents_router
 from api.routers.auth import router as auth_router
+from api.routers.guest import router as guest_router
 from api.routers.health import router as health_router
 from api.routers.repos import router as repos_router
 from api.routers.reviews import router as reviews_router
@@ -125,6 +126,7 @@ def _build_review_consumer(app: FastAPI) -> ReviewRequestConsumer:
         database_engine=app.state.database_engine,
         agents_container=app.state.agents_container,
         broadcaster=app.state.review_progress_broadcaster,
+        dlq_producer=app.state.kafka_producer,
     )
     return ReviewRequestConsumer(dependencies)
 
@@ -135,6 +137,7 @@ def _register_routers(app: FastAPI) -> None:
     app.include_router(auth_router)
     app.include_router(repos_router)
     app.include_router(reviews_router)
+    app.include_router(guest_router)
 
 
 def _register_cors(app: FastAPI) -> None:
@@ -142,6 +145,7 @@ def _register_cors(app: FastAPI) -> None:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[settings.frontend_base_url],
+        allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )

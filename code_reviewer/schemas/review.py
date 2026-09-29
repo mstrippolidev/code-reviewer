@@ -105,15 +105,28 @@ class AgentReviewEntry(BaseModel):
     failed: bool = Field(
         default=False,
         description=(
-            "True when this agent's dispatch raised and never produced a "
-            "real review (provider outage, tool-recursion limit, etc.) — "
-            "rating and incidents carry no signal when true. Distinct from "
-            "the hard-size-limit case, which stays rating 0 with failed=False."
+            "Set by the pipeline, never by the reviewer: true when this agent's "
+            "dispatch raised and never produced a real review (provider outage, "
+            "tool-recursion limit, etc.) — rating and incidents carry no signal "
+            "when true. Distinct from the hard-size-limit case, which stays "
+            "rating 0 with failed=False. Always leave this false."
         ),
     )
     failure_reason: str | None = Field(
         default=None,
-        description="Cause of the failure when failed is true; null otherwise.",
+        description="Set by the pipeline, never by the reviewer. Always leave this null.",
+    )
+    skipped: bool = Field(
+        default=False,
+        description=(
+            "Set by the pipeline, never by the reviewer: true when this agent "
+            "does not apply to this submission at all (e.g. DRY on a review with "
+            "no registered repo) — rating and incidents carry no signal when true."
+        ),
+    )
+    skip_reason: str | None = Field(
+        default=None,
+        description="Why this agent did not apply when skipped is true; null otherwise.",
     )
 
 

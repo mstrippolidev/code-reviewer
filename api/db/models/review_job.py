@@ -1,5 +1,5 @@
 """
-    ORM model for one ad-hoc review submission against a registered repo's indexed files.
+    ORM model for one ad-hoc review submission — a registered repo's indexed files, or a guest's raw files.
 """
 import uuid
 from datetime import datetime
@@ -29,10 +29,13 @@ class ReviewJob(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     review_id: Mapped[uuid.UUID] = mapped_column(Uuid, unique=True, index=True, default=uuid.uuid4)
-    repo_id: Mapped[int] = mapped_column(
+    repo_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("api.registered_repos.repo_id", ondelete="CASCADE"), index=True
     )
-    requested_by_user_id: Mapped[int] = mapped_column(ForeignKey("api.users.id"))
+    requested_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("api.users.id"))
+    guest_session_id: Mapped[int | None] = mapped_column(
+        ForeignKey("api.guest_sessions.id", ondelete="CASCADE"), index=True
+    )
     file_paths: Mapped[list[str]] = mapped_column(JSON)
     status: Mapped[ReviewJobStatus] = mapped_column(
         SqlEnum(

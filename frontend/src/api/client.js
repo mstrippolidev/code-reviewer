@@ -1,5 +1,8 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
 export const TOKEN_STORAGE_KEY = 'access_token'
+// The guest cookie itself is httpOnly and invisible to JS; this flag only lets the
+// router know a guest session was started, the server still verifies the cookie.
+export const GUEST_STORAGE_KEY = 'guest_session'
 
 export class RepoFetchError extends Error {}
 
@@ -17,12 +20,16 @@ export class FileContentFetchError extends Error {}
 
 export class UnauthorizedError extends Error {}
 
+export class GuestSessionError extends Error {}
+
+// A guest has no bearer token; its identity rides on an httpOnly cookie instead,
+// which a cross-origin fetch only sends with credentials: 'include'.
 function authHeaders(token) {
-  return { Authorization: `Bearer ${token}` }
+  return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-async function getJson(url, token, ErrorClass) {
-  const response = await fetch(url, { headers: authHeaders(token) })
+async function getJson(url, token, ErrorClass, signal) {
+  const response = await fetch(url, { headers: authHeaders(token), credentials: 'include', signal })
   if (response.status === 401) {
     throw new UnauthorizedError('Session expired')
   }
@@ -148,25 +155,57 @@ export async function submitReview(token, repoId, filePaths) {
   return response.json()
 }
 
-export async function fetchReview(token, reviewId) {
-  return getJson(`${API_BASE_URL}/api/reviews/${reviewId}`, token, SubmitReviewError)
-}
-
 export async function fetchAgents(token) {
   return getJson(`${API_BASE_URL}/api/agents`, token, AgentCatalogFetchError)
 }
 
-export async function fetchIndexedFileContent(token, repoId, filePath) {
+export async function fetchIndexedFileContent(token, repoId, filePath, signal) {
   return getJson(
     `${API_BASE_URL}/api/repos/${repoId}/files/content?file_path=${encodeURIComponent(filePath)}`,
     token,
-    FileContentFetchError
+    FileContentFetchError,
+    signal
   )
+}
+
+export async function fetchReviewFileContent(token, reviewId, filePath, signal) {
+  return getJson(
+    `${API_BASE_URL}/api/reviews/${reviewId}/files/content?file_path=${encodeURIComponent(filePath)}`,
+    token,
+    FileContentFetchError,
+    signal
+  )
+}
+
+export async function startGuestSession() {
+  const response = await fetch(`${API_BASE_URL}/api/guest/session`, { method: 'POST', credentials: 'include' })
+  if (!response.ok) {
+    throw new GuestSessionError(`Request failed with status ${response.status}`)
+  }
+}
+
+export async function submitGuestReview(files) {
+  const response = await fetch(`${API_BASE_URL}/api/guest/review`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ files }),
+  })
+  if (response.status === 401) {
+    throw new UnauthorizedError('Guest session expired')
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}))
+    const detail = typeof body.detail === 'string' ? body.detail : null
+    throw new SubmitReviewError(detail ?? `Request failed with status ${response.status}`)
+  }
+  return response.json()
 }
 
 export async function openReviewStream(token, reviewId, signal) {
   const response = await fetch(`${API_BASE_URL}/api/reviews/${reviewId}/stream`, {
     headers: authHeaders(token),
+    credentials: 'include',
     signal,
   })
   if (response.status === 401) {

@@ -9,6 +9,7 @@ export function ReviewPreviewPage() {
     agentProgress: PREVIEW_PROGRESS,
     reviewedFiles: new Set(['api/routers/repos.py', 'api/services/billing.py']),
     failedFiles: new Set(['api/services/legacy_sync.py']),
+    catalog: PREVIEW_AGENT_CATALOG,
   })
   const annotated = PREVIEW_JOB.result.review[0]
 

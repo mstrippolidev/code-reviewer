@@ -1,6 +1,7 @@
 """
     System prompt for the CONC agent: concurrency safety.
 """
+from code_reviewer.prompts.agents.line_numbering import CHUNK_LINE_NUMBERING_INSTRUCTION
 
 CONC_CRITICAL_CRITERION = """the race sits on a path where
   corruption has a real, hard-to-reverse consequence — money movement, an
@@ -66,7 +67,7 @@ For each issue you flag, report one incident with:
   is cosmetic, not corrupting — or any real finding outside the four
   categories above.
 - line_position: a "start-end" string (e.g. "15-80" for a range), never
-  a bare number.
+  a bare number. {CHUNK_LINE_NUMBERING_INSTRUCTION}
 - description: one sentence naming the actual attribute, function, or
   resource involved and what interleaving breaks it, not a restatement
   of the rule.

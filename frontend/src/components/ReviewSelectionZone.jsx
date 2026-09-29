@@ -1,4 +1,15 @@
-export function ReviewSelectionZone({ selectedPaths, max, onRemove, onDropFile, onSubmit, submitting }) {
+const DEFAULT_EMPTY_MESSAGE = 'Check a Python file above, or drag one here, to add it to this review.'
+
+export function ReviewSelectionZone({
+  selectedPaths,
+  max,
+  onRemove,
+  onDropFile,
+  onSubmit,
+  submitting,
+  emptyMessage = DEFAULT_EMPTY_MESSAGE,
+  children,
+}) {
   function handleDragOver(event) {
     event.preventDefault()
   }
@@ -27,9 +38,7 @@ export function ReviewSelectionZone({ selectedPaths, max, onRemove, onDropFile, 
         </button>
       </div>
       {selectedPaths.size === 0 ? (
-        <p className="note review-selection-empty">
-          Check a Python file above, or drag one here, to add it to this review.
-        </p>
+        <p className="note review-selection-empty">{emptyMessage}</p>
       ) : (
         <ul className="review-selection-list">
           {[...selectedPaths].map((path) => (
@@ -47,6 +56,7 @@ export function ReviewSelectionZone({ selectedPaths, max, onRemove, onDropFile, 
           ))}
         </ul>
       )}
+      {children}
     </div>
   )
 }
