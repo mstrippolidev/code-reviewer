@@ -453,3 +453,39 @@ def test_file_entry_carries_the_prepared_files_review_scope() -> None:
     result = _build([_entry(CodeKey.VAR, 100, file_path="tests/test_a.py")], [prepared])
 
     assert result.review[0].review_scope == ReviewScope.TEST_FILE_STANDALONE
+
+
+# --- Skipped agents: not applicable to this submission, excluded like failed ones ---
+
+
+def _skipped_entry(code_key: CodeKey, file_path: str = "a.py") -> AgentReviewEntry:
+    return AgentReviewEntry(
+        file_path=file_path, code_key=code_key, rating=100, incidents=[], skipped=True, skip_reason="n/a"
+    )
+
+
+def test_skipped_agent_is_excluded_from_the_file_rating() -> None:
+    """Verify a skipped agent's weight is dropped, not counted as a rating-100 verdict it never gave."""
+    entries = [_entry(CodeKey.CMT, rating=40), _skipped_entry(CodeKey.DRY)]
+
+    result = _build(entries, [_prepared_file("a.py")])
+
+    assert result.review[0].rating == 40
+
+
+def test_skipped_agent_is_excluded_from_the_overall_rating() -> None:
+    """Verify the PR-level rating pools only agents that actually reviewed something."""
+    entries = [_entry(CodeKey.CMT, rating=40), _skipped_entry(CodeKey.DRY)]
+
+    result = _build(entries, [_prepared_file("a.py")])
+
+    assert result.meta.overall_rating == 40
+
+
+def test_skipped_agent_is_not_reported_as_failed() -> None:
+    """Verify a deliberate skip never shows up as a runtime failure."""
+    entries = [_entry(CodeKey.CMT, rating=40), _skipped_entry(CodeKey.DRY)]
+
+    result = _build(entries, [_prepared_file("a.py")])
+
+    assert result.review[0].agents_failed == []
