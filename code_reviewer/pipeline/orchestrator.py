@@ -7,7 +7,9 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 
+from code_reviewer.agents.llm.base import LLMInterface
 from code_reviewer.agents.registry import AgentsContainer
 from code_reviewer.config.settings import get_settings
 from code_reviewer.guardrails.errors import IntakeRejectedError
@@ -42,7 +44,16 @@ _SKIP_REASONS = {
     FileTooLargeError: "file_too_large",
     IntakeRejectedError: "intake_rejected",
 }
-_AGENT_EXECUTION_FAILED_REASON = "agent_execution_failed"
+AGENT_EXECUTION_FAILED_REASON = "agent_execution_failed"
+GUARD_EXECUTION_FAILED_REASON = "guard_execution_failed"
+
+
+@dataclass(frozen=True)
+class _PrepContext:
+    """Submission-level config shared by every file's prep."""
+
+    repo_data: RepoData | None
+    intake_llm: LLMInterface | None
 
 
 async def run_pipeline(
@@ -79,7 +90,9 @@ async def run_pipeline(
         every retry exhausted) is treated like any other skip — reported in
         meta.skipped_files rather than failing every other file's review.
     """
-    prepared_files, skipped_files = await asyncio.to_thread(prepare_files_for_pipeline, files, repo_data)
+    prepared_files, skipped_files = await asyncio.to_thread(
+        prepare_files_for_pipeline, files, repo_data, agents_container.intake_llm
+    )
     entries = []
     reviewed_files = []
     for prepared_file in prepared_files:
@@ -90,7 +103,7 @@ async def run_pipeline(
             )
         except Exception:
             logger.exception("Agent dispatch failed for file_path=%s; skipping it and continuing", file_path)
-            skipped_files.append(SkippedFile(file_path=file_path, reason=_AGENT_EXECUTION_FAILED_REASON))
+            skipped_files.append(SkippedFile(file_path=file_path, reason=AGENT_EXECUTION_FAILED_REASON))
             if on_file_reviewed is not None:
                 await on_file_reviewed(file_path, True, [])
             continue
@@ -102,7 +115,7 @@ async def run_pipeline(
 
 
 def prepare_files_for_pipeline(
-    files: list[SubmittedFile], repo_data: RepoData | None = None
+    files: list[SubmittedFile], repo_data: RepoData | None = None, intake_llm: LLMInterface | None = None
 ) -> tuple[list[PreparedFile], list[SkippedFile]]:
     """Runs PR selection, test pairing, and the per-file guards, returning
     every file that's ready for agent dispatch.
@@ -112,19 +125,23 @@ def prepare_files_for_pipeline(
         repo_data: Scoping for this submission's repo, stamped onto every
             resulting PreparedFile. None for a standalone review with no
             repo context.
+        intake_llm: Model the intake screen's code-detection and prompt-
+            injection checks run against. None falls back to the screen's
+            own default.
 
     Returns:
         Files that passed every guard, paired with their screened test files
         and SizeStatus; and every file skipped along the way, source or
         test, each with a reason.
     """
+    context = _PrepContext(repo_data=repo_data, intake_llm=intake_llm)
     selected_files, skipped_files, test_files = select_pr_files(files)
     intra_pr_groups = _intra_pr_duplicate_groups(selected_files)
     pairings = pair_source_files_with_tests(selected_files, test_files)
 
     with ThreadPoolExecutor(max_workers=get_settings().max_intake_screen_concurrency) as executor:
         results = list(executor.map(
-            lambda pairing: _prepare_pairing(pairing, repo_data, intra_pr_groups), pairings
+            lambda pairing: _prepare_pairing(pairing, intra_pr_groups, context), pairings
         ))
 
     prepared_files = []
@@ -137,24 +154,30 @@ def prepare_files_for_pipeline(
 
 
 def _prepare_pairing(
-    pairing: Pairing, repo_data: RepoData | None, intra_pr_groups: list[list[LocatedChunk]]
+    pairing: Pairing, intra_pr_groups: list[list[LocatedChunk]], context: _PrepContext
 ) -> tuple[PreparedFile | None, list[SkippedFile]]:
     """Runs one source file's guards (and its paired test files' guards)
     independently of every other pairing, so callers can run every pairing
     across a submission concurrently: a rejection here only ever drops this
-    one file, never the pairings running alongside it."""
+    one file, never the pairings running alongside it — including a guard
+    itself raising unexpectedly (a provider outage, a screening call
+    exceeding its model's context window), not just the three guards' own
+    defined rejections, which would otherwise crash the whole submission."""
     try:
-        size_status = _run_source_file_guards(pairing.source_file.content)
+        size_status = _run_source_file_guards(pairing.source_file.content, context.intake_llm)
     except (SubmissionTooLargeError, FileTooLargeError, IntakeRejectedError) as error:
         return None, [_skipped_file(pairing.source_file.file_path, error)]
+    except Exception:
+        logger.exception("Guard execution failed unexpectedly for file_path=%s", pairing.source_file.file_path)
+        return None, [SkippedFile(file_path=pairing.source_file.file_path, reason=GUARD_EXECUTION_FAILED_REASON)]
 
-    screened_test_files, rejected_test_files = _screen_test_files(pairing.test_files)
+    screened_test_files, rejected_test_files = _screen_test_files(pairing.test_files, context.intake_llm)
     prepared_file = PreparedFile(
         source_file=pairing.source_file,
         test_files=screened_test_files,
         size_status=size_status,
         review_scope=_review_scope(pairing.source_file.file_path),
-        repo_data=repo_data,
+        repo_data=context.repo_data,
         intra_pr_duplicates=groups_for_file(intra_pr_groups, pairing.source_file.file_path),
     )
     return prepared_file, rejected_test_files
@@ -174,33 +197,38 @@ def _review_scope(file_path: str) -> ReviewScope:
     """A test file only reaches this point as a review target when select_pr_files found no source to pair it with."""
     return ReviewScope.TEST_FILE_STANDALONE if is_test_file(file_path) else ReviewScope.FULL
 
-def _run_source_file_guards(content: str) -> SizeStatus:
+def _run_source_file_guards(content: str, intake_llm: LLMInterface | None) -> SizeStatus:
     """Runs the three per-file guards in cost-ascending order, returning
     the file's SizeStatus once all three pass."""
     run_raw_character_guard(content)
     size_status = run_file_size_guard(content)
-    run_intake_screen(content)
+    run_intake_screen(content, llm=intake_llm)
     return size_status
 
 def _skipped_file(file_path: str, error: Exception) -> SkippedFile:
     return SkippedFile(file_path=file_path, reason=_SKIP_REASONS[type(error)])
 
-def _screen_test_files(test_files: list[SubmittedFile]) -> tuple[list[SubmittedFile], list[SkippedFile]]:
+def _screen_test_files(
+    test_files: list[SubmittedFile], intake_llm: LLMInterface | None
+) -> tuple[list[SubmittedFile], list[SkippedFile]]:
     """Screens each paired test file, keeping the ones that pass. A
     rejected test file drops out of the pairing rather than skipping the
-    source file it belongs to."""
+    source file it belongs to — including a guard raising unexpectedly."""
     screened, rejected = [], []
     for test_file in test_files:
         try:
-            _run_test_file_guards(test_file.content)
+            _run_test_file_guards(test_file.content, intake_llm)
         except (SubmissionTooLargeError, IntakeRejectedError) as error:
             rejected.append(_skipped_file(test_file.file_path, error))
+        except Exception:
+            logger.exception("Guard execution failed unexpectedly for file_path=%s", test_file.file_path)
+            rejected.append(SkippedFile(file_path=test_file.file_path, reason=GUARD_EXECUTION_FAILED_REASON))
         else:
             screened.append(test_file)
     return screened, rejected
 
-def _run_test_file_guards(content: str) -> None:
+def _run_test_file_guards(content: str, intake_llm: LLMInterface | None) -> None:
     """Screens a paired test file the same way as a source file, minus the
     size guard — no agent is ever rated on a test file's size."""
     run_raw_character_guard(content)
-    run_intake_screen(content)
+    run_intake_screen(content, llm=intake_llm)

@@ -23,7 +23,7 @@ def build_intake_guard(llm: LLMInterface | None = None) -> Guard:
     )
 
 
-def run_intake_screen(content: str, guard: Guard | None = None) -> None:
+def run_intake_screen(content: str, guard: Guard | None = None, llm: LLMInterface | None = None) -> None:
     """Rejects content that is not source code or that contains a prompt-injection attempt.
 
     Builds a fresh Guard per call when none is supplied, rather than sharing
@@ -31,7 +31,7 @@ def run_intake_screen(content: str, guard: Guard | None = None) -> None:
     submission concurrently, and a Guard mutates its own call history on
     every validate() — sharing one across threads would race on that state.
     """
-    active_guard = guard if guard is not None else build_intake_guard()
+    active_guard = guard if guard is not None else build_intake_guard(llm)
     try:
         active_guard.validate(content, metadata={})
     except GuardrailsValidationError as error:

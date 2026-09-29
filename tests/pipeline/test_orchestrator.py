@@ -107,7 +107,7 @@ def container() -> AgentsContainer:
 
 @pytest.fixture(autouse=True)
 def skip_intake_screen(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(orchestrator, "run_intake_screen", lambda content: None)
+    monkeypatch.setattr(orchestrator, "run_intake_screen", lambda content, llm=None: None)
 
 
 def _file(file_path: str, content: str = "x = 1\n") -> SubmittedFile:
@@ -243,7 +243,7 @@ def test_intake_rejection_only_skips_its_own_file_when_screened_concurrently(
     file failing it is skipped, without stopping the others from being
     prepared — the isolation guarantee that matters once screening a
     submission's files runs concurrently rather than one at a time."""
-    def reject_one_file(content: str) -> None:
+    def reject_one_file(content: str, llm=None) -> None:
         if content == "malicious":
             raise IntakeRejectedError("rejected")
 
@@ -254,6 +254,49 @@ def test_intake_rejection_only_skips_its_own_file_when_screened_concurrently(
 
     assert {prepared.source_file.file_path for prepared in prepared_files} == {"a.py", "c.py"}
     assert [(skipped.file_path, skipped.reason) for skipped in skipped_files] == [("bad.py", "intake_rejected")]
+
+
+def test_an_unexpected_guard_error_on_a_paired_test_file_does_not_drop_its_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same isolation, one level down: a paired test file's own guard
+    blowing up must drop only that test file, never the source it belongs to."""
+    def blow_up_on_the_test_file(content: str, llm=None) -> None:
+        if content == "too big for the model":
+            raise RuntimeError("exceeds the available context size")
+
+    monkeypatch.setattr(orchestrator, "run_intake_screen", blow_up_on_the_test_file)
+    files = [_file("payment.py"), _file("tests/test_payment.py", content="too big for the model")]
+
+    prepared_files, skipped_files = orchestrator.prepare_files_for_pipeline(files)
+
+    assert [prepared.source_file.file_path for prepared in prepared_files] == ["payment.py"]
+    assert prepared_files[0].test_files == []
+    assert (
+        "tests/test_payment.py",
+        orchestrator.GUARD_EXECUTION_FAILED_REASON,
+    ) in [(skipped.file_path, skipped.reason) for skipped in skipped_files]
+
+
+def test_an_unexpected_guard_error_only_skips_its_own_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A guard raising something other than its own defined rejections (a
+    provider outage, a screening call exceeding its model's context window)
+    must not crash the whole submission — real trace: local Ollama's guardrails
+    call exceeded its context window on one file and took down every file in
+    the PR, guest and repo reviews alike, until this was fixed."""
+    def blow_up_on_one_file(content: str, llm=None) -> None:
+        if content == "too big for the model":
+            raise RuntimeError("exceeds the available context size")
+
+    monkeypatch.setattr(orchestrator, "run_intake_screen", blow_up_on_one_file)
+    files = [_file("a.py", "clean"), _file("bad.py", "too big for the model"), _file("c.py", "clean")]
+
+    prepared_files, skipped_files = orchestrator.prepare_files_for_pipeline(files)
+
+    assert {prepared.source_file.file_path for prepared in prepared_files} == {"a.py", "c.py"}
+    assert [(skipped.file_path, skipped.reason) for skipped in skipped_files] == [
+        ("bad.py", orchestrator.GUARD_EXECUTION_FAILED_REASON)
+    ]
 
 
 @pytest.mark.asyncio

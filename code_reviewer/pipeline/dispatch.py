@@ -42,6 +42,10 @@ logger = logging.getLogger(__name__)
 
 _TEST_FILE_HYGIENE_KEYS = frozenset({CodeKey.VAR, CodeKey.ERR, CodeKey.CMT})
 _TCASE_HEADER_LINE_COUNT = 1
+DRY_REQUIRES_REPO_REASON = (
+    "Duplication checks compare against a registered repository's indexed history, "
+    "so DRY is only available for GitHub-connected reviews."
+)
 _PAIRING_LOOKUP_ERRORS = (
     VectorStoreQueryError,
     ChunkExplanationError,
@@ -71,7 +75,8 @@ def review_file(
     """
     splitter = splitter or PythonCodeSplit()
     standalone = _is_standalone_test_review(prepared_file)
-    entries = [] if standalone else _run_file_agents(prepared_file, agents_container.file_agents)
+    file_agents = _file_agents_for(prepared_file, agents_container)
+    entries = [] if standalone else _run_file_agents(prepared_file, file_agents)
     chunk_agents = _scoped_chunk_agents(agents_container.chunk_agents, standalone)
     chunk_entries = _run_chunk_agents(prepared_file, chunk_agents, splitter)
     _apply_cmplx_soft_limit_incident(chunk_entries, prepared_file)
@@ -84,6 +89,19 @@ def review_file(
 
 def _is_standalone_test_review(prepared_file: PreparedFile) -> bool:
     return prepared_file.review_scope == ReviewScope.TEST_FILE_STANDALONE
+
+
+def _file_agents_for(
+    prepared_file: PreparedFile, agents_container: AgentsContainer
+) -> list[FileSizeAwareAgentBase]:
+    """COUP and ARCH each have a repo-aware build (cross-file evidence
+    tool) and a repo-less one (no tool), selected per file by whether this
+    review has repo context."""
+    repo_aware = prepared_file.repo_data is not None
+    coupling = agents_container.coupling_agent if repo_aware else agents_container.coupling_agent_repoless
+    architecture = agents_container.architecture_agent if repo_aware else agents_container.architecture_agent_repoless
+    variants = [agent for agent in (coupling, architecture) if agent is not None]
+    return [*agents_container.file_agents, *variants]
 
 
 def _scoped_chunk_agents(chunk_agents: list[AgentBase], standalone: bool) -> list[AgentBase]:
@@ -137,8 +155,16 @@ def _chunks_or_whole_file(splitter: CodeSplitterInterface, content: str) -> list
 
 
 def _get_chunks(chunks: list[CodeChunk]) -> list[str]:
-    """Converts code chunks to their raw text, in source order."""
-    return [chunk.code for chunk in chunks]
+    """Converts code chunks to their text, in source order, each line
+    prefixed with its chunk-relative line number so a chunk agent reads
+    line_position off the prefix instead of counting from the top of the
+    chunk — offset_incidents still expects that same 1-indexed
+    chunk-relative numbering back."""
+    return [_number_lines(chunk.code) for chunk in chunks]
+
+
+def _number_lines(code: str) -> str:
+    return "\n".join(f"{i}: {line}" for i, line in enumerate(code.splitlines(), start=1))
 
 
 def _run_chunked_agent(agent: AgentBase, file_path: str, chunks: list[CodeChunk]) -> AgentReviewEntry:
@@ -196,6 +222,14 @@ def _run_dry(agents_container: AgentsContainer, prepared_file: PreparedFile) -> 
     reach the DRY judge; a file with no evidence of either kind short-
     circuits to a clean result with no LLM call at all."""
     file_path = prepared_file.source_file.file_path
+    if prepared_file.repo_data is None:
+        return AgentReviewEntry(
+            file_path=file_path,
+            code_key=CodeKey.DRY,
+            incidents=[],
+            skipped=True,
+            skip_reason=DRY_REQUIRES_REPO_REASON,
+        )
     intra_pr_groups = prepared_file.intra_pr_duplicates
     history_matches = _gather_dry_history_matches(agents_container, prepared_file)
     if not intra_pr_groups and not history_matches:
@@ -295,7 +329,7 @@ async def review_file_runnable(
     """
     splitter = splitter or PythonCodeSplit()
     standalone = _is_standalone_test_review(prepared_file)
-    file_agents = [] if standalone else agents_container.file_agents
+    file_agents = [] if standalone else _file_agents_for(prepared_file, agents_container)
     chunk_agents = _scoped_chunk_agents(agents_container.chunk_agents, standalone)
     context = {
         "code": prepared_file.source_file.content,

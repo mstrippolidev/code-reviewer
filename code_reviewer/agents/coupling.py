@@ -8,7 +8,7 @@ from langchain_core.tools import BaseTool
 from code_reviewer.agents.base import FileSizeAwareAgentBase, ReviewContext
 from code_reviewer.agents.cross_file_evidence_tool import GetFileChunksTool
 from code_reviewer.agents.llm.base import LLMInterface
-from code_reviewer.prompts.agents.coupling import COUP_AGENT_SYSTEM_PROMPT
+from code_reviewer.prompts.agents.coupling import COUP_AGENT_REPOLESS_SYSTEM_PROMPT, COUP_AGENT_SYSTEM_PROMPT
 from code_reviewer.rag.exemplar_injection import ExemplarCorpora, ExemplarInjection
 from code_reviewer.rag.indexer import LlamaIndexRagManager
 from code_reviewer.schemas.review import CodeKey
@@ -28,7 +28,8 @@ class CouplingAgent(FileSizeAwareAgentBase):
     ) -> None:
         self._rag_manager = rag_manager
         self._corpora = corpora
-        super().__init__(CodeKey.COUP, COUP_AGENT_SYSTEM_PROMPT, llm)
+        prompt = COUP_AGENT_SYSTEM_PROMPT if rag_manager is not None else COUP_AGENT_REPOLESS_SYSTEM_PROMPT
+        super().__init__(CodeKey.COUP, prompt, llm)
 
     def _build_tools(self) -> list[BaseTool] | None:
         if self._rag_manager is None:

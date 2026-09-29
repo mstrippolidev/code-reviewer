@@ -7,7 +7,7 @@ from langchain_core.tools import BaseTool
 from code_reviewer.agents.base import FileSizeAwareAgentBase, ReviewContext
 from code_reviewer.agents.cross_file_evidence_tool import GetFileChunksTool
 from code_reviewer.agents.llm.base import LLMInterface
-from code_reviewer.prompts.agents.architecture import ARCH_AGENT_SYSTEM_PROMPT
+from code_reviewer.prompts.agents.architecture import ARCH_AGENT_REPOLESS_SYSTEM_PROMPT, ARCH_AGENT_SYSTEM_PROMPT
 from code_reviewer.rag.indexer import LlamaIndexRagManager
 from code_reviewer.schemas.review import CodeKey
 
@@ -20,7 +20,8 @@ class ArchitectureAgent(FileSizeAwareAgentBase):
 
     def __init__(self, llm: LLMInterface | None = None, rag_manager: LlamaIndexRagManager | None = None) -> None:
         self._rag_manager = rag_manager
-        super().__init__(CodeKey.ARCH, ARCH_AGENT_SYSTEM_PROMPT, llm)
+        prompt = ARCH_AGENT_SYSTEM_PROMPT if rag_manager is not None else ARCH_AGENT_REPOLESS_SYSTEM_PROMPT
+        super().__init__(CodeKey.ARCH, prompt, llm)
 
     def _build_tools(self) -> list[BaseTool] | None:
         if self._rag_manager is None:

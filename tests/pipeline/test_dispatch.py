@@ -14,7 +14,7 @@ from sqlalchemy.pool import StaticPool
 
 from code_reviewer.agents.base import FileReviewMeta
 from code_reviewer.agents.registry import AgentsContainer
-from code_reviewer.pipeline.dispatch import review_file, review_file_runnable
+from code_reviewer.pipeline.dispatch import DRY_REQUIRES_REPO_REASON, review_file, review_file_runnable
 from code_reviewer.rag.code_similarity_index import CodeMatch, LexicalMatch
 from code_reviewer.rag.dry_judge import JudgeCandidate
 from code_reviewer.rag.indexer import SimilarChunk
@@ -276,6 +276,81 @@ def test_file_agent_receives_no_repo_data_for_a_standalone_review(
     assert review_meta.repo_data is None
 
 
+def _repo_variant_container(
+    dry_judge: FakeDryJudge,
+    rag_manager: FakeEmbeddingIndex,
+    structural_hash_store: StructuralHashStore,
+    code_similarity_index: FakeCodeSimilarityIndex,
+    history_match_reranker: HistoryMatchReranker,
+) -> tuple[AgentsContainer, FakeAgent, FakeAgent, FakeAgent, FakeAgent]:
+    coupling_agent = FakeAgent(CodeKey.COUP)
+    coupling_agent_repoless = FakeAgent(CodeKey.COUP)
+    architecture_agent = FakeAgent(CodeKey.ARCH)
+    architecture_agent_repoless = FakeAgent(CodeKey.ARCH)
+    container = AgentsContainer(
+        file_agents=[],
+        chunk_agents=[],
+        tcase_agent=FakeAgent(CodeKey.TCASE),
+        dry_judge=dry_judge,
+        rag_manager=rag_manager,
+        structural_hash_store=structural_hash_store,
+        code_similarity_index=code_similarity_index,
+        history_match_reranker=history_match_reranker,
+        coupling_agent=coupling_agent,
+        coupling_agent_repoless=coupling_agent_repoless,
+        architecture_agent=architecture_agent,
+        architecture_agent_repoless=architecture_agent_repoless,
+    )
+    return container, coupling_agent, coupling_agent_repoless, architecture_agent, architecture_agent_repoless
+
+
+@DISPATCH_FUNCTIONS
+def test_a_repo_review_dispatches_to_the_repo_aware_coupling_and_architecture_agents(
+    dispatch: DispatchFn,
+    dry_judge: FakeDryJudge,
+    rag_manager: FakeEmbeddingIndex,
+    structural_hash_store: StructuralHashStore,
+    code_similarity_index: FakeCodeSimilarityIndex,
+    history_match_reranker: HistoryMatchReranker,
+) -> None:
+    """Verify a file with repo_data runs the repo-aware COUP/ARCH builds
+    (cross-file evidence tool), never the repo-less ones."""
+    container, coupling_agent, coupling_agent_repoless, architecture_agent, architecture_agent_repoless = (
+        _repo_variant_container(dry_judge, rag_manager, structural_hash_store, code_similarity_index, history_match_reranker)
+    )
+    repo_data = RepoData(repo_id="repo-1", commit_sha="sha-1", owner_id="owner-1")
+
+    dispatch(_prepared_file(repo_data=repo_data), container)
+
+    assert coupling_agent.execute_agent_calls != []
+    assert architecture_agent.execute_agent_calls != []
+    assert coupling_agent_repoless.execute_agent_calls == []
+    assert architecture_agent_repoless.execute_agent_calls == []
+
+
+@DISPATCH_FUNCTIONS
+def test_a_repoless_review_dispatches_to_the_repoless_coupling_and_architecture_agents(
+    dispatch: DispatchFn,
+    dry_judge: FakeDryJudge,
+    rag_manager: FakeEmbeddingIndex,
+    structural_hash_store: StructuralHashStore,
+    code_similarity_index: FakeCodeSimilarityIndex,
+    history_match_reranker: HistoryMatchReranker,
+) -> None:
+    """Verify a file with no repo_data (a guest review) runs the repo-less
+    COUP/ARCH builds (no tool), never the repo-aware ones."""
+    container, coupling_agent, coupling_agent_repoless, architecture_agent, architecture_agent_repoless = (
+        _repo_variant_container(dry_judge, rag_manager, structural_hash_store, code_similarity_index, history_match_reranker)
+    )
+
+    dispatch(_prepared_file(), container)
+
+    assert coupling_agent_repoless.execute_agent_calls != []
+    assert architecture_agent_repoless.execute_agent_calls != []
+    assert coupling_agent.execute_agent_calls == []
+    assert architecture_agent.execute_agent_calls == []
+
+
 @DISPATCH_FUNCTIONS
 def test_chunk_agent_batches_a_single_whole_file_chunk_with_no_functions(
     dispatch: DispatchFn, container: AgentsContainer, var_agent: FakeAgent
@@ -285,7 +360,7 @@ def test_chunk_agent_batches_a_single_whole_file_chunk_with_no_functions(
     dispatch(prepared, container)
 
     assert var_agent.execute_agent_calls == []
-    assert var_agent.execute_agent_batch_calls == [(["x = 1\n"], "f.py")]
+    assert var_agent.execute_agent_batch_calls == [(["1: x = 1"], "f.py")]
 
 
 @DISPATCH_FUNCTIONS
@@ -299,7 +374,7 @@ def test_chunk_agent_is_split_and_batched_regardless_of_file_size(
     assert var_agent.execute_agent_calls == []
     chunks, file_path = var_agent.execute_agent_batch_calls[0]
     assert file_path == "f.py"
-    assert chunks == ["def foo():\n    return 1", "def bar():\n    return 2"]
+    assert chunks == ["1: def foo():\n2:     return 1", "1: def bar():\n2:     return 2"]
 
 
 @DISPATCH_FUNCTIONS
@@ -314,7 +389,7 @@ def test_chunk_agent_is_split_and_batched_at_the_soft_limit(
     assert len(var_agent.execute_agent_batch_calls) == 1
     chunks, file_path = var_agent.execute_agent_batch_calls[0]
     assert file_path == "f.py"
-    assert chunks == ["def foo():\n    return 1", "def bar():\n    return 2"]
+    assert chunks == ["1: def foo():\n2:     return 1", "1: def bar():\n2:     return 2"]
 
 
 @DISPATCH_FUNCTIONS
@@ -414,7 +489,8 @@ def test_dry_short_circuits_with_no_evidence(
     dispatch: DispatchFn, container: AgentsContainer, dry_judge: FakeDryJudge
 ) -> None:
     """Verify DRY skips the LLM call entirely when there's nothing to report."""
-    entries = dispatch(_prepared_file(), container)
+    repo_data = RepoData(repo_id="repo-1", commit_sha="sha-1", owner_id="owner-1")
+    entries = dispatch(_prepared_file(repo_data=repo_data), container)
 
     dry_entry = next(entry for entry in entries if entry.code_key == CodeKey.DRY)
     assert dry_entry.rating == 100
@@ -430,7 +506,8 @@ def test_dry_templates_intra_pr_evidence_with_no_judge_call(dispatch: DispatchFn
         LocatedChunk(StructuralMatch(file_path="f.py", chunk_name="foo", start_line=1, end_line=3), ADD_FUNCTION),
         LocatedChunk(StructuralMatch(file_path="other.py", chunk_name="bar", start_line=5, end_line=7), ADD_FUNCTION),
     ]
-    prepared = _prepared_file(content=ADD_FUNCTION, intra_pr_duplicates=[group])
+    repo_data = RepoData(repo_id="repo-1", commit_sha="sha-1", owner_id="owner-1")
+    prepared = _prepared_file(content=ADD_FUNCTION, repo_data=repo_data, intra_pr_duplicates=[group])
 
     entries = dispatch(prepared, container)
 
@@ -490,17 +567,21 @@ def test_dry_sends_a_semantic_match_to_the_judge(
 
 
 @DISPATCH_FUNCTIONS
-def test_dry_skips_cross_history_lookup_for_a_standalone_review(
+def test_dry_is_skipped_entirely_for_a_review_with_no_repo(
     dispatch: DispatchFn, container: AgentsContainer, dry_judge: FakeDryJudge
 ) -> None:
-    """Verify no repo_data means no history lookup is even attempted — same
-    fallback ARCH/COUP's evidence hop already uses."""
-    prepared = _prepared_file(content=ADD_FUNCTION, repo_data=None)
+    group = [
+        LocatedChunk(StructuralMatch(file_path="f.py", chunk_name="foo", start_line=1, end_line=3), ADD_FUNCTION),
+        LocatedChunk(StructuralMatch(file_path="other.py", chunk_name="bar", start_line=5, end_line=7), ADD_FUNCTION),
+    ]
+    prepared = _prepared_file(content=ADD_FUNCTION, repo_data=None, intra_pr_duplicates=[group])
 
     entries = dispatch(prepared, container)
 
     dry_entry = next(entry for entry in entries if entry.code_key == CodeKey.DRY)
-    assert dry_entry.rating == 100
+    assert dry_entry.skipped is True
+    assert dry_entry.skip_reason == DRY_REQUIRES_REPO_REASON
+    assert dry_entry.incidents == []
     assert dry_judge.judge_calls == []
 
 
