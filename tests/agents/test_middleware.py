@@ -10,8 +10,10 @@ from code_reviewer.agents.llm.middleware import (
     StructuredOutputNotCalledError,
     _already_called,
     dedupe_tool_calls,
+    discard_model_reported_failure,
     retry_missing_structured_output,
 )
+from code_reviewer.schemas.review import AgentOutput, AgentReviewEntry, CodeKey
 
 FILE_PATH_ARGS = {"file_path": "infra/db.py"}
 
@@ -151,3 +153,29 @@ def test_raises_after_exhausting_retries_with_no_tool_call() -> None:
 
     with pytest.raises(StructuredOutputNotCalledError):
         retry_missing_structured_output.wrap_model_call(_model_request(), handler)
+
+
+def test_discard_model_reported_failure_clears_a_model_set_failed_flag() -> None:
+    """Real trace: SOLID1 returned a complete, real review (rating,
+    incidents) but also set failed=True with a failure_reason that was
+    really just its own incident description repeated. failed/
+    failure_reason exist on the schema for dispatch's own exception
+    handler to set, not the model — a turn that reaches this middleware
+    completed normally, so whatever the model wrote there must not survive."""
+    entry = AgentReviewEntry(
+        code_key=CodeKey.SOLID1, incidents=[], failed=True, failure_reason="The class violates SRP."
+    )
+    state = {"structured_response": AgentOutput(review=[entry])}
+
+    result = discard_model_reported_failure.after_model(state, None)
+
+    updated = result["structured_response"].review[0]
+    assert updated.failed is False
+    assert updated.failure_reason is None
+
+
+def test_discard_model_reported_failure_is_a_noop_with_no_structured_response_yet() -> None:
+    """A turn that emitted a tool call has no structured output yet."""
+    result = discard_model_reported_failure.after_model({"structured_response": None}, None)
+
+    assert result == {}

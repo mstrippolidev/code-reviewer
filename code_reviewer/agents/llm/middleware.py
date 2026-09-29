@@ -188,6 +188,21 @@ def calculate_rating(state: AgentState, runtime: Runtime) -> dict[str, Any]:
     return {"structured_response": output}
 
 
+@after_model
+def discard_model_reported_failure(state: AgentState, runtime: Runtime) -> dict[str, Any]:
+    """failed/failure_reason exist on AgentReviewEntry for dispatch's own
+    exception handler. A turn that reaches here completed normally, so any failed/
+    failure_reason the model wrote into its own response is discarded
+    rather than trusted."""
+    output = state.get("structured_response")
+    if output is None:
+        return {}
+    for review in output.review:
+        review.failed = False
+        review.failure_reason = None
+    return {"structured_response": output}
+
+
 def _calculate_rating_for_review(review: AgentReviewEntry) -> int:
     """Calculate the rating for one review entry."""
     return rating_from_incidents(review.incidents)
