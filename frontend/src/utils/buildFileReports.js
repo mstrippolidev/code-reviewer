@@ -1,4 +1,4 @@
-import { countIncidentsByPriority } from './reviewScore'
+import { countIncidentsByPriority, weightedRating } from './reviewScore'
 
 export const FILE_STATUS = {
   REVIEWED: 'reviewed',
@@ -11,6 +11,7 @@ export const FILE_STATUS = {
 const SKIP_REASON_LABELS = {
   test_file_context_only: 'Used as test context only — never rated on its own',
   agent_execution_failed: 'An agent call failed; this file was dropped from the review',
+  guard_execution_failed: 'A screening step failed unexpectedly; this file was dropped from the review',
   exceeded_pr_file_cap: 'Beyond this submission’s file cap',
   file_too_large: 'Too large to review',
   raw_character_limit_exceeded: 'Too large to review',
@@ -29,13 +30,14 @@ export function describeSkipReason(reason) {
  * into one per-file view. Live agent events win over the aggregated result:
  * they are the only source carrying a per-agent rating.
  */
-export function buildFileReports({ job, agentProgress, reviewedFiles, failedFiles }) {
+export function buildFileReports({ job, agentProgress, reviewedFiles, failedFiles, catalog }) {
   const resultEntries = new Map((job.result?.review ?? []).map((entry) => [entry.file_path, entry]))
   const skipReasons = new Map(
     (job.result?.meta?.skipped_files ?? []).map((skipped) => [skipped.file_path, skipped.reason])
   )
   const agentsRun = job.result?.meta?.agents_run ?? []
   const isSettled = job.status === 'completed' || job.status === 'failed'
+  const totalAgentCount = catalog?.order?.length ?? 0
 
   return job.file_paths.map((filePath) => {
     const liveAgents = agentProgress[filePath] ?? {}
@@ -54,7 +56,7 @@ export function buildFileReports({ job, agentProgress, reviewedFiles, failedFile
         hasResultEntry: resultEntries.has(filePath),
       }),
       skipReason: skipReasons.has(filePath) ? describeSkipReason(skipReasons.get(filePath)) : null,
-      rating: resultEntry?.rating ?? null,
+      rating: fileRating(resultEntry, agents, totalAgentCount, catalog?.agentsByCodeKey),
       fileLines: resultEntry?.file_lines ?? null,
       sizeStatus: resultEntry?.size_status ?? null,
       agentsReported: Object.keys(liveAgents).length,
@@ -63,6 +65,23 @@ export function buildFileReports({ job, agentProgress, reviewedFiles, failedFile
       agents,
     }
   })
+}
+
+/**
+ * The finished report's own rating always wins once it exists — it's the
+ * same weighted formula computed server-side, from the exact same agent
+ * entries. Before that, this file's own agents (once every one of them has
+ * reported) let the same formula be computed live from what the stream has
+ * already delivered, rather than waiting for every other file too.
+ */
+function fileRating(resultEntry, agents, totalAgentCount, agentsByCodeKey) {
+  if (resultEntry) {
+    return resultEntry.rating
+  }
+  if (!agentsByCodeKey || totalAgentCount === 0 || agents.length < totalAgentCount) {
+    return null
+  }
+  return weightedRating(agents, agentsByCodeKey)
 }
 
 function fileStatus({ filePath, reviewedFiles, failedFiles, liveAgents, skipReasons, isSettled, hasResultEntry }) {
@@ -92,6 +111,8 @@ function mergeAgents(liveAgents, resultEntry, agentsRun) {
       incidents: withCodeKey(entry.incidents, codeKey),
       failed: entry.failed ?? false,
       failureReason: entry.failure_reason ?? null,
+      skipped: entry.skipped ?? false,
+      skipReason: entry.skip_reason ?? null,
     })
   }
   const reportedLive = new Set(byCodeKey.keys())

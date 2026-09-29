@@ -14,6 +14,20 @@ export function ratingTone(rating) {
   return 'bad'
 }
 
+export function weightedRating(agents, agentsByCodeKey) {
+  const rated = agents.filter((agent) => !agent.failed && !agent.skipped)
+  if (rated.length === 0) {
+    return 100
+  }
+  const totalWeight = rated.reduce((sum, agent) => sum + weightFor(agent, agentsByCodeKey), 0)
+  const weightedSum = rated.reduce((sum, agent) => sum + agent.rating * weightFor(agent, agentsByCodeKey), 0)
+  return Math.round(weightedSum / totalWeight)
+}
+
+function weightFor(agent, agentsByCodeKey) {
+  return agentsByCodeKey[agent.codeKey]?.weight ?? 1
+}
+
 export function countIncidentsByPriority(incidents) {
   const counts = { critical: 0, high: 0, medium: 0, low: 0, total: incidents.length }
   for (const incident of incidents) {
