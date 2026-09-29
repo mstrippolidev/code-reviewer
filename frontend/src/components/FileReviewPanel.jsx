@@ -82,7 +82,9 @@ function AgentChip({ agent, catalogEntry, isSelected, onSelect }) {
           ? 'running'
           : agent.failed
             ? 'failed to process'
-            : hasIncidents
+            : agent.skipped
+              ? 'not available'
+              : hasIncidents
               ? `${agent.incidents.length} incident${agent.incidents.length === 1 ? '' : 's'}`
               : 'clean'}
       </span>
@@ -91,7 +93,7 @@ function AgentChip({ agent, catalogEntry, isSelected, onSelect }) {
 }
 
 function agentTone(agent) {
-  if (agent.pending || agent.failed) {
+  if (agent.pending || agent.failed || agent.skipped) {
     return 'unknown'
   }
   if (typeof agent.rating === 'number') {
@@ -103,6 +105,9 @@ function agentTone(agent) {
 function scoreGlyph(agent) {
   if (agent.failed) {
     return '⚠'
+  }
+  if (agent.skipped) {
+    return '–'
   }
   if (typeof agent.rating === 'number') {
     return agent.rating
@@ -122,6 +127,8 @@ function AgentIncidents({ agent, catalogEntry, onOpenInFile }) {
       </div>
       {agent.failed ? (
         <p className="note error">{agent.failureReason ?? 'This agent failed to process the file.'}</p>
+      ) : agent.skipped ? (
+        <p className="note">{agent.skipReason ?? 'This agent does not apply to this review.'}</p>
       ) : agent.incidents.length === 0 ? (
         <p className="note">No issues found by this agent.</p>
       ) : (

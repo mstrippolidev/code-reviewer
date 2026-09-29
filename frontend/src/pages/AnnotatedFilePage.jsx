@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { TOKEN_STORAGE_KEY, fetchIndexedFileContent } from '../api/client'
+import { TOKEN_STORAGE_KEY, fetchIndexedFileContent, fetchReviewFileContent } from '../api/client'
 import { AnnotatedSource, CODE_LINE_HEIGHT } from '../components/AnnotatedSource'
 import { RatingBadge } from '../components/RatingBadge'
 import { useAgentCatalog } from '../hooks/useAgentCatalog'
@@ -26,9 +26,9 @@ export function AnnotatedFilePage() {
     reviewId,
     handleUnauthorized
   )
-  const { content, loadState: contentLoadState } = useFileContent(token, { repoId, filePath })
+  const { content, loadState: contentLoadState } = useFileContent(token, { reviewId, repoId, filePath })
   const report = job
-    ? buildFileReports({ job, agentProgress, reviewedFiles, failedFiles }).find(
+    ? buildFileReports({ job, agentProgress, reviewedFiles, failedFiles, catalog }).find(
         (entry) => entry.filePath === filePath
       )
     : null
@@ -41,7 +41,7 @@ export function AnnotatedFilePage() {
     document.getElementById(`code-line-${range.start}`)?.scrollIntoView({ block: 'center' })
   }, [focusedPosition, contentLoadState])
 
-  if (connectionStatus === 'error') {
+  if (connectionStatus === 'error' && !job) {
     return <p className="page centered note error">Could not connect to this review.</p>
   }
   if (!job || contentLoadState === 'loading') {
@@ -77,6 +77,11 @@ export function AnnotatedFilePage() {
         </div>
         <RatingBadge rating={report?.rating ?? null} size="large" label="File score" />
       </header>
+      {connectionStatus === 'error' ? (
+        <p className="note annotated-pending">
+          Live updates disconnected — showing the last known state. Reload to reconnect.
+        </p>
+      ) : null}
       {pendingMessage ? <p className="note annotated-pending">{pendingMessage}</p> : null}
       <AnnotatedSource
         content={content}
@@ -88,14 +93,18 @@ export function AnnotatedFilePage() {
   )
 }
 
-function useFileContent(token, { repoId, filePath }) {
+function useFileContent(token, { reviewId, repoId, filePath }) {
   const [content, setContent] = useState('')
   const [loadState, setLoadState] = useState('loading')
 
   useEffect(() => {
     const controller = new AbortController()
+    // A guest review has no repo: its source was stored with the review itself.
+    const request = repoId
+      ? fetchIndexedFileContent(token, repoId, filePath, controller.signal)
+      : fetchReviewFileContent(token, reviewId, filePath, controller.signal)
 
-    fetchIndexedFileContent(token, repoId, filePath, controller.signal)
+    request
       .then((file) => {
         setContent(file.content)
         setLoadState('ready')
@@ -109,7 +118,7 @@ function useFileContent(token, { repoId, filePath }) {
     return () => {
       controller.abort()
     }
-  }, [token, repoId, filePath])
+  }, [token, reviewId, repoId, filePath])
 
   return { content, loadState }
 }

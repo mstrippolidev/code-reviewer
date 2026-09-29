@@ -24,7 +24,7 @@ export function ReviewPage() {
     return <p className="page centered">Loading review…</p>
   }
 
-  const reports = buildFileReports({ job, agentProgress, reviewedFiles, failedFiles })
+  const reports = buildFileReports({ job, agentProgress, reviewedFiles, failedFiles, catalog })
 
   return (
     <ReviewDashboard
@@ -37,7 +37,10 @@ export function ReviewPage() {
 }
 
 function openAnnotatedFile(reviewId, repoId, filePath, incident) {
-  const params = new URLSearchParams({ repo_id: String(repoId), path: filePath })
+  const params = new URLSearchParams({ path: filePath })
+  if (repoId !== null) {
+    params.set('repo_id', String(repoId))
+  }
   if (incident) {
     params.set('focus', incident.line_position)
   }
