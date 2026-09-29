@@ -3,6 +3,7 @@ import { UnauthorizedError, openReviewStream } from '../api/client'
 import { parseEventStream } from '../api/sse'
 
 const STREAM_RECONNECT_DELAY_MS = 1500
+const MAX_CONSECUTIVE_CONNECT_FAILURES = 3
 const TERMINAL_STATUSES = new Set(['completed', 'failed'])
 
 export function useReviewStream(token, reviewId, onUnauthorized) {
@@ -21,11 +22,13 @@ export function useReviewStream(token, reviewId, onUnauthorized) {
     const controller = new AbortController()
 
     async function run() {
+      let consecutiveConnectFailures = 0
       while (!controller.signal.aborted) {
         let opened = false
         try {
           const response = await openReviewStream(token, reviewId, controller.signal)
           opened = true
+          consecutiveConnectFailures = 0
           setConnectionStatus('ready')
           for await (const event of parseEventStream(response)) {
             if (event.type === 'status') {
@@ -59,8 +62,15 @@ export function useReviewStream(token, reviewId, onUnauthorized) {
             return
           }
           if (!opened) {
-            setConnectionStatus('error')
-            return
+            consecutiveConnectFailures += 1
+            // A review job can run for minutes (DRY judge calls, COUP's
+            // recursive evidence hop) — a single dropped long-lived
+            // connection is a normal blip, not a fatal one. Only surface
+            // an error once reconnecting has failed several times in a row.
+            if (consecutiveConnectFailures >= MAX_CONSECUTIVE_CONNECT_FAILURES) {
+              setConnectionStatus('error')
+              return
+            }
           }
         }
         if (controller.signal.aborted || TERMINAL_STATUSES.has(jobStatusRef.current)) {
