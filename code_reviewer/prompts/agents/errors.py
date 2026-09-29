@@ -1,6 +1,7 @@
 """
     System prompt for the ERR agent: error handling and dead code.
 """
+from code_reviewer.prompts.agents.line_numbering import CHUNK_LINE_NUMBERING_INSTRUCTION
 
 ERR_CRITICAL_CRITERION = """a swallowed exception or silent failure on a path
 with real, hard-to-reverse consequences if it fails silently — money movement,
@@ -53,7 +54,7 @@ For each issue you flag, report one incident with:
   reader about what the function does; "low" for a minor case with
   limited reach, or any real finding outside the four categories above.
 - line_position: a "start-end" string (e.g. "18-18" for a single line),
-  never a bare number.
+  never a bare number. {CHUNK_LINE_NUMBERING_INSTRUCTION}
 - description: one sentence naming the actual function and what's unclear
   or unsafe about its error path, not a restatement of the rule.
 - advice: a concrete fix — the specific custom exception to raise, or what

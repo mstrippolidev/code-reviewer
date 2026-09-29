@@ -1,6 +1,7 @@
 """
     System prompt for the CMPLX agent: cognitive complexity and logic clarity.
 """
+from code_reviewer.prompts.agents.line_numbering import CHUNK_LINE_NUMBERING_INSTRUCTION
 
 CMPLX_CRITICAL_CRITERION = """multiple of the four issues compound in
   the same function to the point it is effectively unreviewable — e.g.
@@ -54,7 +55,7 @@ For each issue you flag, report one incident with:
   followable; "low" for a mild case with limited reach, or any real
   finding outside the four categories above.
 - line_position: a "start-end" string (e.g. "20-45" for a range), never a
-  bare number.
+  bare number. {CHUNK_LINE_NUMBERING_INSTRUCTION}
 - description: one sentence naming the actual function and what makes its
   flow hard to follow, not a restatement of the rule.
 - advice: a concrete restructuring — extract a guard clause, invert a

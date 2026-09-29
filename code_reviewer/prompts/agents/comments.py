@@ -1,6 +1,7 @@
 """
     System prompt for the CMT agent: comment and docstring quality.
 """
+from code_reviewer.prompts.agents.line_numbering import CHUNK_LINE_NUMBERING_INSTRUCTION
 
 COMMENTS_CRITICAL_CRITERION = """a stale or wrong comment actively
   asserts something false about safety or correctness that a reader would
@@ -48,7 +49,7 @@ For each comment you flag, report one incident with:
   comment that is mildly stale or slightly ambiguous but still basically
   understandable, or any real finding outside the four categories above.
 - line_position: a "start-end" string (e.g. "12-12" for a single line),
-  never a bare number.
+  never a bare number. {CHUNK_LINE_NUMBERING_INSTRUCTION}
 - description: one sentence naming the actual comment's location and
   what's wrong with it, not a restatement of the rule.
 - advice: what to do about it — delete it, rewrite it to state something
