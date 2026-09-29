@@ -16,7 +16,7 @@ from httpx import ASGITransport, AsyncClient
 
 from api.db.models.review_job import ReviewJob, ReviewJobStatus
 from api.db.models.user import User
-from api.dependencies import get_current_user, get_db_session
+from api.dependencies import get_current_user, require_user_or_guest
 from api.review.review_progress_broadcaster import ReviewProgressBroadcaster
 from api.routers.reviews import router as reviews_router
 from api.schemas.reviews import ReviewAgentProgressMessage, ReviewFileProgressMessage, ReviewStatusMessage
@@ -31,6 +31,21 @@ class FakeAsyncSession:
 
     async def scalar(self, statement) -> ReviewJob | None:
         return self.review_job
+
+    async def close(self) -> None:
+        pass
+
+
+class FakeDatabaseEngine:
+    """Stands in for DatabaseEngine: hands out the one fake session this
+    test configured, matching the real new_session()'s own contract of
+    returning a plain session rather than a context manager."""
+
+    def __init__(self, session: FakeAsyncSession) -> None:
+        self._session = session
+
+    def new_session(self) -> FakeAsyncSession:
+        return self._session
 
 
 def _make_review_job(**overrides) -> ReviewJob:
@@ -58,12 +73,10 @@ def _build_app(*, session: FakeAsyncSession, broadcaster: ReviewProgressBroadcas
     app = FastAPI()
     app.include_router(reviews_router)
     app.state.review_progress_broadcaster = broadcaster or ReviewProgressBroadcaster()
+    app.state.database_engine = FakeDatabaseEngine(session)
 
-    async def _fake_db_session():
-        yield session
-
-    app.dependency_overrides[get_db_session] = _fake_db_session
     app.dependency_overrides[get_current_user] = lambda: _make_user()
+    app.dependency_overrides[require_user_or_guest] = lambda: None
     return app
 
 

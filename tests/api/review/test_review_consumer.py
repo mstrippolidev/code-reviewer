@@ -9,14 +9,46 @@ from datetime import datetime
 
 import pytest
 
+from api.db.models.guest_review_file import GuestReviewFile
 from api.db.models.indexed_file import IndexedFile, IndexedFileStatus
 from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 from api.db.models.review_job import ReviewJob, ReviewJobStatus
 from api.review import review_consumer
 from api.review.review_consumer import ReviewRequestConsumer, ReviewRequestConsumerDependencies
 from api.review.review_progress_broadcaster import ReviewProgressBroadcaster
-from api.schemas.reviews import ReviewAgentProgressMessage, ReviewFileProgressMessage, ReviewRequestedMessage
-from code_reviewer.schemas.review import AgentReviewEntry, AggregatorOutput, CodeKey, Meta, PrRecommendation
+from api.review.topics import REVIEW_REQUESTED_DLQ
+from api.schemas.reviews import (
+    ReviewAgentProgressMessage,
+    ReviewFileProgressMessage,
+    ReviewRequestedMessage,
+)
+from code_reviewer.pipeline.orchestrator import AGENT_EXECUTION_FAILED_REASON, GUARD_EXECUTION_FAILED_REASON
+from code_reviewer.schemas.review import (
+    AgentReviewEntry,
+    AggregatedReviewEntry,
+    AggregatorOutput,
+    CodeKey,
+    Meta,
+    PrRecommendation,
+    ReviewScope,
+    SizeStatus,
+    SkippedFile,
+)
+
+
+class FakeConsumerRecord:
+    def __init__(self, value: bytes, key: bytes | None = None, offset: int = 0) -> None:
+        self.value = value
+        self.key = key
+        self.offset = offset
+
+
+class FakeDlqProducer:
+    def __init__(self) -> None:
+        self.published: list[tuple[str, bytes, bytes | None, Exception]] = []
+
+    async def publish_to_dlq(self, dlq_topic: str, payload: bytes, key: bytes | None, error: Exception) -> None:
+        self.published.append((dlq_topic, payload, key, error))
 
 
 class _ScalarsResult:
@@ -36,10 +68,12 @@ class FakeAsyncSession:
         registered_repo: RegisteredRepo | None = None,
         review_job: ReviewJob | None = None,
         indexed_files: list[IndexedFile] | None = None,
+        guest_files: list[GuestReviewFile] | None = None,
     ) -> None:
         self.registered_repo = registered_repo
         self.review_job = review_job
         self.indexed_files = indexed_files or []
+        self.guest_files = guest_files or []
         self.commit_count = 0
 
     async def __aenter__(self) -> "FakeAsyncSession":
@@ -55,6 +89,8 @@ class FakeAsyncSession:
         return self.registered_repo
 
     async def scalars(self, statement) -> _ScalarsResult:
+        if statement.column_descriptions[0]["entity"] is GuestReviewFile:
+            return _ScalarsResult(self.guest_files)
         return _ScalarsResult(self.indexed_files)
 
     async def commit(self) -> None:
@@ -90,6 +126,14 @@ def _make_message(**overrides) -> ReviewRequestedMessage:
     return ReviewRequestedMessage(**defaults)
 
 
+def _make_guest_message() -> ReviewRequestedMessage:
+    return ReviewRequestedMessage(
+        review_id=uuid.uuid4(),
+        file_paths=["example.py"],
+        guest_session_id=7,
+    )
+
+
 def _make_job(review_msg: ReviewRequestedMessage) -> ReviewJob:
     return ReviewJob(
         id=1,
@@ -120,7 +164,9 @@ def _make_repo() -> RegisteredRepo:
     )
 
 
-def _make_result() -> AggregatorOutput:
+def _make_result(
+    *, review: list[AggregatedReviewEntry] | None = None, skipped_files: list[SkippedFile] | None = None
+) -> AggregatorOutput:
     return AggregatorOutput(
         meta=Meta(
             total_files_in_pr=1,
@@ -133,15 +179,35 @@ def _make_result() -> AggregatorOutput:
             agents_run=[],
             pr_recommendation=PrRecommendation.APPROVED,
             rejection_reason=None,
-            skipped_files=[],
+            skipped_files=skipped_files or [],
         ),
-        review=[],
+        review=review or [],
     )
 
 
-def _make_consumer(*, session: FakeAsyncSession, broadcaster: FakeBroadcaster) -> ReviewRequestConsumer:
+def _make_agent_entry(*, file_path: str, agents_failed: list[CodeKey]) -> AggregatedReviewEntry:
+    return AggregatedReviewEntry(
+        file_path=file_path,
+        rating=90,
+        code_key=[],
+        file_lines="1-10",
+        size_status=SizeStatus.NORMAL,
+        review_scope=ReviewScope.FULL,
+        agents_skipped=[],
+        agents_failed=agents_failed,
+        skip_reason=None,
+        incidents=[],
+    )
+
+
+def _make_consumer(
+    *, session: FakeAsyncSession, broadcaster: FakeBroadcaster, dlq_producer: FakeDlqProducer | None = None
+) -> ReviewRequestConsumer:
     dependencies = ReviewRequestConsumerDependencies(
-        database_engine=FakeDatabaseEngine(session), agents_container=None, broadcaster=broadcaster
+        database_engine=FakeDatabaseEngine(session),
+        agents_container=None,
+        broadcaster=broadcaster,
+        dlq_producer=dlq_producer or FakeDlqProducer(),
     )
     return ReviewRequestConsumer(dependencies)
 
@@ -269,10 +335,204 @@ async def test_handle_parsed_message_marks_the_job_failed_when_a_file_is_missing
         indexed_files=[IndexedFile(id=1, repo_id=10, file_path="a.py", status=IndexedFileStatus.INDEXED, content="x = 1\n")],
     )
     broadcaster = FakeBroadcaster()
-    consumer = _make_consumer(session=session, broadcaster=broadcaster)
+    dlq_producer = FakeDlqProducer()
+    consumer = _make_consumer(session=session, broadcaster=broadcaster, dlq_producer=dlq_producer)
+    raw_msg = FakeConsumerRecord(value=review_msg.model_dump_json().encode(), key=str(review_msg.review_id).encode())
 
-    await consumer._handle_parsed_message(review_msg, msg=None, consumer=None)
+    await consumer._handle_parsed_message(review_msg, msg=raw_msg, consumer=None)
 
     assert job.status == ReviewJobStatus.FAILED
     assert job.status_reason == review_consumer._GENERIC_FAILURE_REASON
     assert broadcaster.published[-1].status == ReviewJobStatus.FAILED
+    [(dlq_topic, payload, key, error)] = dlq_producer.published
+    assert dlq_topic == REVIEW_REQUESTED_DLQ
+    assert payload == raw_msg.value
+    assert key == raw_msg.key
+    assert isinstance(error, review_consumer.ReviewFilesUnavailableError)
+
+
+@pytest.mark.asyncio
+async def test_handle_parsed_message_sends_to_dlq_when_an_agent_failed_but_the_job_still_completed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    review_msg = _make_message()
+    job = _make_job(review_msg)
+    session = FakeAsyncSession(
+        registered_repo=_make_repo(),
+        review_job=job,
+        indexed_files=[IndexedFile(id=1, repo_id=10, file_path="a.py", status=IndexedFileStatus.INDEXED, content="x = 1\n")],
+    )
+    broadcaster = FakeBroadcaster()
+    dlq_producer = FakeDlqProducer()
+    consumer = _make_consumer(session=session, broadcaster=broadcaster, dlq_producer=dlq_producer)
+    raw_msg = FakeConsumerRecord(value=review_msg.model_dump_json().encode(), key=str(review_msg.review_id).encode())
+
+    async def fake_run_pipeline(*args, **kwargs) -> AggregatorOutput:
+        return _make_result(review=[_make_agent_entry(file_path="a.py", agents_failed=[CodeKey.SOLID1])])
+
+    monkeypatch.setattr(review_consumer, "run_pipeline", fake_run_pipeline)
+
+    await consumer._handle_parsed_message(review_msg, msg=raw_msg, consumer=None)
+
+    assert job.status == ReviewJobStatus.COMPLETED
+    [(dlq_topic, payload, key, error)] = dlq_producer.published
+    assert dlq_topic == REVIEW_REQUESTED_DLQ
+    assert payload == raw_msg.value
+    assert isinstance(error, review_consumer.PipelineDegradedError)
+
+
+@pytest.mark.asyncio
+async def test_handle_parsed_message_sends_to_dlq_when_a_file_was_skipped_on_agent_execution_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    review_msg = _make_message()
+    job = _make_job(review_msg)
+    session = FakeAsyncSession(
+        registered_repo=_make_repo(),
+        review_job=job,
+        indexed_files=[IndexedFile(id=1, repo_id=10, file_path="a.py", status=IndexedFileStatus.INDEXED, content="x = 1\n")],
+    )
+    broadcaster = FakeBroadcaster()
+    dlq_producer = FakeDlqProducer()
+    consumer = _make_consumer(session=session, broadcaster=broadcaster, dlq_producer=dlq_producer)
+    raw_msg = FakeConsumerRecord(value=review_msg.model_dump_json().encode(), key=str(review_msg.review_id).encode())
+
+    async def fake_run_pipeline(*args, **kwargs) -> AggregatorOutput:
+        return _make_result(
+            skipped_files=[SkippedFile(file_path="a.py", reason=AGENT_EXECUTION_FAILED_REASON)]
+        )
+
+    monkeypatch.setattr(review_consumer, "run_pipeline", fake_run_pipeline)
+
+    await consumer._handle_parsed_message(review_msg, msg=raw_msg, consumer=None)
+
+    [(_topic, _payload, _key, error)] = dlq_producer.published
+    assert isinstance(error, review_consumer.PipelineDegradedError)
+
+
+@pytest.mark.asyncio
+async def test_handle_parsed_message_sends_to_dlq_when_a_file_was_skipped_on_guard_execution_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A guard blowing up unexpectedly (real trace: local Ollama's guardrails
+    call exceeding its context window) is just as much a signal worth a
+    human's attention as an agent failure — same DLQ path, different cause."""
+    review_msg = _make_message()
+    job = _make_job(review_msg)
+    session = FakeAsyncSession(
+        registered_repo=_make_repo(),
+        review_job=job,
+        indexed_files=[IndexedFile(id=1, repo_id=10, file_path="a.py", status=IndexedFileStatus.INDEXED, content="x = 1\n")],
+    )
+    broadcaster = FakeBroadcaster()
+    dlq_producer = FakeDlqProducer()
+    consumer = _make_consumer(session=session, broadcaster=broadcaster, dlq_producer=dlq_producer)
+    raw_msg = FakeConsumerRecord(value=review_msg.model_dump_json().encode(), key=str(review_msg.review_id).encode())
+
+    async def fake_run_pipeline(*args, **kwargs) -> AggregatorOutput:
+        return _make_result(skipped_files=[SkippedFile(file_path="a.py", reason=GUARD_EXECUTION_FAILED_REASON)])
+
+    monkeypatch.setattr(review_consumer, "run_pipeline", fake_run_pipeline)
+
+    await consumer._handle_parsed_message(review_msg, msg=raw_msg, consumer=None)
+
+    [(_topic, _payload, _key, error)] = dlq_producer.published
+    assert isinstance(error, review_consumer.PipelineDegradedError)
+
+
+@pytest.mark.asyncio
+async def test_handle_parsed_message_does_not_send_to_dlq_on_a_clean_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    review_msg = _make_message()
+    job = _make_job(review_msg)
+    session = FakeAsyncSession(
+        registered_repo=_make_repo(),
+        review_job=job,
+        indexed_files=[IndexedFile(id=1, repo_id=10, file_path="a.py", status=IndexedFileStatus.INDEXED, content="x = 1\n")],
+    )
+    broadcaster = FakeBroadcaster()
+    dlq_producer = FakeDlqProducer()
+    consumer = _make_consumer(session=session, broadcaster=broadcaster, dlq_producer=dlq_producer)
+    raw_msg = FakeConsumerRecord(value=review_msg.model_dump_json().encode(), key=str(review_msg.review_id).encode())
+
+    async def fake_run_pipeline(*args, **kwargs) -> AggregatorOutput:
+        return _make_result(review=[_make_agent_entry(file_path="a.py", agents_failed=[])])
+
+    monkeypatch.setattr(review_consumer, "run_pipeline", fake_run_pipeline)
+
+    await consumer._handle_parsed_message(review_msg, msg=raw_msg, consumer=None)
+
+    assert dlq_producer.published == []
+
+
+@pytest.mark.asyncio
+async def test_handle_parse_error_sends_the_unparseable_payload_to_dlq() -> None:
+    session = FakeAsyncSession()
+    broadcaster = FakeBroadcaster()
+    dlq_producer = FakeDlqProducer()
+    consumer = _make_consumer(session=session, broadcaster=broadcaster, dlq_producer=dlq_producer)
+    bad_payload = b"not-json-at-all"
+    raw_msg = FakeConsumerRecord(value=bad_payload, key=b"some-key", offset=42)
+
+    await consumer._handle_parse_error(raw_msg, review_consumer.ReviewRequestMessageParseError("bad"))
+
+    [(dlq_topic, payload, key, error)] = dlq_producer.published
+    assert dlq_topic == REVIEW_REQUESTED_DLQ
+    assert payload == bad_payload
+    assert key == b"some-key"
+    assert isinstance(error, review_consumer.ReviewRequestMessageParseError)
+
+
+class _PipelineCallRecorder:
+    def __init__(self) -> None:
+        self.files: list | None = None
+        self.repo_data: object = "not called"
+
+    async def __call__(self, files, agents_container, repo_data=None, **kwargs) -> AggregatorOutput:
+        self.files = files
+        self.repo_data = repo_data
+        return _make_result()
+
+
+def _arrange_guest_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[_PipelineCallRecorder, ReviewRequestConsumer, ReviewRequestedMessage]:
+    review_msg = _make_guest_message()
+    guest_file = GuestReviewFile(id=1, review_job_id=1, file_path="example.py", content="def f():\n    return 1\n")
+    session = FakeAsyncSession(review_job=_make_job(review_msg), guest_files=[guest_file])
+    consumer = _make_consumer(session=session, broadcaster=FakeBroadcaster())
+    recorder = _PipelineCallRecorder()
+    monkeypatch.setattr(review_consumer, "run_pipeline", recorder)
+    return recorder, consumer, review_msg
+
+
+@pytest.mark.asyncio
+async def test_guest_review_runs_the_pipeline_with_no_repo_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify a guest message reaches the pipeline as a repo-less review, so repo-dependent agents degrade."""
+    recorder, consumer, review_msg = _arrange_guest_review(monkeypatch)
+
+    await consumer._run_review(review_msg)
+
+    assert recorder.repo_data is None
+
+
+@pytest.mark.asyncio
+async def test_guest_review_reviews_its_stored_guest_files(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify a guest review's content comes from its own stored rows, since no indexed repo file exists for it."""
+    recorder, consumer, review_msg = _arrange_guest_review(monkeypatch)
+
+    await consumer._run_review(review_msg)
+
+    assert [(f.file_path, f.content) for f in recorder.files] == [("example.py", "def f():\n    return 1\n")]
+
+
+@pytest.mark.asyncio
+async def test_guest_review_with_no_stored_files_marks_the_job_failed() -> None:
+    """Verify a guest message whose content rows vanished fails the job instead of reviewing nothing."""
+    review_msg = _make_guest_message()
+    job = _make_job(review_msg)
+    consumer = _make_consumer(session=FakeAsyncSession(review_job=job), broadcaster=FakeBroadcaster())
+    raw_msg = FakeConsumerRecord(value=review_msg.model_dump_json().encode(), key=str(review_msg.review_id).encode())
+
+    await consumer._handle_parsed_message(review_msg, msg=raw_msg, consumer=None)
+
+    assert job.status == ReviewJobStatus.FAILED

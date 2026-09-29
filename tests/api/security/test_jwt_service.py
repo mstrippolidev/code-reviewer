@@ -5,6 +5,7 @@ import pytest
 
 from api.security.jwt_service import (
     InvalidAccessTokenError,
+    InvalidGuestSessionTokenError,
     InvalidOAuthStateError,
     JwtTokenService,
 )
@@ -74,3 +75,17 @@ def test_expired_oauth_state_is_rejected() -> None:
 
     with pytest.raises(InvalidOAuthStateError):
         service.verify_oauth_state(state)
+
+
+def test_issued_guest_session_token_verifies_to_the_same_guest_session_id(jwt_service: JwtTokenService) -> None:
+    token = jwt_service.issue_guest_session_token(guest_session_id=7)
+
+    assert jwt_service.verify_guest_session_token(token) == 7
+
+
+def test_access_token_is_rejected_as_a_guest_session_token(jwt_service: JwtTokenService) -> None:
+    """Verify a GitHub user's bearer token can't be replayed as a guest cookie, or vice versa."""
+    token = jwt_service.issue_access_token(user_id=7)
+
+    with pytest.raises(InvalidGuestSessionTokenError):
+        jwt_service.verify_guest_session_token(token)

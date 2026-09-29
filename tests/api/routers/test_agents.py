@@ -5,8 +5,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api.db.models.agent import Agent, AgentCategory
-from api.db.models.user import User
-from api.dependencies import get_current_user, get_db_session
+from api.dependencies import get_db_session, require_user_or_guest
 from api.routers.agents import router as agents_router
 
 
@@ -46,7 +45,7 @@ def _build_app(session: FakeAsyncSession) -> FastAPI:
         yield session
 
     app.dependency_overrides[get_db_session] = _fake_db_session
-    app.dependency_overrides[get_current_user] = lambda: User(id=1, github_id=1, github_username="octocat")
+    app.dependency_overrides[require_user_or_guest] = lambda: None
     return app
 
 
