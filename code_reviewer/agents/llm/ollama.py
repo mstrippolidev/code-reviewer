@@ -23,14 +23,12 @@ class OllamaLLM(LLMInterface[T]):
     def _get_base_url(self) -> str:
         return settings.ollama_base_url
 
-    def _get_timeout_kwargs(self) -> dict[str, Any]:
-        """Ollama has no top-level timeout field — ChatOllama forwards
-        client_kwargs to the underlying ollama/httpx client instead."""
+    def _get_extra_kwargs(self) -> dict[str, Any]:
         timeout = get_settings().llm_call_timeout_seconds
-        return {"client_kwargs": {"timeout": timeout}}
-
-    def _get_context_window_kwargs(self) -> dict[str, Any]:
-        return {"num_ctx": get_settings().ollama_llm_num_ctx}
+        return {
+            "client_kwargs": {"timeout": timeout},
+            "num_ctx": get_settings().ollama_llm_num_ctx,
+        }
 
     def build_response_format(self, schema: type[T]) -> ResponseFormat[T]:
         """Use provider-native structured output instead of a tool call.

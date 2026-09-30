@@ -34,7 +34,8 @@ dependencies = [
     "h2 (>=4.4.1,<5.0.0)",
     "aiokafka (>=0.14.0,<0.15.0)",
     "boto3 (>=1.43.105,<2.0.0)",
-    "llama-index-embeddings-bedrock (>=0.9.0,<0.10.0)"
+    "llama-index-embeddings-bedrock (>=0.9.0,<0.10.0)",
+    "langchain-aws (>=1.7.9,<2.0.0)"
 ]
 
 
@@ -44,11 +45,12 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m 'not db and not llm and not kafka'"
+addopts = "-m 'not db and not llm and not kafka and not bedrock'"
 markers = [
     "llm: exercises a real local Ollama model, slower and requires Ollama running",
     "db: exercises a real local Postgres instance, requires the code_reviewer database and schema to already exist",
     "kafka: exercises the real local Kafka cluster (kafka-dev namespace), requires the broker running",
+    "bedrock: exercises the real AWS Bedrock API, requires AWS credentials and model access",
 ]
 
 [dependency-groups]

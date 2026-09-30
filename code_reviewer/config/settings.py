@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -73,7 +74,11 @@ class Settings(BaseSettings):
     llm_call_timeout_seconds: float = 60.0
     dry_agent_timeout_seconds: float = 300.0
 
+    llm_provider: Literal["ollama", "openrouter", "bedrock"] = "ollama"
+
     bedrock_region: str = "us-east-1"
+    bedrock_llm_region: str = "us-east-2"
+    bedrock_llm_model: str = "deepseek.v3-v1:0"
 
 
 

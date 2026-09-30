@@ -57,7 +57,7 @@ class OpenRouter(LLMInterface[T]):
     def _get_api_key(self) -> str | None:
         return settings.openrouter_api_key
 
-    def _get_timeout_kwargs(self) -> dict[str, Any]:
+    def _get_extra_kwargs(self) -> dict[str, Any]:
         """request_timeout is milliseconds here (its own docstring: "Maps
         to SDK timeout_ms"), unlike every other timeout in this project,
         which is always seconds — converted here so settings stays in one

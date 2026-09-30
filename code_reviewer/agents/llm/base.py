@@ -59,13 +59,14 @@ class LLMInterface(ABC, Generic[T]):
         kwargs: dict[str, Any] = {
             "temperature": self._temperature,
             "model_provider": self._get_model_provider(),
-            "base_url": self._get_base_url(),
-            **self._get_timeout_kwargs(),
-            **self._get_context_window_kwargs(),
+            **self._get_extra_kwargs(),
         }
         api_key = self._get_api_key()
         if api_key is not None:
             kwargs["api_key"] = api_key
+        base_url = self._get_base_url()
+        if base_url:
+            kwargs["base_url"] = base_url
         return init_chat_model(self._get_model_name(), **kwargs)
 
 
@@ -78,26 +79,18 @@ class LLMInterface(ABC, Generic[T]):
         """LangChain provider key, e.g. 'ollama'."""
 
     @abstractmethod
-    def _get_base_url(self) -> str:
-        """Base URL of the provider's API."""
+    def _get_base_url(self) -> str | None:
+        """Base URL of the provider's API, or None when the provider has no
+        such concept (e.g. Bedrock, which uses region_name + IAM instead)."""
 
     def _get_api_key(self) -> str | None:
         """API key for the provider's API, or None when no auth is needed
         (e.g. a local Ollama instance). Cloud providers override this."""
         return None
 
-    def _get_timeout_kwargs(self) -> dict[str, Any]:
-        """Provider-specific kwarg(s) enforcing a per-call timeout. Each
-        provider's chat model exposes this under a different name (or a
-        nested client config), so there is no single shared kwarg — empty
-        by default, concrete providers override with their own mechanism."""
-        return {}
-
-    def _get_context_window_kwargs(self) -> dict[str, Any]:
-        """Provider-specific kwarg(s) sizing the model's context window.
-        Only a local Ollama model needs this — a hosted provider sizes its
-        own context server-side, and forwarding an Ollama-only kwarg like
-        num_ctx to it would raise. Empty by default; OllamaLLM overrides."""
+    def _get_extra_kwargs(self) -> dict[str, Any]:
+        """Any other provider-specific kwargs (timeout, context window,
+        region, etc). Empty by default."""
         return {}
 
     @abstractmethod
