@@ -31,11 +31,14 @@ from api.routers.guest import router as guest_router
 from api.routers.health import router as health_router
 from api.routers.repos import router as repos_router
 from api.routers.reviews import router as reviews_router
-from code_reviewer.agents.llm.openrouter import OpenRouter
+from code_reviewer.agents.llm.factory import build_llm
 from code_reviewer.agents.registry import build_agent_roster
 from code_reviewer.rag.chunk_explainer import ChunkExplainer
-from code_reviewer.rag.embedding.bedrock import BedrockEmbeddingProvider
+from code_reviewer.rag.code_similarity_index import CodeSimilarityIndex
+from code_reviewer.rag.embedding.factory import build_embedding
+from code_reviewer.rag.exemplars import ExemplarStore
 from code_reviewer.rag.indexer import LlamaIndexRagManager
+from code_reviewer.rag.shared_exemplars import SharedExemplarStore
 
 ConsumerSpec = tuple[str, ConsumerDependencies]
 
@@ -47,11 +50,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.http_client = httpx.AsyncClient(http2=True)
     app.state.kafka_producer = RepoIndexProducer(settings.kafka_bootstrap_servers)
     app.state.repo_completion_finalizer = RepoCompletionFinalizer(app.state.kafka_producer)
-    app.state.rag_manager = LlamaIndexRagManager(
-        embedding=BedrockEmbeddingProvider(), explainer=ChunkExplainer(OpenRouter())
-    )
+    embedding = build_embedding()
+    app.state.rag_manager = LlamaIndexRagManager(embedding=embedding, explainer=ChunkExplainer(build_llm()))
     app.state.repo_progress_broadcaster = RepoProgressBroadcaster()
-    app.state.agents_container = build_agent_roster(llm=OpenRouter(), rag_manager=app.state.rag_manager)
+    app.state.agents_container = build_agent_roster(
+        llm=build_llm(),
+        rag_manager=app.state.rag_manager,
+        code_similarity_index=CodeSimilarityIndex(embedding=embedding),
+        exemplar_store=ExemplarStore(embedding=embedding),
+        shared_exemplar_store=SharedExemplarStore(embedding=embedding),
+    )
     app.state.review_progress_broadcaster = ReviewProgressBroadcaster()
     # sentence-transformers, loaded above via the RAG manager/agent roster, attaches its own
     # root logging handler as a side effect — this must run after that to still be in effect

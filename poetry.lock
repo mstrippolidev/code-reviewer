@@ -2328,18 +2328,44 @@ together = ["langchain-together"]
 xai = ["langchain-xai"]
 
 [[package]]
+name = "langchain-aws"
+version = "1.7.9"
+description = "An integration package connecting AWS and LangChain"
+optional = false
+python-versions = ">=3.10"
+groups = ["main"]
+files = [
+    {file = "langchain_aws-1.7.9-py3-none-any.whl", hash = "sha256:a0803d4ac4db8481e044e6814dd5cc1572a3e9a238694e64c7959492e7abbe13"},
+    {file = "langchain_aws-1.7.9.tar.gz", hash = "sha256:2af21da1af458c6e7d43e58d26978711e15b81a6f9916da38d882d4ca7b58213"},
+]
+
+[package.dependencies]
+boto3 = ">=1.43.64"
+langchain-core = ">=1.6.3"
+numpy = ">=1.0.0,<3"
+pydantic = ">=2.10.6,<3"
+
+[package.extras]
+anthropic = ["anthropic[bedrock] (>=0.95.0)", "aws-bedrock-token-generator (>=1.1.0)", "langchain-anthropic"]
+nova-sonic = ["aws-sdk-bedrock-runtime (>=0.10) ; python_version >= \"3.12\"", "smithy-http[awscrt] ; python_version >= \"3.12\""]
+openai = ["aws-bedrock-token-generator (>=1.1.0)", "langchain-openai (>=1.0.0)", "openai (>=1.106.0)"]
+tools = ["beautifulsoup4 (>=4.13.4)", "bedrock-agentcore (>=1.23.0) ; python_version >= \"3.10\"", "playwright (>=1.53.0)"]
+valkey = ["valkey-glide-sync (>=2.0.0)"]
+
+[[package]]
 name = "langchain-core"
-version = "1.4.9"
+version = "1.6.6"
 description = "Building applications with LLMs through composability"
 optional = false
 python-versions = "<4.0.0,>=3.10.0"
 groups = ["main"]
 files = [
-    {file = "langchain_core-1.4.9-py3-none-any.whl", hash = "sha256:28e3909e2a10cc81504952d795ac0a9e014c0018121ef89d48dd396fa09ec624"},
-    {file = "langchain_core-1.4.9.tar.gz", hash = "sha256:f8078901145bed0466755277500a5a22822a7b628808c4c0a28d4fc88895fcf2"},
+    {file = "langchain_core-1.6.6-py3-none-any.whl", hash = "sha256:d9a71e312ab7443701238750e04a57aefc037c4f1ec82837c8a1609d9a14a9b1"},
+    {file = "langchain_core-1.6.6.tar.gz", hash = "sha256:67616d984c085009be2c381c2efd330d32429a58aebab295b4f51b6573964511"},
 ]
 
 [package.dependencies]
+httpx = ">=0.23.0,<1.0.0"
 jsonpatch = ">=1.33.0,<2.0.0"
 langchain-protocol = ">=0.0.17"
 langsmith = ">=0.3.45,<1.0.0"
@@ -7656,4 +7682,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<4.0"
-content-hash = "4f8713966b54c541ae4dae66ec22c35f9ac14dc60ac9344ed1f046c1503c91f3"
+content-hash = "3e284fa580d5f730abe4637f6861d65afee62d7e7a5c3f1b091da1dd76958b33"
