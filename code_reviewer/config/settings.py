@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     dry_agent_timeout_seconds: float = 300.0
 
     llm_provider: Literal["ollama", "openrouter", "bedrock"] = "ollama"
+    embedding_provider: Literal["ollama", "bedrock"] = "ollama"
 
     bedrock_region: str = "us-east-1"
     bedrock_llm_region: str = "us-east-2"
