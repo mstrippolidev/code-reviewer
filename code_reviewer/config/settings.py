@@ -73,6 +73,8 @@ class Settings(BaseSettings):
     llm_call_timeout_seconds: float = 60.0
     dry_agent_timeout_seconds: float = 300.0
 
+    bedrock_region: str = "us-east-1"
+
 
 
 @lru_cache

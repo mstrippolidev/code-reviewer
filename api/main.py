@@ -34,6 +34,7 @@ from api.routers.reviews import router as reviews_router
 from code_reviewer.agents.llm.openrouter import OpenRouter
 from code_reviewer.agents.registry import build_agent_roster
 from code_reviewer.rag.chunk_explainer import ChunkExplainer
+from code_reviewer.rag.embedding.bedrock import BedrockEmbeddingProvider
 from code_reviewer.rag.indexer import LlamaIndexRagManager
 
 ConsumerSpec = tuple[str, ConsumerDependencies]
@@ -46,9 +47,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.http_client = httpx.AsyncClient(http2=True)
     app.state.kafka_producer = RepoIndexProducer(settings.kafka_bootstrap_servers)
     app.state.repo_completion_finalizer = RepoCompletionFinalizer(app.state.kafka_producer)
-    app.state.rag_manager = LlamaIndexRagManager(explainer=ChunkExplainer(OpenRouter()))
+    app.state.rag_manager = LlamaIndexRagManager(
+        embedding=BedrockEmbeddingProvider(), explainer=ChunkExplainer(OpenRouter())
+    )
     app.state.repo_progress_broadcaster = RepoProgressBroadcaster()
-    app.state.agents_container = build_agent_roster(llm=OpenRouter())
+    app.state.agents_container = build_agent_roster(llm=OpenRouter(), rag_manager=app.state.rag_manager)
     app.state.review_progress_broadcaster = ReviewProgressBroadcaster()
     # sentence-transformers, loaded above via the RAG manager/agent roster, attaches its own
     # root logging handler as a side effect — this must run after that to still be in effect
