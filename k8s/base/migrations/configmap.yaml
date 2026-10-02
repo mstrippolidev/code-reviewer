@@ -1,0 +1,9 @@
+# Non-secret values ApiSettings requires but alembic migrations never read.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-migration-config
+data:
+  GITHUB_OAUTH_CLIENT_ID: "placeholder"
+  GITHUB_OAUTH_REDIRECT_URI: "http://localhost/placeholder"
+  KAFKA_BOOTSTRAP_SERVERS: "localhost:9092"

@@ -1,0 +1,49 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: api-db-migrate
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 300
+  template:
+    spec:
+      restartPolicy: Never
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.37
+          command:
+            - sh
+            - -c
+            - until nc -z -w2 "$PG_HOST" "$PG_PORT"; do sleep 2; done
+          env:
+            - name: PG_HOST
+              valueFrom:
+                secretKeyRef: { name: code-reviewer-postgres-app, key: host }
+            - name: PG_PORT
+              valueFrom:
+                secretKeyRef: { name: code-reviewer-postgres-app, key: port }
+      containers:
+        - name: migrate
+          image: <ECR_REGISTRY>/code-reviewer-api:latest
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef:
+                name: api-migration-config
+            - secretRef:
+                name: api-migration-secrets
+          env:
+            - name: PG_HOST
+              valueFrom:
+                secretKeyRef: { name: code-reviewer-postgres-app, key: host }
+            - name: PG_PORT
+              valueFrom:
+                secretKeyRef: { name: code-reviewer-postgres-app, key: port }
+            - name: PG_DATABASE
+              valueFrom:
+                secretKeyRef: { name: code-reviewer-postgres-app, key: dbname }
+            - name: PG_USER
+              valueFrom:
+                secretKeyRef: { name: code-reviewer-postgres-app, key: user }
+            - name: PG_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: code-reviewer-postgres-app, key: password }
