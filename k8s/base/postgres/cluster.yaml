@@ -1,0 +1,35 @@
+# We register this new kind of object from CPNG operator to k8s, now this
+# file will configure the object
+
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: code-reviewer-postgres
+spec:
+  instances: 3
+  # the image with the pgvector extension installed
+  imageName: <ECR_REGISTRY>/code-reviewer-postgres:16-pgvector
+  storage: # FROM EBS
+    size: 10Gi
+    storageClass: gp3
+
+  bootstrap:
+    initdb:
+      # we need to enable the pgvector extension
+      database: code-reviewer
+      owner: code_reviewer_app
+      postInitApplicationSQL:
+        - "CREATE EXTENSION IF NOT EXISTS vector;"
+
+  # set the resources for the pods
+  resources:
+    requests:
+      cpu: 1
+      memory: 512Mi
+    limits:
+      cpu: 1
+      memory: 2Gi
+  # tell how to create each replica base on the virtual node or servers
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: topology.kubernetes.io/zone

@@ -1,0 +1,20 @@
+resources:
+  - ../../base/postgres
+  - ../../base/migrations
+
+images:
+  - name: <ECR_REGISTRY>/code-reviewer-api
+    newName: code-reviewer-api
+    newTag: local
+
+patches:
+  - target:
+      kind: Cluster
+      name: code-reviewer-postgres
+    patch: |-
+      - op: replace
+        path: /spec/imageName
+        value: code-reviewer-postgres:16-pgvector
+      - op: replace
+        path: /spec/storage/storageClass
+        value: local-path
