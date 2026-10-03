@@ -10,7 +10,7 @@ spec:
   # the image with the pgvector extension installed
   imageName: <ECR_REGISTRY>/code-reviewer-postgres:16-pgvector
   storage: # FROM EBS
-    size: 10Gi
+    size: 5Gi
     storageClass: gp3
 
   bootstrap:
