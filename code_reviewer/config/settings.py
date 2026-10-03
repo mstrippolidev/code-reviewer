@@ -77,8 +77,7 @@ class Settings(BaseSettings):
     llm_provider: Literal["ollama", "openrouter", "bedrock"] = "ollama"
     embedding_provider: Literal["ollama", "bedrock"] = "ollama"
 
-    bedrock_region: str = "us-east-1"
-    bedrock_llm_region: str = "us-east-2"
+    bedrock_region: str = "us-east-2"
     bedrock_llm_model: str = "deepseek.v3-v1:0"
 
 
