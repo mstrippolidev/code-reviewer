@@ -4,6 +4,7 @@ CLAUDE.md
 
 .vscode/
 .guardrails/
+.claude/
 
 __pycache__/
 *.pyc
