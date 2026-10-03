@@ -1,0 +1,15 @@
+namespace: kafka
+
+resources:
+  - nodepool-controllers.yaml
+  - nodepool-brokers.yaml
+  - kafka.yaml
+  - topics/repo-registered.yaml
+  - topics/repo-registered-dlq.yaml
+  - topics/repo-file-index.yaml
+  - topics/repo-file-index-dlq.yaml
+  - topics/repo-file-progress.yaml
+  - topics/repo-status-progress.yaml
+  - topics/repo-file-retry.yaml
+  - topics/review-requested.yaml
+  - topics/review-requested-dlq.yaml
