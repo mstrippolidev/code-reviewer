@@ -1,0 +1,17 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: api-file-index-scaler
+spec:
+  scaleTargetRef:
+    name: api
+  minReplicaCount: 3
+  maxReplicaCount: 10
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: code-reviewer-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092
+        consumerGroup: repo_file_index_consumer
+        topic: repo.file.index
+        lagThreshold: "5"
+        tls: disable
