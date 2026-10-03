@@ -1,0 +1,7 @@
+resources:
+  - ../../base/storage
+  - ../../base/postgres
+  - ../../base/migrations
+  - ../../base/kafka
+  - ../../base/api
+  - ../../base/frontend

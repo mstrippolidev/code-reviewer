@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+data:
+  ENVIRONMENT: "demo"
+  API_ENVIRONMENT: "demo"
+  FRONTEND_BASE_URL: "http://CHANGE_ME"
+  GITHUB_OAUTH_CLIENT_ID: "CHANGE_ME"
+  GITHUB_OAUTH_REDIRECT_URI: "http://CHANGE_ME/api/oauth/github/callback"
+  KAFKA_BOOTSTRAP_SERVERS: "code-reviewer-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092"
+  LLM_PROVIDER: "bedrock"
+  EMBEDDING_PROVIDER: "bedrock"
+  BEDROCK_REGION: "us-east-2"
+  MAX_SUBMISSION_CHARACTERS: "200000"
+  MAX_FILES_PER_SUBMISSION: "15"
+  MAX_FILE_LINES: "1500"
+  OPENROUTER_MODEL: "deepseek/deepseek-v4-pro"
+  OLLAMA_BASE_URL: "unused-bedrock-demo"
+  OLLAMA_LLM_MODEL: "unused-bedrock-demo"
+  OLLAMA_EMBED_MODEL: "unused-bedrock-demo"
+  OLLAMA_CODE_EMBED_MODEL: "unused-bedrock-demo"
