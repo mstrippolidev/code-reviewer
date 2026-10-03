@@ -27,7 +27,7 @@ class BedrockLLM(LLMInterface[T]):
     def _get_extra_kwargs(self) -> dict[str, Any]:
         timeout = get_settings().llm_call_timeout_seconds
         return {
-            "region_name": settings.bedrock_llm_region,
+            "region_name": settings.bedrock_region,
             "config": Config(connect_timeout=timeout, read_timeout=timeout),
         }
 
