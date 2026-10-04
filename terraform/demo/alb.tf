@@ -13,6 +13,12 @@ resource "aws_lb_target_group" "app" {
   vpc_id               = data.aws_vpc.default.id
   deregistration_delay = 10
 
+  stickiness {
+    type            = "lb_cookie"
+    enabled         = true
+    cookie_duration = 1200
+  }
+
   health_check {
     path                = "/"
     matcher             = "200"
