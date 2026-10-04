@@ -49,7 +49,19 @@ IMAGE_REF='^[A-Za-z0-9._/-]+:[A-Za-z0-9._-]+$'
 echo "images to pre-pull:"
 cat "$APP_DIR/images.txt"
 
-while read -r ref; do
+qualify_ref() {
+  local ref=$1 first=${1%%/*}
+  if [[ "$ref" != */* ]]; then
+    echo "docker.io/library/$ref"
+  elif [[ "$first" == *.* || "$first" == *:* || "$first" == localhost ]]; then
+    echo "$ref"
+  else
+    echo "docker.io/$ref"
+  fi
+}
+
+while read -r raw_ref; do
+  ref=$(qualify_ref "$raw_ref")
   if [[ "$ref" == "$ECR_REGISTRY"/* ]]; then
     k3s ctr -n k8s.io images pull --user "AWS:${ECR_PASSWORD}" "$ref"
   else
