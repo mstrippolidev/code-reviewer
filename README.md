@@ -23,9 +23,9 @@ The result is one weighted, explainable score per file.
 
 <br>
 
-<img src="docs/images/review-dashboard.png" alt="Code Reviewer dashboard: overall score, files being reviewed, and the 14 agents reporting live" width="900">
+<img src="docs/images/review-dashboard-live.png" alt="A finished review: overall score, per-file results, and a rating from each of the review agents" width="900">
 <br>
-<sub>The review dashboard while a review is running: per-file status, live score, and each of the 14 agents reporting as it finishes. (Rendered from the app's built-in sample data.)</sub>
+<sub>A real guest review of two intentionally flawed example files: an overall score and recommendation, per-file results, and one rating per agent. DRY shows as not available because guest reviews have no repository history to compare against.</sub>
 
 </div>
 
