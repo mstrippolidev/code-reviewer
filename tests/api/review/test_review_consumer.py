@@ -535,3 +535,14 @@ async def test_guest_review_with_no_stored_files_marks_the_job_failed() -> None:
     await consumer._handle_parsed_message(review_msg, msg=raw_msg, consumer=None)
 
     assert job.status == ReviewJobStatus.FAILED
+
+
+def test_degraded_reason_names_each_failed_agent_by_file() -> None:
+    """Verify the DLQ notification says which agents failed, not only which file, so it can be acted on."""
+    result = _make_result(
+        review=[_make_agent_entry(file_path="service/common/error_handlers.py", agents_failed=[CodeKey.ARCH, CodeKey.COUP])]
+    )
+
+    reason = review_consumer._degraded_reason(result)
+
+    assert "'service/common/error_handlers.py': ['ARCH', 'COUP']" in reason

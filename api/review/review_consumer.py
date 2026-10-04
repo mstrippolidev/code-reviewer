@@ -274,8 +274,12 @@ def _has_pipeline_failures(result: AggregatorOutput) -> bool:
 
 
 def _degraded_reason(result: AggregatorOutput) -> str:
-    failed_agent_files = [entry.file_path for entry in result.review if entry.agents_failed]
+    failed_agents_by_file = {
+        entry.file_path: [code_key.value for code_key in entry.agents_failed]
+        for entry in result.review
+        if entry.agents_failed
+    }
     failed_whole_files = [
         skipped.file_path for skipped in result.meta.skipped_files if skipped.reason in _UNEXPECTED_SKIP_REASONS
     ]
-    return f"agents_failed on files={failed_agent_files}; files_skipped_on_failure={failed_whole_files}"
+    return f"agents_failed={failed_agents_by_file}; files_skipped_on_failure={failed_whole_files}"

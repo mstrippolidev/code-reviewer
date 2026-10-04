@@ -35,6 +35,21 @@ from code_reviewer.schemas.review import (
 
 logger = logging.getLogger(__name__)
 
+_AFTER_MODEL_HOOKS = (calculate_rating, discard_model_reported_failure)
+_STRUCTURED_OUTPUT_CORRECTION_TURNS = 1
+
+
+def recursion_limit_for_tool_calls(max_tool_calls: int) -> int:
+    """Graph step budget for up to max_tool_calls tool round-trips, one structured-output correction and the answer.
+
+    LangGraph runs every after_model hook as its own step after each model turn, so a hand-picked limit
+    silently loses tool budget whenever a hook is added; deriving it from the hook count keeps it honest.
+    """
+    steps_per_model_turn = 1 + len(_AFTER_MODEL_HOOKS)
+    tool_steps = max_tool_calls + _STRUCTURED_OUTPUT_CORRECTION_TURNS
+    model_turns = tool_steps + 1
+    return model_turns * steps_per_model_turn + tool_steps
+
 
 class AgentInvocationError(Exception):
     """Raised when an agent's LLM call fails or its output cannot be validated."""
@@ -90,8 +105,7 @@ class AgentBase:
                 *self._retry_middleware(tools),
                 *self._tool_loop_guard(tools),
                 *self._extra_middleware(),
-                calculate_rating,
-                discard_model_reported_failure,
+                *_AFTER_MODEL_HOOKS,
             ],
             response_format=self._response_format(llm_factory, tools),
             context_schema=self._context_schema(),

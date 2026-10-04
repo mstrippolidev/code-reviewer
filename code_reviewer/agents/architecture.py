@@ -4,14 +4,14 @@
 
 from langchain_core.tools import BaseTool
 
-from code_reviewer.agents.base import FileSizeAwareAgentBase, ReviewContext
+from code_reviewer.agents.base import FileSizeAwareAgentBase, ReviewContext, recursion_limit_for_tool_calls
 from code_reviewer.agents.cross_file_evidence_tool import GetFileChunksTool
 from code_reviewer.agents.llm.base import LLMInterface
 from code_reviewer.prompts.agents.architecture import ARCH_AGENT_REPOLESS_SYSTEM_PROMPT, ARCH_AGENT_SYSTEM_PROMPT
 from code_reviewer.rag.indexer import LlamaIndexRagManager
 from code_reviewer.schemas.review import CodeKey
 
-_TOOL_RECURSION_LIMIT = 10
+_MAX_EVIDENCE_LOOKUPS = 3
 
 
 class ArchitectureAgent(FileSizeAwareAgentBase):
@@ -32,4 +32,6 @@ class ArchitectureAgent(FileSizeAwareAgentBase):
         return ReviewContext if self._rag_manager is not None else None
 
     def _recursion_limit(self) -> int:
-        return _TOOL_RECURSION_LIMIT if self._rag_manager is not None else super()._recursion_limit()
+        if self._rag_manager is None:
+            return super()._recursion_limit()
+        return recursion_limit_for_tool_calls(_MAX_EVIDENCE_LOOKUPS)
