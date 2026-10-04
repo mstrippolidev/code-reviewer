@@ -1,65 +1,90 @@
 """
-    Consumes repo.registered.dlq: notifies a human per message, no retry, no reprocessing.
+    Consumes every dead-letter topic: notifies a human per message, no retry, no reprocessing.
 """
+import asyncio
 import logging
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from aiokafka import AIOKafkaConsumer, ConsumerRecord
-from pydantic import ValidationError
 
 from api.config.settings import get_api_settings
 from api.indexing.consumers.dlq_notifier import DlqNotifier
 from api.indexing.consumers.interface import ConsumerInterface
-from api.indexing.topics import REPO_REGISTERED_DLQ
-from api.schemas.indexing import RepoRegisteredMessage
+from api.indexing.topics import REPO_FILE_INDEX_DLQ, REPO_REGISTERED_DLQ
+from api.review.topics import REVIEW_REQUESTED_DLQ
 
 logger = logging.getLogger(__name__)
 
 settings = get_api_settings()
 
-GROUP_ID = "repo_index_dlq_consumer"
-TOPIC = REPO_REGISTERED_DLQ
+GROUP_ID = "dlq_notification_consumer"
+TOPICS = (REPO_REGISTERED_DLQ, REPO_FILE_INDEX_DLQ, REVIEW_REQUESTED_DLQ)
 BOOTSTRAP_SERVER = settings.kafka_bootstrap_servers
 
 
-class RepoIndexDlqConsumer(ConsumerInterface[tuple[str, str, str]]):
-    """Sends one notification per message that lands on repo.registered.dlq."""
+@dataclass(frozen=True)
+class DeadLetter:
+    """The facts about one dead-lettered message, without its payload, which may hold private repo content."""
 
-    def __init__(self, notifier: DlqNotifier, topic: str = TOPIC,
-                 bootstrap_servers: str = BOOTSTRAP_SERVER, group_id: str = GROUP_ID) -> None:
-        super().__init__(topic, bootstrap_servers, group_id, enable_auto_commit=False)
+    topic: str
+    partition: int
+    offset: int
+    key: str
+    error_type: str
+    error_message: str
+
+
+class DlqConsumer(ConsumerInterface[DeadLetter]):
+    """Sends one notification per message that lands on any dead-letter topic."""
+
+    def __init__(self, notifier: DlqNotifier) -> None:
+        super().__init__(TOPICS, BOOTSTRAP_SERVER, GROUP_ID, enable_auto_commit=False)
         self._notifier = notifier
 
-    def _parse_msg(self, msg: ConsumerRecord) -> tuple[str, str, str]:
-        repo_id = _read_repo_id(msg.value)
+    def _parse_msg(self, msg: ConsumerRecord) -> DeadLetter:
         error_type, error_message = _read_error_headers(msg.headers)
-        return repo_id, error_type, error_message
+        return DeadLetter(
+            topic=msg.topic,
+            partition=msg.partition,
+            offset=msg.offset,
+            key=_decode(msg.key) or "none",
+            error_type=error_type,
+            error_message=error_message,
+        )
 
     async def _handle_parse_error(self, msg: ConsumerRecord, error: Exception) -> None:
-        logger.error("Could not interpret repo.registered.dlq message at offset=%s", msg.offset, exc_info=error)
+        logger.error("Could not interpret DLQ message at offset=%s", msg.offset, exc_info=error)
 
     async def _handle_parsed_message(
-        self, parsed: tuple[str, str, str], msg: ConsumerRecord, consumer: AIOKafkaConsumer
+        self, parsed: DeadLetter, msg: ConsumerRecord, consumer: AIOKafkaConsumer
     ) -> None:
-        repo_id, error_type, error_message = parsed
         try:
-            self._notifier.notify(
-                subject=f"repo.registered.dlq: repo_id={repo_id} ({error_type})",
-                body=f"repo_id: {repo_id}\nerror_type: {error_type}\nerror_message: {error_message}",
+            await asyncio.to_thread(
+                self._notifier.notify, f"{parsed.topic}: {parsed.error_type}", _build_notification_body(parsed)
             )
         except Exception as error:
-            logger.error("Failed to send DLQ notification for offset=%s", msg.offset, exc_info=error)
+            logger.error("Failed to send DLQ notification for topic=%s offset=%s", parsed.topic, parsed.offset,
+                         exc_info=error)
 
 
-def _read_repo_id(payload: bytes) -> str:
-    try:
-        return str(RepoRegisteredMessage.model_validate_json(payload).repo_id)
-    except ValidationError:
-        return "unknown"
+def _build_notification_body(dead_letter: DeadLetter) -> str:
+    return (
+        f"topic: {dead_letter.topic}\n"
+        f"partition: {dead_letter.partition}\n"
+        f"offset: {dead_letter.offset}\n"
+        f"key: {dead_letter.key}\n"
+        f"error_type: {dead_letter.error_type}\n"
+        f"error_message: {dead_letter.error_message}"
+    )
 
 
 def _read_error_headers(headers: Sequence[tuple[str, bytes]]) -> tuple[str, str]:
     header_values = dict(headers)
-    error_type = header_values.get("error_type", b"UnknownError").decode()
-    error_message = header_values.get("error_message", b"").decode()
+    error_type = _decode(header_values.get("error_type")) or "UnknownError"
+    error_message = _decode(header_values.get("error_message"))
     return error_type, error_message
+
+
+def _decode(raw: bytes | None) -> str:
+    return raw.decode(errors="replace") if raw else ""

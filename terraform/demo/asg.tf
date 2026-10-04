@@ -12,8 +12,7 @@ resource "aws_autoscaling_group" "k3s" {
 
   mixed_instances_policy {
     instances_distribution {
-      on_demand_percentage_above_base_capacity = 0
-      spot_allocation_strategy                 = "price-capacity-optimized"
+      on_demand_percentage_above_base_capacity = 100
     }
 
     launch_template {

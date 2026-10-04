@@ -23,7 +23,7 @@ variable "name" {
 }
 
 variable "instance_types" {
-  description = "Spot instance types the ASG may choose from. All must have the same vCPU and memory."
+  description = "On-demand instance types the ASG may choose from. All must have the same vCPU and memory."
   type        = list(string)
   default     = ["m5.2xlarge", "m5a.2xlarge", "m6i.2xlarge", "m6a.2xlarge", "m7i.2xlarge"]
 }
@@ -56,4 +56,10 @@ variable "bedrock_model_ids" {
   description = "Foundation model IDs the instance may invoke."
   type        = list(string)
   default     = ["deepseek.v3-v1:0", "amazon.titan-embed-text-v2:0"]
+}
+
+variable "dlq_sns_topic_arn" {
+  description = "SNS topic the api publishes a notification to whenever a message lands on a dead-letter queue."
+  type        = string
+  default     = "arn:aws:sns:us-east-1:413001138120:portfolioTopic"
 }

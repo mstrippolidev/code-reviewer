@@ -31,6 +31,7 @@ class ApiSettings(BaseSettings):
     frontend_base_url: str = "http://localhost:5173"
 
     kafka_bootstrap_servers: str
+    dlq_sns_topic_arn: str | None = None
     max_concurrent_file_indexing: int = 4
     max_concurrent_file_dispatch: int = 8
 

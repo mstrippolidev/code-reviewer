@@ -25,6 +25,11 @@ data "aws_iam_policy_document" "instance_permissions" {
     actions   = ["s3:GetObject"]
     resources = ["arn:aws:s3:::${local.state_bucket_name}/runtime/*"]
   }
+
+  statement {
+    actions   = ["sns:Publish"]
+    resources = [var.dlq_sns_topic_arn]
+  }
 }
 
 resource "aws_iam_role" "instance" {

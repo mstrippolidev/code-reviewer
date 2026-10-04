@@ -17,6 +17,7 @@ from api.indexing.consumers.repo_file_index_consumer import RepoFileIndexConsume
 from api.indexing.consumers.repo_file_retry_consumer import RepoFileRetryConsumerDependencies
 from api.indexing.consumers.repo_index_consumer import RepoIndexConsumerDependencies
 from api.indexing.consumers.repo_progress_consumer import RepoProgressConsumerDependencies
+from api.indexing.consumers.sns_dlq_notifier import SnsDlqNotifier
 from api.indexing.producer import RepoIndexProducer
 from api.indexing.repo_completion_finalizer import RepoCompletionFinalizer
 from api.indexing.repo_indexer import RepoIndexerDependencies
@@ -90,11 +91,17 @@ def _build_consumer_specs(app: FastAPI, settings: ApiSettings) -> list[ConsumerS
     )
     return [
         ("repo_indexing", _build_repo_index_consumer_dependencies(app, settings)),
-        ("repo_indexing_dlq", PrintDlqNotifier()),
+        ("dlq", _build_dlq_notifier(settings)),
         ("repo_file_indexing", _build_repo_file_index_consumer_dependencies(app, settings)),
         ("repo_file_retry", retry_dependencies),
         ("repo_progress", RepoProgressConsumerDependencies(broadcaster=app.state.repo_progress_broadcaster)),
     ]
+
+
+def _build_dlq_notifier(settings: ApiSettings) -> DlqNotifier:
+    if settings.dlq_sns_topic_arn is None:
+        return PrintDlqNotifier()
+    return SnsDlqNotifier.for_topic(settings.dlq_sns_topic_arn)
 
 
 def _build_indexer_dependencies(app: FastAPI, settings: ApiSettings) -> RepoIndexerDependencies:

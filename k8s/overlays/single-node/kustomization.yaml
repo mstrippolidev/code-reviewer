@@ -99,6 +99,9 @@ patches:
         value: "https://codereview.mstrippolidev.com/api/oauth/github/callback"
       - op: remove
         path: /data/GITHUB_OAUTH_CLIENT_ID
+      - op: add
+        path: /data/DLQ_SNS_TOPIC_ARN
+        value: "arn:aws:sns:us-east-1:413001138120:portfolioTopic"
 
   - target:
       kind: Service

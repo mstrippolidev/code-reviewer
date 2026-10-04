@@ -54,12 +54,13 @@ torch = { source = "pytorch-cpu" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m 'not db and not llm and not kafka and not bedrock'"
+addopts = "-m 'not db and not llm and not kafka and not bedrock and not sns'"
 markers = [
     "llm: exercises a real local Ollama model, slower and requires Ollama running",
     "db: exercises a real local Postgres instance, requires the code_reviewer database and schema to already exist",
     "kafka: exercises the real local Kafka cluster (kafka-dev namespace), requires the broker running",
     "bedrock: exercises the real AWS Bedrock API, requires AWS credentials and model access",
+    "sns: publishes a real notification to the portfolio SNS topic, which emails its subscriber; requires AWS credentials",
 ]
 
 [dependency-groups]
