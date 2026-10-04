@@ -7,6 +7,24 @@ on:
         description: Bake a new AMI after pushing the images
         type: boolean
         default: true
+  push:
+    branches: [main]
+    paths:
+      - "api/**"
+      - "code_reviewer/**"
+      - "frontend/**"
+      - "k8s/**"
+      - "packer/**"
+      - "pyproject.toml"
+      - "poetry.lock"
+      - "alembic.ini"
+      - "scripts/prune_old_amis.sh"
+      - ".github/workflows/build-images.yml"
+
+# Queue rather than cancel: a cancelled bake leaves its temporary Packer instance behind.
+concurrency:
+  group: build-images
+  cancel-in-progress: false
 
 permissions:
   id-token: write
@@ -81,7 +99,7 @@ jobs:
 
   ami:
     needs: images
-    if: ${{ inputs.build_ami }}
+    if: ${{ github.event_name == 'push' || inputs.build_ami }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -96,3 +114,17 @@ jobs:
 
       - name: Bake the k3s AMI
         run: ./packer/build.sh
+
+  prune-amis:
+    needs: ami
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Delete every demo AMI except the one just baked
+        run: ./scripts/prune_old_amis.sh
