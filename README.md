@@ -17,6 +17,16 @@ The result is one weighted, explainable score per file.
 [![Terraform](https://img.shields.io/badge/Terraform-IaC-7B42BC?logo=terraform&logoColor=white)](#tech-stack)
 [![Tests](https://img.shields.io/badge/tests-770%20passing-brightgreen)](#testing)
 
+**[Live demo from my portfolio →](https://mstrippolidev.com/)**
+<br>
+<sub>The demo runs on demand to keep cloud costs near zero, so it can take a few minutes to start.</sub>
+
+<br>
+
+<img src="docs/images/review-dashboard.png" alt="Code Reviewer dashboard: overall score, files being reviewed, and the 14 agents reporting live" width="900">
+<br>
+<sub>The review dashboard while a review is running: per-file status, live score, and each of the 14 agents reporting as it finishes. (Rendered from the app's built-in sample data.)</sub>
+
 </div>
 
 ---
