@@ -26,15 +26,17 @@ COPY pyproject.toml poetry.lock ./
 # install only production packages without the source code yet
 RUN poetry install --no-root --only main --no-ansi
 
-# Hub validators are not pip dependencies: intake_screen.py imports ProfanityFree
-# from guardrails.hub, which only exists once the hub CLI has installed it into the
-# venv. The token lives in this stage's ~/.guardrailsrc and never reaches runtime.
+# intake_screen.py imports ProfanityFree from guardrails.hub, which needs the
+# validator package plus ./.guardrails/hub_registry.json (copied in at runtime).
+# Installed with pip from the Hub's private index rather than `guardrails hub
+# install`: the CLI fetches manifests from hub.api.guardrailsai.com, which no
+# longer resolves, while the package index itself still serves with a token.
 RUN --mount=type=secret,id=guardrails_api_key \
-    poetry run guardrails configure \
-        --token "$(cat /run/secrets/guardrails_api_key)" \
-        --disable-metrics --disable-remote-inferencing \
-    && poetry run guardrails hub install hub://guardrails/profanity_free --quiet \
-    && poetry run python -c "from guardrails.hub import ProfanityFree"
+    /app/.venv/bin/python -m pip install --no-cache-dir \
+        --index-url "https://__token__:$(cat /run/secrets/guardrails_api_key)@pypi.guardrailsai.com/simple" \
+        --extra-index-url https://pypi.org/simple \
+        guardrails-grhub-profanity-free \
+    && /app/.venv/bin/python -c "import guardrails_grhub_profanity_free"
 
 # rag/rerank.py's HistoryMatchReranker loads this cross-encoder eagerly at
 # app startup (build_agent_roster, called from api/main.py's lifespan)
@@ -61,5 +63,10 @@ WORKDIR /app
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --from=builder --chown=app:app /opt/hf-cache /app/.cache/huggingface
 COPY --chown=app:app code_reviewer ./code_reviewer
+COPY --chown=app:app code_reviewer/guardrails/hub_registry.json ./.guardrails/hub_registry.json
+# Without an rc file guardrails defaults to remote inferencing and metrics, both
+# of which call Guardrails' servers; this keeps validation local and tokenless.
+RUN printf 'enable_metrics=false\nuse_remote_inferencing=false\n' > /home/app/.guardrailsrc \
+    && chown app:app /home/app/.guardrailsrc
 
 USER app
