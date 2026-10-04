@@ -20,6 +20,8 @@ spec:
       owner: code_reviewer_app
       postInitApplicationSQL:
         - "CREATE EXTENSION IF NOT EXISTS vector;"
+        # runs as superuser; without AUTHORIZATION the app user could not create tables in it
+        - "CREATE SCHEMA IF NOT EXISTS code_reviewer AUTHORIZATION code_reviewer_app;"
 
   # set the resources for the pods
   resources:
