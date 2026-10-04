@@ -6,6 +6,8 @@ cd "$(dirname "$0")"
 REGION="${AWS_REGION:-us-east-2}"
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 
+tar -czf k8s.tar.gz -C ../k8s .
+
 packer init .
 packer build \
   -var "region=${REGION}" \
