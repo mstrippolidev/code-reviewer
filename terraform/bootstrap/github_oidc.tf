@@ -207,6 +207,7 @@ data "aws_iam_policy_document" "github_demo" {
   statement {
     actions = [
       "acm:DescribeCertificate",
+      "acm:GetCertificate",
       "acm:ListCertificates",
       "acm:ListTagsForCertificate",
     ]
