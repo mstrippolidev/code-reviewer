@@ -1,0 +1,41 @@
+name: launch-demo
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    types: [launch-demo]
+
+concurrency:
+  group: demo
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-2
+  AWS_ROLE_ARN: arn:aws:iam::413001138120:role/code-reviewer-github-demo
+
+jobs:
+  launch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: terraform/demo
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.5
+
+      - run: |
+          terraform init -input=false
+          terraform apply -auto-approve -input=false
