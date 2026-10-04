@@ -1,7 +1,7 @@
-variable "github_repository" {
-  description = "owner/name of the repository whose workflows may assume the roles below."
+variable "github_repository_subject" {
+  description = "Repository part of the OIDC sub claim, in GitHub's immutable form: owner@owner_id/repo@repo_id."
   type        = string
-  default     = "mstrippolidev/code-reviewer"
+  default     = "mstrippolidev@71355932/code-reviewer@1315547323"
 }
 
 variable "demo_name" {
@@ -38,7 +38,7 @@ data "aws_iam_policy_document" "github_assume" {
     condition {
       test     = "StringEquals"
       variable = "${local.oidc_host}:sub"
-      values   = ["repo:${var.github_repository}:ref:refs/heads/main"]
+      values   = ["repo:${var.github_repository_subject}:ref:refs/heads/main"]
     }
   }
 }

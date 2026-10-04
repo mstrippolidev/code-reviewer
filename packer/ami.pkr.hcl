@@ -90,7 +90,7 @@ build {
 
   provisioner "shell" {
     script          = "scripts/bake.sh"
-    execute_command = "sudo -E bash '{{ .Path }}'"
+    execute_command = "{{ .Vars }} sudo -E bash '{{ .Path }}'"
     environment_vars = [
       "K3S_CHANNEL=${var.k3s_channel}",
       "ECR_REGISTRY=${var.ecr_registry}",
