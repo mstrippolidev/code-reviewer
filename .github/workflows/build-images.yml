@@ -1,0 +1,96 @@
+name: build-images
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_ami:
+        description: Bake a new AMI after pushing the images
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-2
+  AWS_ROLE_ARN: arn:aws:iam::413001138120:role/code-reviewer-github-build
+  ECR_REGISTRY: 413001138120.dkr.ecr.us-east-2.amazonaws.com
+  APP_URL: https://codereview.mstrippolidev.com
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push code-reviewer-base
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: code_reviewer/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.ECR_REGISTRY }}/code-reviewer-base:latest
+          cache-from: type=gha,scope=base
+          cache-to: type=gha,mode=max,scope=base
+
+      - name: Build and push code-reviewer-api
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: api/Dockerfile
+          platforms: linux/amd64
+          push: true
+          build-args: BASE_IMAGE=${{ env.ECR_REGISTRY }}/code-reviewer-base:latest
+          tags: ${{ env.ECR_REGISTRY }}/code-reviewer-api:latest
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - name: Build and push code-reviewer-frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          platforms: linux/amd64
+          push: true
+          build-args: VITE_API_BASE_URL=${{ env.APP_URL }}
+          tags: ${{ env.ECR_REGISTRY }}/code-reviewer-frontend:latest
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+      - name: Build and push code-reviewer-postgres
+        uses: docker/build-push-action@v6
+        with:
+          context: k8s/images/postgres
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.ECR_REGISTRY }}/code-reviewer-postgres:16-pgvector
+          cache-from: type=gha,scope=postgres
+          cache-to: type=gha,mode=max,scope=postgres
+
+  ami:
+    needs: images
+    if: ${{ inputs.build_ami }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-packer@v3
+
+      - name: Bake the k3s AMI
+        run: ./packer/build.sh
