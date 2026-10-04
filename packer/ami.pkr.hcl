@@ -74,8 +74,8 @@ build {
   sources = ["source.amazon-ebs.k3s"]
 
   provisioner "file" {
-    source      = "../k8s/"
-    destination = "/tmp/k8s"
+    source      = "k8s.tar.gz"
+    destination = "/tmp/k8s.tar.gz"
   }
 
   provisioner "file" {

@@ -5,8 +5,10 @@ APP_DIR=/opt/code-reviewer
 OVERLAY="$APP_DIR/k8s/overlays/single-node"
 K3S_DATA=/var/lib/rancher/k3s
 
-mkdir -p "$APP_DIR/operators" /etc/code-reviewer
-mv /tmp/k8s "$APP_DIR/k8s"
+mkdir -p "$APP_DIR/k8s" "$APP_DIR/operators" /etc/code-reviewer
+tar -xzf /tmp/k8s.tar.gz -C "$APP_DIR/k8s"
+echo "extracted k8s tree:"
+find "$APP_DIR/k8s" -maxdepth 2 -type d
 install -m 0755 /tmp/boot.sh /usr/local/bin/code-reviewer-boot
 install -m 0644 /tmp/code-reviewer-boot.service /etc/systemd/system/code-reviewer-boot.service
 echo "ECR_REGISTRY=${ECR_REGISTRY}" > /etc/code-reviewer/boot.env
