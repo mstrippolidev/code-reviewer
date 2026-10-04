@@ -68,5 +68,8 @@ COPY --chown=app:app code_reviewer/guardrails/hub_registry.json ./.guardrails/hu
 # of which call Guardrails' servers; this keeps validation local and tokenless.
 RUN printf 'enable_metrics=false\nuse_remote_inferencing=false\n' > /home/app/.guardrailsrc \
     && chown app:app /home/app/.guardrailsrc
+# api/logging_config.py creates ./logs relative to the working directory, and
+# /app itself is root-owned, so the non-root user cannot create it at startup.
+RUN mkdir /app/logs && chown app:app /app/logs
 
 USER app
