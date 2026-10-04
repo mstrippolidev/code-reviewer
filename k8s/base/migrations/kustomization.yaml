@@ -1,3 +1,5 @@
+namespace: code-reviewer
+
 resources:
   - configmap.yaml
   - secret.yaml

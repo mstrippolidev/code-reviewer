@@ -1,0 +1,14 @@
+[Unit]
+Description=Bring up the code-reviewer stack on k3s
+Requires=k3s.service
+After=k3s.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/code-reviewer-boot
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

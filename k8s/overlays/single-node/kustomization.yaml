@@ -1,0 +1,118 @@
+resources:
+  - ../../base/namespace
+  - ../../base/postgres
+  - ../../base/migrations
+  - ../../base/kafka
+  - ../../base/api
+  - ../../base/frontend
+
+patches:
+  - target:
+      kind: Cluster
+      name: code-reviewer-postgres
+    patch: |-
+      - op: replace
+        path: /spec/instances
+        value: 1
+      - op: replace
+        path: /spec/storage/storageClass
+        value: local-path
+
+  - target:
+      kind: KafkaNodePool
+      name: controllers
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+      - op: replace
+        path: /spec/storage/volumes/0/class
+        value: local-path
+
+  - target:
+      kind: KafkaNodePool
+      name: brokers
+    patch: |-
+      - op: replace
+        path: /spec/storage/volumes/0/class
+        value: local-path
+
+  - patch: |-
+      $patch: delete
+      apiVersion: keda.sh/v1alpha1
+      kind: ScaledObject
+      metadata:
+        name: api-file-index-scaler
+        namespace: code-reviewer
+
+  - target:
+      kind: Deployment
+      name: api
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 3
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
+
+  - target:
+      kind: Deployment
+      name: frontend
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
+
+  - target:
+      kind: Job
+      name: api-db-migrate
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
+
+  - target:
+      kind: ServiceAccount
+      name: api
+    patch: |-
+      - op: remove
+        path: /metadata/annotations
+
+  - patch: |-
+      $patch: delete
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: api-secrets
+        namespace: code-reviewer
+
+  - target:
+      kind: ConfigMap
+      name: api-config
+    patch: |-
+      - op: replace
+        path: /data/FRONTEND_BASE_URL
+        value: "https://codereview.mstrippolidev.com"
+      - op: replace
+        path: /data/GITHUB_OAUTH_REDIRECT_URI
+        value: "https://codereview.mstrippolidev.com/api/oauth/github/callback"
+      - op: remove
+        path: /data/GITHUB_OAUTH_CLIENT_ID
+
+  - target:
+      kind: Service
+      name: frontend
+    patch: |-
+      - op: remove
+        path: /metadata/annotations
+      - op: replace
+        path: /spec/type
+        value: NodePort
+      - op: replace
+        path: /spec/ports
+        value:
+          - name: http
+            port: 80
+            targetPort: 8080
+            nodePort: 30080
