@@ -29,18 +29,25 @@ for operator in strimzi cnpg; do
   k3s kubectl kustomize "$APP_DIR/k8s/operators/$operator" > "$APP_DIR/operators/$operator.yaml"
 done
 
-KAFKA_IMAGE=$(grep -ohE 'quay.io/strimzi/kafka:[^"[:space:]]*kafka-3\.9\.0' "$APP_DIR/operators/strimzi.yaml" | head -1 || true)
+KAFKA_VERSION=$(awk '/^    version:/ {print $2; exit}' "$APP_DIR/k8s/base/kafka/kafka.yaml")
+KAFKA_IMAGE=$(grep -ohE "quay.io/strimzi/kafka:[^\"[:space:]]*kafka-${KAFKA_VERSION}" "$APP_DIR/operators/strimzi.yaml" | head -1 || true)
 if [ -z "$KAFKA_IMAGE" ]; then
-  echo "strimzi bundle has no Kafka 3.9.0 image; align the Kafka CR version with the bundle" >&2
+  echo "strimzi bundle has no Kafka ${KAFKA_VERSION} image; align the Kafka CR version with the bundle" >&2
   exit 1
 fi
+
+# CRD schemas also contain "image:" keys with empty or {} values; keep only real references.
+IMAGE_REF='^[A-Za-z0-9._/-]+:[A-Za-z0-9._-]+$'
 
 {
   grep -hE '^\s+image:' "$APP_DIR"/operators/*.yaml | awk '{print $2}'
   echo "$KAFKA_IMAGE"
   k3s kubectl kustomize "$OVERLAY" | sed "s#<ECR_REGISTRY>#${ECR_REGISTRY}#g" \
     | grep -hE '^\s+(- )?(image|imageName):' | awk '{print $NF}'
-} | tr -d '"' | sort -u > "$APP_DIR/images.txt"
+} | tr -d '"' | grep -E "$IMAGE_REF" | sort -u > "$APP_DIR/images.txt"
+
+echo "images to pre-pull:"
+cat "$APP_DIR/images.txt"
 
 while read -r ref; do
   if [[ "$ref" == "$ECR_REGISTRY"/* ]]; then

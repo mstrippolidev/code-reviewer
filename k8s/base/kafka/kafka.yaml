@@ -4,8 +4,7 @@ metadata:
   name: code-reviewer-kafka
 spec:
   kafka:
-    version: 3.9.0
-    metadataVersion: 3.9
+    version: 4.2.1
     listeners:
       - name: plain
         port: 9092
