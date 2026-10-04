@@ -40,6 +40,8 @@ jobs:
           file: code_reviewer/Dockerfile
           platforms: linux/amd64
           push: true
+          secrets: |
+            guardrails_api_key=${{ secrets.GUARDRAILS_API_KEY }}
           tags: ${{ env.ECR_REGISTRY }}/code-reviewer-base:latest
           cache-from: type=gha,scope=base
           cache-to: type=gha,mode=max,scope=base
