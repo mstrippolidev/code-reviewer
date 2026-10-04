@@ -26,6 +26,8 @@ from api.integrations.github import GitHubOAuthClient, GitHubOAuthConfig
 from api.logging_config import configure_logging
 from api.review.review_consumer import ReviewRequestConsumer, ReviewRequestConsumerDependencies
 from api.review.review_progress_broadcaster import ReviewProgressBroadcaster
+from api.review.review_progress_consumer import ReviewProgressConsumer
+from api.review.review_progress_publisher import KafkaReviewProgressPublisher
 from api.routers.agents import router as agents_router
 from api.routers.auth import router as auth_router
 from api.routers.guest import router as guest_router
@@ -72,6 +74,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         for key, dependencies in _build_consumer_specs(app, settings)
     ]
     app.state.consumer_tasks.append(asyncio.create_task(_build_review_consumer(app).consume()))
+    app.state.consumer_tasks.append(
+        asyncio.create_task(ReviewProgressConsumer(app.state.review_progress_broadcaster).consume())
+    )
 
     yield
 
@@ -143,7 +148,7 @@ def _build_review_consumer(app: FastAPI) -> ReviewRequestConsumer:
     dependencies = ReviewRequestConsumerDependencies(
         database_engine=app.state.database_engine,
         agents_container=app.state.agents_container,
-        broadcaster=app.state.review_progress_broadcaster,
+        progress_publisher=KafkaReviewProgressPublisher(app.state.kafka_producer),
         dlq_producer=app.state.kafka_producer,
     )
     return ReviewRequestConsumer(dependencies)

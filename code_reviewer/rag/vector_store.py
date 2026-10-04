@@ -26,6 +26,11 @@ def build_connection_url(drivername: str) -> URL:
     )
 
 
+def build_connection_string(drivername: str) -> str:
+    """The URL with its real password, for libraries that call str() on a URL, which masks it as '***'."""
+    return build_connection_url(drivername).render_as_string(hide_password=False)
+
+
 def create_vector_store_instance(
     embedding: EmbeddingInterface | None = None,
     schema_name: str = "code_reviewer",
@@ -49,8 +54,8 @@ def create_vector_store_instance(
     """
     embedding = embedding or OllamaCodeEmbeddingProvider()
     return PGVectorStore.from_params(
-        connection_string=build_connection_url("postgresql+psycopg2"),
-        async_connection_string=build_connection_url("postgresql+asyncpg"),
+        connection_string=build_connection_string("postgresql+psycopg2"),
+        async_connection_string=build_connection_string("postgresql+asyncpg"),
         table_name=table_name,
         schema_name=schema_name,
         embed_dim=embedding.embed_dim,

@@ -13,3 +13,4 @@ resources:
   - topics/repo-file-retry.yaml
   - topics/review-requested.yaml
   - topics/review-requested-dlq.yaml
+  - topics/review-progress.yaml

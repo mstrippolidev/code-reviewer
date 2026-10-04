@@ -20,7 +20,7 @@ from api.db.models.registered_repo import RegisteredRepo
 from api.db.models.review_job import ReviewJob, ReviewJobStatus
 from api.indexing.consumers.interface import ConsumerInterface
 from api.indexing.producer import RepoIndexProducer
-from api.review.review_progress_broadcaster import ReviewProgressBroadcaster
+from api.review.review_progress_publisher import ReviewProgressPublisher
 from api.review.topics import REVIEW_REQUESTED, REVIEW_REQUESTED_DLQ
 from api.schemas.reviews import (
     ReviewAgentProgressMessage,
@@ -71,7 +71,7 @@ class ReviewRequestConsumerDependencies:
 
     database_engine: DatabaseEngine
     agents_container: AgentsContainer
-    broadcaster: ReviewProgressBroadcaster
+    progress_publisher: ReviewProgressPublisher
     dlq_producer: RepoIndexProducer
 
 
@@ -163,7 +163,7 @@ class ReviewRequestConsumer(ConsumerInterface[ReviewRequestedMessage]):
             if entries:
                 await self._persist_agent_entries(job, file_path, entries, session)
             event = ReviewFileProgressMessage(review_id=review_msg.review_id, file_path=file_path, failed=failed)
-            await self._dependencies.broadcaster.publish(review_msg.review_id, event)
+            await self._dependencies.progress_publisher.publish(review_msg.review_id, event)
 
         return on_file_reviewed
 
@@ -182,7 +182,7 @@ class ReviewRequestConsumer(ConsumerInterface[ReviewRequestedMessage]):
             event = ReviewAgentProgressMessage(
                 review_id=review_msg.review_id, file_path=entry.file_path, code_key=code_key, entry=entry
             )
-            await self._dependencies.broadcaster.publish(review_msg.review_id, event)
+            await self._dependencies.progress_publisher.publish(review_msg.review_id, event)
 
         return on_agent_reviewed
 
@@ -244,7 +244,7 @@ class ReviewRequestConsumer(ConsumerInterface[ReviewRequestedMessage]):
             result=result,
             agent_entries=job.agent_entries,
         )
-        await self._dependencies.broadcaster.publish(review_msg.review_id, event)
+        await self._dependencies.progress_publisher.publish(review_msg.review_id, event)
 
     async def _mark_failed_best_effort(self, review_msg: ReviewRequestedMessage) -> None:
         try:

@@ -1,4 +1,5 @@
 import uuid
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -82,6 +83,32 @@ class ReviewStatusMessage(BaseModel):
     file_paths: list[str]
     result: AggregatorOutput | None = None
     agent_entries: dict[str, dict[str, AgentReviewEntry]] | None = None
+
+
+class ReviewFileProgressEnvelope(BaseModel):
+    """review.progress wire shape for a file event; `kind` lets one topic carry all three event types in order."""
+
+    kind: Literal["file"] = "file"
+    event: ReviewFileProgressMessage
+
+
+class ReviewAgentProgressEnvelope(BaseModel):
+    """review.progress wire shape for an agent event."""
+
+    kind: Literal["agent"] = "agent"
+    event: ReviewAgentProgressMessage
+
+
+class ReviewStatusEnvelope(BaseModel):
+    """review.progress wire shape for a job status event."""
+
+    kind: Literal["status"] = "status"
+    event: ReviewStatusMessage
+
+
+ReviewProgressEnvelope = Annotated[
+    ReviewFileProgressEnvelope | ReviewAgentProgressEnvelope | ReviewStatusEnvelope, Field(discriminator="kind")
+]
 
 
 class ReviewRequestedMessage(BaseModel):
