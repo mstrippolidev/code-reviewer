@@ -7,7 +7,7 @@ resource "aws_autoscaling_group" "k3s" {
   target_group_arns         = [aws_lb_target_group.app.arn]
   health_check_type         = "ELB"
   health_check_grace_period = var.boot_grace_seconds
-  capacity_rebalance        = true
+  capacity_rebalance        = false
   wait_for_capacity_timeout = "0"
 
   mixed_instances_policy {
