@@ -1,3 +1,4 @@
+namespace: code-reviewer
+
 resources:
   - cluster.yaml
-  

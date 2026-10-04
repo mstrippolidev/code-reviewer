@@ -33,3 +33,10 @@ spec:
   affinity:
     enablePodAntiAffinity: true
     topologyKey: topology.kubernetes.io/zone
+    nodeSelector:
+      workload: stateful
+    tolerations:
+      - key: workload
+        operator: Equal
+        value: stateful
+        effect: NoSchedule
