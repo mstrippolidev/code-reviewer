@@ -26,6 +26,16 @@ COPY pyproject.toml poetry.lock ./
 # install only production packages without the source code yet
 RUN poetry install --no-root --only main --no-ansi
 
+# Hub validators are not pip dependencies: intake_screen.py imports ProfanityFree
+# from guardrails.hub, which only exists once the hub CLI has installed it into the
+# venv. The token lives in this stage's ~/.guardrailsrc and never reaches runtime.
+RUN --mount=type=secret,id=guardrails_api_key \
+    poetry run guardrails configure \
+        --token "$(cat /run/secrets/guardrails_api_key)" \
+        --disable-metrics --disable-remote-inferencing \
+    && poetry run guardrails hub install hub://guardrails/profanity_free --quiet \
+    && poetry run python -c "from guardrails.hub import ProfanityFree"
+
 # rag/rerank.py's HistoryMatchReranker loads this cross-encoder eagerly at
 # app startup (build_agent_roster, called from api/main.py's lifespan)
 # regardless of LLM/embedding provider. Pre-downloading it here means a

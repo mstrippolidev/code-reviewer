@@ -29,6 +29,14 @@ for operator in strimzi cnpg; do
   k3s kubectl kustomize "$APP_DIR/k8s/operators/$operator" > "$APP_DIR/operators/$operator.yaml"
 done
 
+# kustomize's namespace transform leaves the bundle's RBAC subjects pointing at "myproject",
+# which strips the operator of every permission in "kafka" (no leases, so no reconcile).
+sed -i 's/namespace: myproject$/namespace: kafka/' "$APP_DIR/operators/strimzi.yaml"
+if grep -q 'namespace: myproject' "$APP_DIR/operators/strimzi.yaml"; then
+  echo "strimzi bundle still references namespace myproject" >&2
+  exit 1
+fi
+
 KAFKA_VERSION=$(awk '/^    version:/ {print $2; exit}' "$APP_DIR/k8s/base/kafka/kafka.yaml")
 KAFKA_IMAGE=$(grep -ohE "quay.io/strimzi/kafka:[^\"[:space:]]*kafka-${KAFKA_VERSION}" "$APP_DIR/operators/strimzi.yaml" | head -1 || true)
 if [ -z "$KAFKA_IMAGE" ]; then
