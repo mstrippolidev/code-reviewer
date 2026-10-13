@@ -131,6 +131,21 @@ uv run uvicorn api.main:app --reload
 cd frontend && npm install && npm run dev
 ```
 
+**Choosing a model backend**
+
+Set `LLM_PROVIDER` and `EMBEDDING_PROVIDER` in `.env`, then fill in the variables for the provider you pick:
+
+| Provider | `LLM_PROVIDER` | Variables to set |
+|---|---|---|
+| Ollama (local, free, private) | `ollama` | `OLLAMA_BASE_URL`, `OLLAMA_LLM_MODEL`, `OLLAMA_EMBED_MODEL`, `OLLAMA_CODE_EMBED_MODEL` |
+| OpenRouter (hosted) | `openrouter` | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OPENROUTER_FAST_MODEL`, `OPENROUTER_JUDGE_MODELS` |
+| AWS Bedrock | `bedrock` | `BEDROCK_REGION`, `BEDROCK_LLM_MODEL`, plus AWS credentials in the environment |
+
+OpenRouter has no embedding models, so with `LLM_PROVIDER=openrouter` keep `EMBEDDING_PROVIDER` on
+`ollama` or `bedrock`. With Ollama, pull the models first (`ollama pull deepseek-r1:14b`,
+`ollama pull nomic-embed-text`). Pick one `EMBEDDING_PROVIDER` and keep it: vectors from different embedding models can't be compared,
+so switching it later means re-indexing every repo.
+
 **Notes**
 - Create the Kafka topics listed in `k8s/base/kafka/topics/` on your local broker.
 - The `code_reviewer` schema must exist in your Postgres database.
