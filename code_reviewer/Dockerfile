@@ -6,25 +6,24 @@ FROM python:${PYTHON_VERSION} AS builder
 # speed up the installed process and reduce the weight of the packages
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    POETRY_VERSION=2.4.1 \
-    POETRY_HOME=/opt/poetry \
-    POETRY_VIRTUALENVS_IN_PROJECT=true \
-    POETRY_NO_INTERACTION=1
+    UV_LINK_MODE=copy \
+    UV_NO_CACHE=1 \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_PYTHON_PREFERENCE=only-system
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
-    curl \
     && rm -rf /var/lib/apt/lists/*
 # pinned so the resolver behaves identically on every build, not whatever
-# Poetry happens to release the day this image is built
-RUN curl -sSL https://install.python-poetry.org | python3 - --version ${POETRY_VERSION}
-ENV PATH="${POETRY_HOME}/bin:${PATH}"
+# uv happens to release the day this image is built
+COPY --from=ghcr.io/astral-sh/uv:0.12.0 /uv /usr/local/bin/uv
 
 WORKDIR /app
-COPY pyproject.toml poetry.lock ./
-# install only production packages without the source code yet
-RUN poetry install --no-root --only main --no-ansi
+COPY pyproject.toml uv.lock ./
+# the runtime stage copies .venv across, and its symlinks only resolve if the
+# interpreter is this image's own python rather than a uv-downloaded one
+RUN uv sync --locked --no-dev
 
 # intake_screen.py imports ProfanityFree from guardrails.hub, which needs the
 # validator package plus ./.guardrails/hub_registry.json (copied in at runtime).
@@ -43,7 +42,7 @@ RUN --mount=type=secret,id=guardrails_api_key \
 # regardless of LLM/embedding provider. Pre-downloading it here means a
 # pod never needs network access to huggingface.co to become ready.
 ENV HF_HOME=/opt/hf-cache
-RUN poetry run python -c "from sentence_transformers import CrossEncoder; CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')"
+RUN /app/.venv/bin/python -c "from sentence_transformers import CrossEncoder; CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')"
 
 # ---- runtime ---- Start a new fresh environment
 FROM python:${PYTHON_VERSION} AS runtime
