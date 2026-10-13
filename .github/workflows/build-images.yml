@@ -16,7 +16,7 @@ on:
       - "k8s/**"
       - "packer/**"
       - "pyproject.toml"
-      - "poetry.lock"
+      - "uv.lock"
       - "alembic.ini"
       - "scripts/prune_old_amis.sh"
       - ".github/workflows/build-images.yml"
