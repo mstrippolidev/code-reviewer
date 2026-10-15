@@ -15,6 +15,10 @@ from api.db.models.registered_repo import RegisteredRepo
 from api.db.models.user import User
 from api.indexing.producer import RepoIndexProducer
 from api.integrations.github import GitHubOAuthClient, GitHubOAuthConfig
+from api.repos.content_purger import RepoContentPurger
+from api.repos.event_publisher import RepoEventPublisher
+from api.repos.github_verifier import RepoGitHubVerifier
+from api.repos.repository import RegisteredRepoRepository
 from api.review.review_progress_broadcaster import ReviewProgressBroadcaster
 from api.security.jwt_service import InvalidAccessTokenError, InvalidGuestSessionTokenError, JwtTokenService
 from api.security.token_cipher import TokenCipher
@@ -97,6 +101,28 @@ def get_github_oauth_client(request: Request) -> GitHubOAuthClient:
         redirect_uri=settings.github_oauth_redirect_uri,
     )
     return GitHubOAuthClient(config, request.app.state.http_client)
+
+
+def get_repo_repository(session: AsyncSession = Depends(get_db_session)) -> RegisteredRepoRepository:
+    return RegisteredRepoRepository(session)
+
+
+def get_repo_event_publisher(kafka_producer: RepoIndexProducer = Depends(get_kafka_producer)) -> RepoEventPublisher:
+    return RepoEventPublisher(kafka_producer)
+
+
+def get_repo_github_verifier(
+    github_oauth_client: GitHubOAuthClient = Depends(get_github_oauth_client),
+    token_cipher: TokenCipher = Depends(get_token_cipher),
+) -> RepoGitHubVerifier:
+    return RepoGitHubVerifier(github_oauth_client, token_cipher)
+
+
+def get_repo_content_purger(
+    rag_manager: LlamaIndexRagManager = Depends(get_rag_manager),
+    repository: RegisteredRepoRepository = Depends(get_repo_repository),
+) -> RepoContentPurger:
+    return RepoContentPurger(rag_manager, repository)
 
 
 async def get_current_user(

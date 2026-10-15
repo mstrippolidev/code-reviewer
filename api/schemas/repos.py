@@ -3,7 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
 from api.db.models.indexed_file import IndexedFileStatus
-from api.db.models.registered_repo import RepoIndexStatus
+from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 
 
 class RegisterRepoRequest(BaseModel):
@@ -69,3 +69,19 @@ class RepoStatusProgressMessage(BaseModel):
     status: RepoIndexStatus
     status_reason: str | None
     total_files_expected: int | None = None
+
+    @classmethod
+    def from_registered_repo(cls, repo: RegisteredRepo) -> "RepoStatusProgressMessage":
+        return cls(
+            repo_id=repo.repo_id,
+            status=repo.status,
+            status_reason=repo.status_reason,
+            total_files_expected=repo.total_files_expected,
+        )
+
+
+class RegisteredRepoWithFilesRead(BaseModel):
+    """A registered repo together with the state of its indexed files."""
+
+    repo: RegisteredRepoRead
+    files: list[IndexedFileRead] = []
