@@ -8,17 +8,13 @@ from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 from api.db.models.user import User
 from api.dependencies import (
     get_current_user,
-    get_repo_content_purger,
-    get_repo_event_publisher,
-    get_repo_github_verifier,
+    get_repo_lifecycle_service,
     get_repo_repository,
     require_registered_repo,
 )
 from api.indexing.repo_progress_broadcaster import RepoProgressBroadcaster
-from api.repos.content_purger import RepoContentPurger
-from api.repos.event_publisher import RepoEventPublisher
-from api.repos.github_verifier import RepoGitHubVerifier
 from api.repos.repository import RegisteredRepoRepository
+from api.repos.service import RepoLifecycleService
 from api.schemas.repos import (
     IndexedFileContentRead,
     IndexedFileRead,
@@ -64,24 +60,9 @@ async def get_repo_by_name(
 async def register_repo(
     request: RegisterRepoRequest,
     current_user: User = Depends(get_current_user),
-    verifier: RepoGitHubVerifier = Depends(get_repo_github_verifier),
-    repository: RegisteredRepoRepository = Depends(get_repo_repository),
-    publisher: RepoEventPublisher = Depends(get_repo_event_publisher),
+    service: RepoLifecycleService = Depends(get_repo_lifecycle_service),
 ) -> RegisteredRepoRead:
-    await repository.reject_active_registration(request.repo_id)
-    github_repo = await verifier.verify_registration(request, current_user)
-
-    registered = RegisteredRepo(
-        repo_id=github_repo.repo_id,
-        owner_id=github_repo.owner_id,
-        full_name=github_repo.full_name,
-        default_branch=github_repo.default_branch,
-        branch=request.branch or github_repo.default_branch,
-        registered_by_user_id=current_user.id,
-        status=RepoIndexStatus.PENDING,
-    )
-    await repository.add(registered)
-    await publisher.publish_registered(registered)
+    registered = await service.register(request, current_user)
     return RegisteredRepoRead.model_validate(registered)
 
 
@@ -137,64 +118,46 @@ async def stream_indexed_files(
 @router.post("/{repo_id}/pause")
 async def pause_repo_indexing(
     repo: RegisteredRepo = Depends(require_registered_repo),
-    repository: RegisteredRepoRepository = Depends(get_repo_repository),
-    publisher: RepoEventPublisher = Depends(get_repo_event_publisher),
+    service: RepoLifecycleService = Depends(get_repo_lifecycle_service),
     _current_user: User = Depends(get_current_user),
 ) -> RegisteredRepoRead:
     if repo.status != RepoIndexStatus.INDEXING:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Repo is not currently indexing")
-    repo.status = RepoIndexStatus.PAUSED
-    await repository.commit_changes()
-    await publisher.publish_status_progress(repo)
+    await service.pause(repo)
     return RegisteredRepoRead.model_validate(repo)
 
 
 @router.post("/{repo_id}/resume")
 async def resume_repo_indexing(
     repo: RegisteredRepo = Depends(require_registered_repo),
-    repository: RegisteredRepoRepository = Depends(get_repo_repository),
-    publisher: RepoEventPublisher = Depends(get_repo_event_publisher),
+    service: RepoLifecycleService = Depends(get_repo_lifecycle_service),
     _current_user: User = Depends(get_current_user),
 ) -> RegisteredRepoRead:
     if repo.status != RepoIndexStatus.PAUSED:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Repo is not paused")
-    repo.status = RepoIndexStatus.INDEXING
-    await repository.commit_changes()
-    await publisher.publish_status_progress(repo)
-    await publisher.publish_registered(repo)
+    await service.resume(repo)
     return RegisteredRepoRead.model_validate(repo)
 
 
 @router.post("/{repo_id}/files/retry")
 async def retry_failed_files(
     repo: RegisteredRepo = Depends(require_registered_repo),
-    repository: RegisteredRepoRepository = Depends(get_repo_repository),
-    publisher: RepoEventPublisher = Depends(get_repo_event_publisher),
+    service: RepoLifecycleService = Depends(get_repo_lifecycle_service),
     _current_user: User = Depends(get_current_user),
 ) -> RegisteredRepoRead:
     if repo.status not in _TERMINAL_REPO_STATUSES:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Repo indexing has not finished yet")
-    if not await repository.has_failed_files(repo.repo_id):
-        return RegisteredRepoRead.model_validate(repo)
-    await publisher.publish_file_retry(repo)
-    repo.status = RepoIndexStatus.INDEXING
-    await repository.commit_changes()
-    await publisher.publish_status_progress(repo)
+    await service.retry_failed_files(repo)
     return RegisteredRepoRead.model_validate(repo)
 
 
 @router.delete("/{repo_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_registered_repo(
     repo: RegisteredRepo = Depends(require_registered_repo),
-    repository: RegisteredRepoRepository = Depends(get_repo_repository),
-    purger: RepoContentPurger = Depends(get_repo_content_purger),
+    service: RepoLifecycleService = Depends(get_repo_lifecycle_service),
     _current_user: User = Depends(get_current_user),
 ) -> None:
-    # Purge the vector store before the registration row: if the purge fails, the repo
-    # stays registered (still authorized) rather than leaving unowned content behind.
-    await purger.purge(repo.repo_id)
-    await repository.remove(repo)
-    await repository.commit_changes()
+    await service.delete(repo)
 
 
 @router.post("/{repo_id}/branch")
@@ -202,18 +165,7 @@ async def switch_repo_branch(
     request: SwitchBranchRequest,
     repo: RegisteredRepo = Depends(require_registered_repo),
     current_user: User = Depends(get_current_user),
-    verifier: RepoGitHubVerifier = Depends(get_repo_github_verifier),
-    repository: RegisteredRepoRepository = Depends(get_repo_repository),
-    purger: RepoContentPurger = Depends(get_repo_content_purger),
-    publisher: RepoEventPublisher = Depends(get_repo_event_publisher),
+    service: RepoLifecycleService = Depends(get_repo_lifecycle_service),
 ) -> RegisteredRepoRead:
-    await verifier.verify_branch_exists(repo.full_name, request.branch, current_user)
-    await purger.purge(repo.repo_id)
-    repo.branch = request.branch
-    repo.status = RepoIndexStatus.PENDING
-    repo.status_reason = None
-    repo.total_files_expected = None
-    repo.commit_sha = None
-    await repository.commit_changes()
-    await publisher.publish_registered(repo)
+    await service.switch_branch(repo, request.branch, current_user)
     return RegisteredRepoRead.model_validate(repo)
