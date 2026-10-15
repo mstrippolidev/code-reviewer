@@ -18,6 +18,7 @@ from api.dependencies import (
     get_rag_manager,
     get_token_cipher,
 )
+from api.exception_handlers import register_repo_exception_handlers
 from api.indexing.producer import PublishError
 from api.integrations.github import GitHubCommitFetchError, GitHubRepo, GitHubRepoFetchError
 from api.routers.repos import router as repos_router
@@ -212,6 +213,7 @@ def _build_app(
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(repos_router)
+    register_repo_exception_handlers(app)
 
     async def _fake_db_session():
         yield session
