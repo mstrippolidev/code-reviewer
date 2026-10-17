@@ -5,7 +5,7 @@
     explanation themselves.
 """
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -62,6 +62,7 @@ class FileChunk:
     end_line: int
     text: str
     code: str
+    imports: list[str] = field(default_factory=list)
 
 
 class LlamaIndexRagManager:
@@ -271,6 +272,7 @@ class LlamaIndexRagManager:
                 end_line=node.metadata["end_line"],
                 text=node.get_content(),
                 code=node.metadata.get("code", ""),
+                imports=node.metadata.get("imports", []),
             )
             for node in nodes
         ]

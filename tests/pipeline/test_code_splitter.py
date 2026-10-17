@@ -134,6 +134,42 @@ def test_code_chunk_is_immutable(splitter: PythonCodeSplit) -> None:
         chunks[0].name = "renamed"
 
 
+def test_every_chunk_carries_the_files_top_level_imports(splitter: PythonCodeSplit) -> None:
+    source = (
+        "import os\n"
+        "from app.rules import apply_rule\n"
+        "\n"
+        "\n"
+        "def foo():\n"
+        "    return os.getcwd()\n"
+        "\n"
+        "\n"
+        "def bar():\n"
+        "    return apply_rule(1)\n"
+    )
+
+    chunks = splitter.split_code(source)
+
+    expected = ("import os", "from app.rules import apply_rule")
+    assert [chunk.imports for chunk in chunks] == [expected, expected]
+
+
+def test_a_multiline_import_is_kept_as_one_statement(splitter: PythonCodeSplit) -> None:
+    source = "from app.rules import (\n    apply_rule,\n    other_rule,\n)\n\n\ndef foo():\n    return 1\n"
+
+    chunks = splitter.split_code(source)
+
+    assert chunks[0].imports == ("from app.rules import (\n    apply_rule,\n    other_rule,\n)",)
+
+
+def test_imports_inside_functions_are_not_collected(splitter: PythonCodeSplit) -> None:
+    source = "def foo():\n    import os\n    return os.getcwd()\n"
+
+    chunks = splitter.split_code(source)
+
+    assert chunks[0].imports == ()
+
+
 def test_code_chunk_can_be_constructed_directly() -> None:
     chunk = CodeChunk(chunk_type="FunctionDef", name="foo", code="def foo(): ...", start_line=1, end_line=1)
 
