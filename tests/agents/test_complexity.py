@@ -159,3 +159,68 @@ def test_file_path_is_stamped_on_every_entry(complexity_agent: ComplexityAgent) 
     result = complexity_agent.execute_agent(code, file_path="deeply_nested_conditionals.py")
 
     assert all(entry.file_path == "deeply_nested_conditionals.py" for entry in result.review)
+
+
+def test_more_than_seven_same_file_hops_is_flagged_high(complexity_agent: ComplexityAgent) -> None:
+    code = load_fixture("complexity/hops_pass_through_chain.py")
+
+    result = complexity_agent.execute_agent(code, file_path="hops_pass_through_chain.py")
+
+    entry = result.review[0]
+    assert any(incident.priority == Priority.HIGH for incident in entry.incidents)
+
+
+def test_six_same_file_hops_is_flagged_medium(complexity_agent: ComplexityAgent) -> None:
+    code = load_fixture("complexity/hops_priority_medium.py")
+
+    result = complexity_agent.execute_agent(code, file_path="hops_priority_medium.py")
+
+    entry = result.review[0]
+    assert any(incident.priority == Priority.MEDIUM for incident in entry.incidents)
+    assert all(incident.priority != Priority.HIGH for incident in entry.incidents)
+
+
+def test_five_same_file_hops_is_not_flagged(complexity_agent: ComplexityAgent) -> None:
+    """Same-file helpers are cheap to read: 5 chained hops is the limit
+    itself, not a violation."""
+    code = load_fixture("complexity/false_positive_same_file_helpers_within_limit.py")
+
+    result = complexity_agent.execute_agent(code, file_path="false_positive_same_file_helpers_within_limit.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+def test_one_call_much_deeper_than_its_siblings_is_flagged_medium(complexity_agent: ComplexityAgent) -> None:
+    code = load_fixture("complexity/uneven_call_depth.py")
+
+    result = complexity_agent.execute_agent(code, file_path="uneven_call_depth.py")
+
+    entry = result.review[0]
+    assert any(incident.priority == Priority.MEDIUM for incident in entry.incidents)
+    assert all(incident.priority != Priority.HIGH for incident in entry.incidents)
+
+
+def test_calls_of_equal_depth_are_not_flagged(complexity_agent: ComplexityAgent) -> None:
+    """Every call reaches real logic in one step, so no line is the odd
+    one out."""
+    code = load_fixture("complexity/false_positive_even_call_depth.py")
+
+    result = complexity_agent.execute_agent(code, file_path="false_positive_even_call_depth.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+def test_three_layers_that_each_decide_are_not_flagged(complexity_agent: ComplexityAgent) -> None:
+    """Three hops is the limit itself, and every layer validates, authorizes
+    or hides I/O, so none is a pass-through."""
+    code = load_fixture("complexity/false_positive_layers_that_decide.py")
+
+    result = complexity_agent.execute_agent(code, file_path="false_positive_layers_that_decide.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
