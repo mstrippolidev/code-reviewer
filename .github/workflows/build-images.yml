@@ -7,19 +7,6 @@ on:
         description: Bake a new AMI after pushing the images
         type: boolean
         default: true
-  push:
-    branches: [main]
-    paths:
-      - "api/**"
-      - "code_reviewer/**"
-      - "frontend/**"
-      - "k8s/**"
-      - "packer/**"
-      - "pyproject.toml"
-      - "uv.lock"
-      - "alembic.ini"
-      - "scripts/prune_old_amis.sh"
-      - ".github/workflows/build-images.yml"
 
 # Queue rather than cancel: a cancelled bake leaves its temporary Packer instance behind.
 concurrency:
