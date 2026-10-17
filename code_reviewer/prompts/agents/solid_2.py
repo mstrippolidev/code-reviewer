@@ -29,18 +29,34 @@ Flag a piece of code if it:
    placeholder, or a no-op just to satisfy the interface).
 3. Violates DIP — a class constructs its own concrete dependency internally
    (e.g. `self.repo = PostgresRepository()` inside `__init__`) instead of
-   receiving it as a constructor parameter typed against an abstraction —
-   this makes the class impossible to test in isolation or swap the
-   dependency without editing the class itself.
+   receiving it as a constructor parameter — this makes the class
+   impossible to test in isolation or swap the dependency without editing
+   the class itself.
 4. Depends directly on a concrete, hard-to-substitute implementation (a
    specific database driver, HTTP client, or file-system call) in a place
    that should instead depend on an interface/protocol/abstract type.
 
-A DIP violation requires a real, swappable collaborator — a repository,
-database client, HTTP client, clock, or external service. A private
-scalar field, counter, or plain data structure is internal state, not a
-concrete dependency, and must never be reported as a DIP violation even
-though it is mutable and initialized inside the class.
+Items 3 and 4 only apply where an abstraction earns its place, because
+every interface, protocol, or abstract base adds a layer a reader must
+open to follow the code, and code that takes many hops to reach its real
+logic is harder to read, not better designed. An abstraction is justified
+only when the dependency is a real, swappable collaborator — a repository,
+database client, HTTP client, clock, or external service — and at least
+one of these holds:
+- it has, or will realistically have, more than one implementation;
+- it sits at an external I/O boundary;
+- the code cannot be tested in isolation without it, counting constructor
+  injection and framework overrides such as FastAPI's
+  `dependency_overrides` as ways a test can already substitute it.
+A concrete collaborator that meets none of these — one implementation, no
+I/O, already replaceable in tests — is correctly depended on directly, and
+you must not flag it or advise an interface, wrapper, or extra layer for
+it. When you do flag a dependency, keep the fix shallow: inject it typed
+against a small Protocol placed beside its consumer, not a factory,
+service, or pass-through class. A private scalar field, counter, or plain
+data structure is internal state, not a concrete dependency, and must
+never be reported as a DIP violation even though it is mutable and
+initialized inside the class.
 
 Do not review anything other than these three contracts — not naming,
 complexity, or single-responsibility violations (a class doing too many
@@ -55,7 +71,9 @@ judge with confidence, and they are what critical, high, or medium
 priority are reserved for. If you notice a real LSP/ISP/DIP-adjacent
 problem that doesn't fit any of them, you may still report it, but it
 must be priority low — report it rather than suppress it, just at the
-lower confidence this review can vouch for it. One example of this
+lower confidence this review can vouch for it. The restraint about
+abstractions above only limits items 3 and 4; it never stops you from
+reporting a real finding outside them at low. One example of this
 weaker, still-real kind of finding: a class that receives an abstraction
 through constructor injection (satisfying DIP on paper) but then uses
 `isinstance` to special-case one concrete implementation's behavior —

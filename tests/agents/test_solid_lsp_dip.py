@@ -82,6 +82,45 @@ def test_cohesive_small_interface_is_not_flagged_as_isp_violation(solid2_agent: 
 
 
 @pytest.mark.llm
+def test_local_concrete_collaborator_is_not_flagged(solid2_agent: SolidLspDipAgent) -> None:
+    """A same-module collaborator with one implementation and no I/O needs
+    no abstraction; an interface here would only add a layer."""
+    code = load_fixture("solid2/false_positive_local_concrete_collaborator.py")
+
+    result = solid2_agent.execute_agent(code, file_path="false_positive_local_concrete_collaborator.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+@pytest.mark.llm
+def test_fastapi_depends_provider_is_not_flagged(solid2_agent: SolidLspDipAgent) -> None:
+    """A Depends provider is already replaceable through
+    `dependency_overrides`, so it needs no extra Protocol."""
+    code = load_fixture("solid2/false_positive_fastapi_depends_seam.py")
+
+    result = solid2_agent.execute_agent(code, file_path="false_positive_fastapi_depends_seam.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+@pytest.mark.llm
+def test_protocol_at_io_boundary_is_not_flagged(solid2_agent: SolidLspDipAgent) -> None:
+    """A small Protocol beside its consumer at an I/O boundary, with a real
+    implementation and a fake, earns its place."""
+    code = load_fixture("solid2/false_positive_protocol_at_io_boundary.py")
+
+    result = solid2_agent.execute_agent(code, file_path="false_positive_protocol_at_io_boundary.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+@pytest.mark.llm
 def test_lsp_violation_is_flagged(solid2_agent: SolidLspDipAgent) -> None:
     code = load_fixture("solid2/lsp_violation.py")
 
