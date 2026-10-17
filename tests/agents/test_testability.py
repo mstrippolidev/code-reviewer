@@ -152,3 +152,27 @@ def test_out_of_scope_scenario_is_flagged_low(test_agent: TestabilityAgent) -> N
     entry = result.review[0]
     assert entry.incidents != []
     assert all(incident.priority == Priority.LOW for incident in entry.incidents)
+
+
+def test_fastapi_depends_route_is_not_flagged_as_unseamed_logic(test_agent: TestabilityAgent) -> None:
+    """A route receiving its collaborator through Depends is replaceable
+    with dependency_overrides, so it already has a seam."""
+    code = load_fixture("test/false_positive_fastapi_depends_route.py")
+
+    result = test_agent.execute_agent(code, file_path="false_positive_fastapi_depends_route.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
+
+
+def test_pure_function_with_branching_is_not_flagged(test_agent: TestabilityAgent) -> None:
+    """Logic that depends only on its arguments is testable by passing
+    different arguments; no injection point is needed."""
+    code = load_fixture("test/false_positive_pure_function_with_branching.py")
+
+    result = test_agent.execute_agent(code, file_path="false_positive_pure_function_with_branching.py")
+
+    entry = result.review[0]
+    assert entry.incidents == []
+    assert entry.rating == 100
