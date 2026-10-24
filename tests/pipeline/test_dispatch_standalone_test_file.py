@@ -37,8 +37,8 @@ def dry_judge() -> FakeDryJudge:
 @pytest.fixture
 def container(agents: dict[CodeKey, FakeAgent], dry_judge: FakeDryJudge) -> AgentsContainer:
     return AgentsContainer(
-        file_agents=[agents[CodeKey.COH]],
-        chunk_agents=[agents[CodeKey.CMPLX], agents[CodeKey.VAR], agents[CodeKey.ERR], agents[CodeKey.CMT]],
+        file_agents=[agents[CodeKey.COH], agents[CodeKey.CMPLX]],
+        chunk_agents=[agents[CodeKey.VAR], agents[CodeKey.ERR], agents[CodeKey.CMT]],
         tcase_agent=agents[CodeKey.TCASE],
         dry_judge=dry_judge,
         rag_manager=FakeEmbeddingIndex(),

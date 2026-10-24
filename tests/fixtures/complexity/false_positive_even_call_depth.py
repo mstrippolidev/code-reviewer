@@ -1,10 +1,3 @@
-"""
-    CMPLX false-positive trap: price_for makes three calls and every one
-    reaches real logic in a single step, so each line costs the reader the
-    same. Nothing here is uneven or deep.
-"""
-
-
 def validate_price(price: float) -> None:
     if price < 0:
         raise ValueError("Price must be non-negative")

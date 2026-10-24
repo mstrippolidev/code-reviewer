@@ -1,10 +1,3 @@
-"""
-    CMPLX priority=high fixture: four levels of nested conditionals and a
-    loop obscure the actual bug-prone path — a reader must track every
-    level simultaneously to know when "ok" is reached.
-"""
-
-
 def process_order(order: dict) -> str:
     if order:
         if order.get("items"):

@@ -1,9 +1,3 @@
-"""
-    Complexity fixture: conditionals nested four levels deep, forcing the
-    reader to track every enclosing branch to understand the innermost one.
-"""
-
-
 def resolve_shipping_rate(order: dict) -> float:
     if order["country"] == "US":
         if order["is_express"]:

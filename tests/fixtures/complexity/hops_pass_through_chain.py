@@ -1,10 +1,3 @@
-"""
-    CMPLX hop violation: checkout_total reaches real logic only after 8
-    chained same-file hops (nine functions, the entry is not a hop). Even in one file,
-    more than 7 chained hops is too many to follow.
-"""
-
-
 def checkout_total(price: float, is_premium: bool) -> float:
     return price_with_rules(price, is_premium)
 

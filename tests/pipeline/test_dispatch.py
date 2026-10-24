@@ -14,6 +14,7 @@ from sqlalchemy.pool import StaticPool
 
 from code_reviewer.agents.base import FileReviewMeta
 from code_reviewer.agents.registry import AgentsContainer
+from code_reviewer.pipeline.call_depth.depth_follower import DepthReport
 from code_reviewer.pipeline.dispatch import DRY_REQUIRES_REPO_REASON, review_file, review_file_runnable
 from code_reviewer.rag.code_similarity_index import CodeMatch, LexicalMatch
 from code_reviewer.rag.dry_judge import JudgeCandidate
@@ -183,8 +184,8 @@ def container(
     history_match_reranker: HistoryMatchReranker,
 ) -> AgentsContainer:
     return AgentsContainer(
-        file_agents=[file_agent],
-        chunk_agents=[cmplx_agent, var_agent],
+        file_agents=[file_agent, cmplx_agent],
+        chunk_agents=[var_agent],
         tcase_agent=tcase_agent,
         dry_judge=dry_judge,
         rag_manager=rag_manager,
@@ -199,6 +200,7 @@ def _prepared_file(
     content: str = "x = 1\n",
     repo_data: RepoData | None = None,
     intra_pr_duplicates: list[list[LocatedChunk]] | None = None,
+    call_depth_reports: list[DepthReport] | None = None,
 ) -> PreparedFile:
     return PreparedFile(
         source_file=SubmittedFile(file_path="f.py", content=content),
@@ -206,6 +208,7 @@ def _prepared_file(
         size_status=size_status,
         repo_data=repo_data,
         intra_pr_duplicates=intra_pr_duplicates or [],
+        call_depth_reports=call_depth_reports or [],
     )
 
 
@@ -274,6 +277,30 @@ def test_file_agent_receives_no_repo_data_for_a_standalone_review(
 
     review_meta = file_agent.execute_agent_calls[0][2]
     assert review_meta.repo_data is None
+
+
+@DISPATCH_FUNCTIONS
+def test_file_agent_receives_the_files_call_depth_reports(
+    dispatch: DispatchFn, container: AgentsContainer, file_agent: FakeAgent
+) -> None:
+    reports = [DepthReport(function="route", path="f.py", calls=[])]
+
+    dispatch(_prepared_file(call_depth_reports=reports), container)
+
+    assert file_agent.execute_agent_calls[0][2].call_depth_reports == reports
+
+
+@DISPATCH_FUNCTIONS
+def test_file_agent_receives_no_call_depth_reports_when_the_file_has_none(
+    dispatch: DispatchFn, container: AgentsContainer, file_agent: FakeAgent
+) -> None:
+    dispatch(_prepared_file(), container)
+
+    assert file_agent.execute_agent_calls[0][2].call_depth_reports == []
+
+
+def test_review_meta_has_no_call_depth_reports_by_default() -> None:
+    assert FileReviewMeta().call_depth_reports == []
 
 
 def _repo_variant_container(
@@ -395,7 +422,7 @@ def test_chunk_agent_is_split_and_batched_at_the_soft_limit(
 @DISPATCH_FUNCTIONS
 def test_chunked_incidents_are_offset_to_file_absolute_positions(dispatch: DispatchFn, container: AgentsContainer) -> None:
     incident = Incident(priority=Priority.MEDIUM, line_position="1-1", description="d", advice="a")
-    container.chunk_agents[1]._incidents = [incident]  # var_agent
+    container.chunk_agents[0]._incidents = [incident]  # var_agent
     prepared = _prepared_file(size_status=SizeStatus.SOFT_LIMIT, content=SOURCE_WITH_TWO_FUNCTIONS)
 
     entries = dispatch(prepared, container)
@@ -407,13 +434,23 @@ def test_chunked_incidents_are_offset_to_file_absolute_positions(dispatch: Dispa
 @DISPATCH_FUNCTIONS
 def test_chunked_rating_is_recomputed_from_merged_incidents(dispatch: DispatchFn, container: AgentsContainer) -> None:
     incident = Incident(priority=Priority.MEDIUM, line_position="1-1", description="d", advice="a")
-    container.chunk_agents[1]._incidents = [incident]  # var_agent, rating 100 on each individual chunk call
+    container.chunk_agents[0]._incidents = [incident]  # var_agent, rating 100 on each individual chunk call
     prepared = _prepared_file(size_status=SizeStatus.SOFT_LIMIT, content=SOURCE_WITH_TWO_FUNCTIONS)
 
     entries = dispatch(prepared, container)
 
     var_entry = next(entry for entry in entries if entry.code_key == CodeKey.VAR)
     assert var_entry.rating == 100 - 7 - 7  # two chunks, one medium incident (-7) each
+
+
+@DISPATCH_FUNCTIONS
+def test_cmplx_reviews_the_whole_file_in_one_call_not_chunks(
+    dispatch: DispatchFn, container: AgentsContainer, cmplx_agent: FakeAgent
+) -> None:
+    dispatch(_prepared_file(content=SOURCE_WITH_TWO_FUNCTIONS), container)
+
+    assert (len(cmplx_agent.execute_agent_calls), cmplx_agent.execute_agent_batch_calls) == (1, [])
+    assert cmplx_agent.execute_agent_calls[0][0] == SOURCE_WITH_TWO_FUNCTIONS
 
 
 @DISPATCH_FUNCTIONS
@@ -598,7 +635,7 @@ def _comparable(entries: list[AgentReviewEntry]) -> list[tuple]:
 @pytest.mark.asyncio
 async def test_review_file_and_review_file_runnable_produce_equivalent_results(container: AgentsContainer) -> None:
     incident = Incident(priority=Priority.HIGH, line_position="1-1", description="d", advice="a")
-    container.chunk_agents[1]._incidents = [incident]  # var_agent
+    container.chunk_agents[0]._incidents = [incident]  # var_agent
     prepared = _prepared_file(size_status=SizeStatus.SOFT_LIMIT, content=SOURCE_WITH_TWO_FUNCTIONS)
 
     sequential = review_file(prepared, container)

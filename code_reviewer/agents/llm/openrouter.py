@@ -18,6 +18,17 @@ def _fast_code_keys() -> frozenset[str]:
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 
+class NonStrictProviderStrategy(ProviderStrategy):
+    """OpenAI models behind OpenRouter treat a json_schema with no explicit
+    strict flag as strict and reject any schema with defaulted fields, so
+    the flag is sent as false instead of being left out."""
+
+    def to_model_kwargs(self) -> dict[str, Any]:
+        kwargs = super().to_model_kwargs()
+        kwargs["response_format"]["json_schema"]["strict"] = False
+        return kwargs
+
+
 class OpenRouter(LLMInterface[T]):
     """Builds chat models backed by OpenRouter's hosted API."""
 
@@ -68,4 +79,4 @@ class OpenRouter(LLMInterface[T]):
     def build_response_format(self, schema: type[T]) -> ResponseFormat[T]:
         """Use provider-native structured output.
         """
-        return ProviderStrategy(schema)
+        return NonStrictProviderStrategy(schema)

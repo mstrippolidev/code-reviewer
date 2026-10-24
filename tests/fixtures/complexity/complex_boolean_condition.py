@@ -1,9 +1,3 @@
-"""
-    Complexity fixture: a single condition joining five clauses, hiding
-    which parts actually decide the outcome.
-"""
-
-
 def is_eligible_for_loan(applicant: dict) -> bool:
     if (
         applicant["age"] >= 18

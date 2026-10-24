@@ -3,7 +3,7 @@
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware
@@ -23,6 +23,7 @@ from code_reviewer.agents.llm.middleware import (
 from code_reviewer.agents.llm.ollama import OllamaLLM
 from code_reviewer.agents.llm.timeout import call_with_hard_timeout
 from code_reviewer.config.settings import get_settings
+from code_reviewer.pipeline.call_depth.depth_follower import DepthReport
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.schemas.review import (
     AgentOutput,
@@ -66,13 +67,14 @@ class ReviewContext:
 
 @dataclass(frozen=True)
 class FileReviewMeta:
-    """Size and repo-scoping metadata for one file-agent review call,
-    bundled so FileSizeAwareAgentBase.execute_agent stays within this
+    """Size, repo-scoping and call-depth metadata for one file-agent review
+    call, bundled so FileSizeAwareAgentBase.execute_agent stays within this
     project's 3-parameter limit as agents need more than raw code and
     file_path to work with."""
 
     size_status: SizeStatus = SizeStatus.NORMAL
     repo_data: RepoData | None = None
+    call_depth_reports: list[DepthReport] = field(default_factory=list)
 
 
 class AgentBase:

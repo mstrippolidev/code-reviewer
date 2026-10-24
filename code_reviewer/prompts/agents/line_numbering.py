@@ -11,3 +11,7 @@ CHUNK_LINE_NUMBERING_INSTRUCTION = """Every line of the code you are given is
   line_position directly off these prefixes; never count lines yourself or
   estimate a position. The "N:" prefix is not part of the code itself —
   never quote it in description or advice."""
+
+
+def number_lines(code: str) -> str:
+    return "\n".join(f"{number}: {line}" for number, line in enumerate(code.splitlines(), start=1))
