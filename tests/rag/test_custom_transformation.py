@@ -86,3 +86,22 @@ def test_bookkeeping_metadata_stays_available_for_filtering() -> None:
     nodes = _split_document(ADD_FUNCTION)
 
     assert nodes[0].metadata["repo_id"] == "12345"
+
+
+def test_file_imports_are_stored_in_every_chunks_metadata() -> None:
+    content = "import os\n\n\ndef first():\n    return os.getcwd()\n\n\ndef second():\n    return 2\n"
+
+    nodes = _explain_document(content)
+
+    assert [node.metadata["imports"] for node in nodes] == [["import os"], ["import os"]]
+
+
+def test_imports_metadata_never_reaches_the_embedded_content() -> None:
+    """Imports are bookkeeping for the call-depth walk; letting them into
+    the embedded text would shift every stored vector away from the bare
+    text a query is embedded as."""
+    content = "import os\n\n\ndef first():\n    return os.getcwd()\n"
+
+    nodes = _explain_document(content)
+
+    assert "import os" not in nodes[0].get_content(metadata_mode=MetadataMode.EMBED)

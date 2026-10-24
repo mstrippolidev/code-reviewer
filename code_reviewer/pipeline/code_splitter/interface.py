@@ -6,12 +6,16 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class CodeChunk:
-    """Represents one extracted AST block: a top-level function or class."""
+    """Represents one extracted AST block: a top-level function or class.
+
+    imports holds the file's top-level import statements, as source text,
+    so a chunk fetched on its own still says where its names come from."""
     chunk_type: str
     name: str
     code: str
     start_line: int
     end_line: int
+    imports: tuple[str, ...] = ()
 
 
 class CodeSplitterInterface(ABC):

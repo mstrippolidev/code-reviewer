@@ -29,8 +29,9 @@ class PythonCodeSplit(CodeSplitterInterface):
         """
         tree = self._parse(content)
         source_lines = content.splitlines()
+        imports = self._import_statements(tree, source_lines)
         return [
-            self._build_chunk(node, source_lines)
+            self._build_chunk(node, source_lines, imports)
             for node in tree.body
             if isinstance(node, _ChunkNode)
         ]
@@ -41,7 +42,14 @@ class PythonCodeSplit(CodeSplitterInterface):
         except (SyntaxError, ValueError) as error:
             raise CodeChunkingError("Failed to parse source as valid Python syntax.") from error
 
-    def _build_chunk(self, node: _ChunkNode, source_lines: list[str]) -> CodeChunk:
+    def _import_statements(self, tree: ast.Module, source_lines: list[str]) -> tuple[str, ...]:
+        return tuple(
+            "\n".join(source_lines[node.lineno - 1 : node.end_lineno or node.lineno])
+            for node in tree.body
+            if isinstance(node, (ast.Import, ast.ImportFrom))
+        )
+
+    def _build_chunk(self, node: _ChunkNode, source_lines: list[str], imports: tuple[str, ...]) -> CodeChunk:
         start_line = self._chunk_start_line(node)
         end_line = node.end_lineno if node.end_lineno is not None else node.lineno
         code = "\n".join(source_lines[start_line - 1 : end_line])
@@ -53,6 +61,7 @@ class PythonCodeSplit(CodeSplitterInterface):
             code=code,
             start_line=start_line,
             end_line=end_line,
+            imports=imports,
         )
 
     def _chunk_start_line(self, node: _ChunkNode) -> int:

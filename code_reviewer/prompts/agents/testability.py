@@ -29,7 +29,15 @@ Flag a piece of code if it:
 3. Puts non-trivial branching logic inside a `@staticmethod` or a
    module-level function that other code calls directly by name, with no
    parameter or injection point through which a test could substitute
-   different behavior for that logic.
+   different behavior for that logic. A framework injection point is a
+   seam: a FastAPI route that receives its collaborator through
+   `Depends(provider)` can be tested by replacing that provider with
+   `dependency_overrides`, so the route and the collaborator it receives
+   are already isolatable and must not be flagged under items 1 or 3 just
+   because the route is a module-level function. Likewise a module-level
+   function that takes its collaborator as a parameter, or whose logic
+   depends only on its arguments, can be tested by passing different
+   arguments and is not hidden logic.
 4. Requires an unreasonable number of constructors or setup dependencies
    to build the unit under test, so exercising one behavior means wiring
    up far more collaborators than that behavior actually touches.
@@ -45,7 +53,10 @@ judge with confidence, and they are what critical, high, or medium
 priority are reserved for. If you notice a real testability problem
 that doesn't fit any of them, you may still report it, but it must be
 priority low — report it rather than suppress it, just at the lower
-confidence this review can vouch for it. One example of this weaker,
+confidence this review can vouch for it. The leniency about framework
+seams and argument-only functions above never stops you from reporting a
+minor excess at low, such as one constructor dependency more than a class
+obviously needs. One example of this weaker,
 still-real kind of problem: a function whose only observable behavior is
 a side effect like a print statement, with no return value a test could
 assert against, so verifying it did the right thing means capturing

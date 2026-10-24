@@ -40,6 +40,7 @@ class ChunkSplitter(TransformComponent):
             "chunk_type": chunk.chunk_type,
             "start_line": chunk.start_line,
             "end_line": chunk.end_line,
+            "imports": list(chunk.imports),
         }
 
     def _embedded_text(self, chunk: CodeChunk) -> str:

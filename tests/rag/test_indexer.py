@@ -452,6 +452,38 @@ def test_get_file_chunks_maps_nodes_to_file_chunks() -> None:
     ]
 
 
+def test_get_file_chunks_returns_the_imports_stored_in_chunk_metadata() -> None:
+    node = TextNode(
+        text="Applies a rule.",
+        metadata={
+            "file_path": "app/pricing.py",
+            "chunk_name": "price_for",
+            "start_line": 3,
+            "end_line": 4,
+            "code": "def price_for(price):\n    return apply_rule(price)",
+            "imports": ["from app.rules import apply_rule"],
+        },
+    )
+    manager = _build_manager(_StubPipeline(), _GettableVectorStore(nodes=[node]))
+
+    chunks = manager.get_file_chunks("repo-1", "owner-1", "app/pricing.py")
+
+    assert chunks[0].imports == ["from app.rules import apply_rule"]
+
+
+def test_get_file_chunks_without_stored_imports_returns_an_empty_list() -> None:
+    """Chunks indexed before imports were stored have no such key."""
+    node = TextNode(
+        text="Adds two numbers.",
+        metadata={"file_path": "math_ops.py", "chunk_name": "add", "start_line": 1, "end_line": 2, "code": "x"},
+    )
+    manager = _build_manager(_StubPipeline(), _GettableVectorStore(nodes=[node]))
+
+    chunks = manager.get_file_chunks("repo-1", "owner-1", "math_ops.py")
+
+    assert chunks[0].imports == []
+
+
 def test_get_file_chunks_when_vector_store_raises_wraps_in_vector_store_query_error() -> None:
     """Verify a failed lookup surfaces as VectorStoreQueryError, not a raw
     SQLAlchemy/psycopg exception."""
