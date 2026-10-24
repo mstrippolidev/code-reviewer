@@ -16,6 +16,7 @@ from code_reviewer.config.settings import get_settings
 from code_reviewer.pipeline.code_splitter.interface import CodeChunk, CodeSplitterInterface
 from code_reviewer.pipeline.code_splitter.python import PythonCodeSplit
 from code_reviewer.pipeline.line_offset import offset_incidents
+from code_reviewer.prompts.agents.line_numbering import number_lines
 from code_reviewer.rag.dry_evidence import extract_snippet
 from code_reviewer.rag.dry_matching import ChunkHistoryMatch, CrossHistoryDuplicateFinder, DuplicateEvidenceSources
 from code_reviewer.rag.dry_review import build_dry_review_entry
@@ -78,9 +79,8 @@ def review_file(
     file_agents = _file_agents_for(prepared_file, agents_container)
     entries = [] if standalone else _run_file_agents(prepared_file, file_agents)
     chunk_agents = _scoped_chunk_agents(agents_container.chunk_agents, standalone)
-    chunk_entries = _run_chunk_agents(prepared_file, chunk_agents, splitter)
-    _apply_cmplx_soft_limit_incident(chunk_entries, prepared_file)
-    entries += chunk_entries
+    entries += _run_chunk_agents(prepared_file, chunk_agents, splitter)
+    _apply_cmplx_soft_limit_incident(entries, prepared_file)
     entries.append(_run_tcase_agent(prepared_file, agents_container))
     if not standalone:
         entries.append(_run_dry(agents_container, prepared_file))
@@ -122,7 +122,11 @@ def _run_file_agents(
 ) -> list[AgentReviewEntry]:
     """Runs every file agent once, on the whole file, every size band."""
     source = prepared_file.source_file
-    review_meta = FileReviewMeta(size_status=prepared_file.size_status, repo_data=prepared_file.repo_data)
+    review_meta = FileReviewMeta(
+        size_status=prepared_file.size_status,
+        repo_data=prepared_file.repo_data,
+        call_depth_reports=prepared_file.call_depth_reports,
+    )
     return [agent.execute_agent(source.content, source.file_path, review_meta).review[0] for agent in file_agents]
 
 
@@ -160,11 +164,7 @@ def _get_chunks(chunks: list[CodeChunk]) -> list[str]:
     line_position off the prefix instead of counting from the top of the
     chunk — offset_incidents still expects that same 1-indexed
     chunk-relative numbering back."""
-    return [_number_lines(chunk.code) for chunk in chunks]
-
-
-def _number_lines(code: str) -> str:
-    return "\n".join(f"{i}: {line}" for i, line in enumerate(code.splitlines(), start=1))
+    return [number_lines(chunk.code) for chunk in chunks]
 
 
 def _run_chunked_agent(agent: AgentBase, file_path: str, chunks: list[CodeChunk]) -> AgentReviewEntry:
@@ -277,9 +277,7 @@ def _has_evidence(match: ChunkHistoryMatch) -> bool:
 def _apply_cmplx_soft_limit_incident(entries: list[AgentReviewEntry], prepared_file: PreparedFile) -> None:
     """Appends CMPLX's file-size incident when the file is in the soft
     limit band — a line-count threshold, not a judgment call, so it's
-    computed deterministically rather than asked of the LLM. No chunk
-    call can report this itself: each one only ever sees its own
-    function/class in isolation, never the whole file's line count."""
+    computed deterministically rather than asked of the LLM."""
     if prepared_file.size_status != SizeStatus.SOFT_LIMIT:
         return
     cmplx_entry = next((entry for entry in entries if entry.code_key == CodeKey.CMPLX), None)
@@ -336,6 +334,7 @@ async def review_file_runnable(
         "file_path": prepared_file.source_file.file_path,
         "size_status": prepared_file.size_status,
         "repo_data": prepared_file.repo_data,
+        "call_depth_reports": prepared_file.call_depth_reports,
     }
     raw_branches = (
         {agent.get_agent_key().value: _file_agent_branch(agent) for agent in file_agents}
@@ -430,7 +429,11 @@ def _file_agent_branch(agent: FileSizeAwareAgentBase) -> RunnableLambda:
             lambda: agent.execute_agent(
                 ctx["code"],
                 ctx["file_path"],
-                FileReviewMeta(size_status=ctx["size_status"], repo_data=ctx.get("repo_data")),
+                FileReviewMeta(
+                    size_status=ctx["size_status"],
+                    repo_data=ctx.get("repo_data"),
+                    call_depth_reports=ctx["call_depth_reports"],
+                ),
             ),
         )
     )

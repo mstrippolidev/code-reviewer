@@ -111,6 +111,7 @@ def build_agent_roster(
         SolidLspDipAgent(_llm_for(CodeKey.SOLID2, llm), corpora),
         CohesionAgent(_llm_for(CodeKey.COH, llm), corpora),
         BoundariesAgent(_llm_for(CodeKey.BOUND, llm)),
+        ComplexityAgent(_llm_for(CodeKey.CMPLX, llm)),
     ]
     coupling_agent = CouplingAgent(_llm_for(CodeKey.COUP, llm), rag_manager, corpora)
     coupling_agent_repoless = CouplingAgent(_llm_for(CodeKey.COUP, llm), corpora=corpora)
@@ -121,7 +122,6 @@ def build_agent_roster(
         ErrorsAgent(_llm_for(CodeKey.ERR, llm)),
         CommentsAgent(_llm_for(CodeKey.CMT, llm)),
         ConcurrencyAgent(_llm_for(CodeKey.CONC, llm)),
-        ComplexityAgent(_llm_for(CodeKey.CMPLX, llm)),
         TestabilityAgent(_llm_for(CodeKey.TEST, llm)),
     ]
     tcase_agent = CoverageGapAgent(_llm_for(CodeKey.TCASE, llm))
