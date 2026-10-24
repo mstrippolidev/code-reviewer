@@ -4,6 +4,7 @@
 """
 from pydantic import BaseModel, Field
 
+from code_reviewer.pipeline.call_depth.depth_follower import DepthReport
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.rag.structural_hash_store import LocatedChunk
 from code_reviewer.schemas.review import ReviewScope, SizeStatus
@@ -37,5 +38,12 @@ class PreparedFile(BaseModel):
             "files this file's own pipeline pass never otherwise sees. "
             "Empty when this file shares no structural duplicate with "
             "anything else in the PR."
+        ),
+    )
+    call_depth_reports: list[DepthReport] = Field(
+        default_factory=list,
+        description=(
+            "How many layers each call in this file's functions goes through "
+            "before reaching code that decides something"
         ),
     )

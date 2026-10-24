@@ -21,10 +21,10 @@
 import ast
 from enum import Enum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from code_reviewer.pipeline.call_depth.project_files import ExternalCall, ProjectFiles, UnresolvedCall
-from code_reviewer.pipeline.call_depth.symbol_index import ModuleIndex
+from code_reviewer.pipeline.call_depth.symbol_index import ModuleIndex, annotated_parameters
 from code_reviewer.pipeline.call_depth.thin_body import FunctionNode, ThinBodyClassifier
 
 MAX_HOPS = 8
@@ -36,6 +36,15 @@ class WalkEnd(str, Enum):
     UNRESOLVED = "unresolved"
     CYCLE = "cycle"
     HOP_LIMIT = "hop_limit"
+
+
+_ENDING_TEXT = {
+    WalkEnd.REAL_LOGIC: "ends at code that decides something",
+    WalkEnd.FORWARDS_OUTSIDE: "ends by forwarding to a library",
+    WalkEnd.UNRESOLVED: "could not be followed",
+    WalkEnd.CYCLE: "loops back to a function already visited",
+    WalkEnd.HOP_LIMIT: f"was still only forwarding at the {MAX_HOPS}-hop limit",
+}
 
 
 class CallDepth(BaseModel):
@@ -51,6 +60,14 @@ class CallDepth(BaseModel):
     def hops(self) -> int:
         return self.hops_in_file + self.hops_in_other_files
 
+    def to_prompt_text(self) -> str:
+        files = f" ({', '.join(self.other_files)})" if self.other_files else ""
+        text = (
+            f"line {self.line} {self.callee}: hops in this file={self.hops_in_file}, "
+            f"hops in other files={self.hops_in_other_files}{files}; {_ENDING_TEXT[self.ended_at]}"
+        )
+        return f"{text}: {self.unresolved_reason}" if self.unresolved_reason else text
+
 
 class DepthReport(BaseModel):
     function: str
@@ -60,6 +77,10 @@ class DepthReport(BaseModel):
     @property
     def other_files_opened(self) -> int:
         return len({file for call in self.calls for file in call.other_files})
+
+    def to_prompt_text(self) -> str:
+        header = f"{self.function}: other files opened={self.other_files_opened}"
+        return "\n".join([header, *(f"  {call.to_prompt_text()}" for call in self.calls)])
 
 
 class UnknownEntry(Exception):
@@ -77,10 +98,25 @@ class _Target(BaseModel):
     name: str
 
 
+class _Scope(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    module: ModuleIndex
+    owner: str | None
+    parameter_types: dict[str, str]
+
+
 class CallDepthFollower:
     def __init__(self, files: ProjectFiles, classifier: ThinBodyClassifier) -> None:
         self._files = files
         self._classifier = classifier
+
+    def reports_for(self, path: str) -> list[DepthReport]:
+        if not self._files.has(path):
+            raise UnknownEntry(f"file {path!r} was not provided")
+        names = [f"{owner}.{name}" if owner else name for owner, name in self._files.at(path).definitions]
+        reports = [self.report_for(path, name) for name in names]
+        return [report for report in reports if report.calls]
 
     def report_for(self, path: str, function_name: str) -> DepthReport:
         if not self._files.has(path):
@@ -91,25 +127,47 @@ class CallDepthFollower:
             function = self._function_in(entry)
         except KeyError as error:
             raise UnknownEntry(f"{function_name!r} is not defined in {path!r}") from error
+        scope = self._scope_of(entry, function)
         calls = []
         for call in self._calls_in(function):
             try:
-                calls.append(self._walk(call, self._files.at(path), owner))
+                calls.append(self._walk(call, scope))
             except ExternalCall:
                 continue
         return DepthReport(function=function_name, path=path, calls=calls)
 
+    def _scope_of(self, target: _Target, function: FunctionNode) -> _Scope:
+        return _Scope(
+            module=self._files.at(target.path), owner=target.owner, parameter_types=annotated_parameters(function)
+        )
+
     def _calls_in(self, function: FunctionNode) -> list[ast.Call]:
-        calls = [node for statement in function.body for node in ast.walk(statement) if isinstance(node, ast.Call)]
+        body_calls = [node for statement in function.body for node in ast.walk(statement) if isinstance(node, ast.Call)]
+        calls = [*self._provider_calls_in(function), *body_calls]
         return sorted(calls, key=lambda call: (call.lineno, call.col_offset))
 
-    def _walk(self, call: ast.Call, module: ModuleIndex, owner: str | None) -> CallDepth:
-        callee, line, entry_path = ast.unparse(call.func), call.lineno, module.path
+    def _provider_calls_in(self, function: FunctionNode) -> list[ast.Call]:
+        defaults = [*function.args.defaults, *function.args.kw_defaults]
+        return [self._call_to_provider(default) for default in defaults if self._is_depends_on_provider(default)]
+
+    def _is_depends_on_provider(self, node: ast.expr | None) -> bool:
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "Depends"
+            and len(node.args) > 0
+        )
+
+    def _call_to_provider(self, depends: ast.Call) -> ast.Call:
+        return ast.copy_location(ast.Call(func=depends.args[0], args=[], keywords=[]), depends)
+
+    def _walk(self, call: ast.Call, scope: _Scope) -> CallDepth:
+        callee, line, entry_path = ast.unparse(call.func), call.lineno, scope.module.path
         visited: list[_Target] = []
         ended_at, reason = WalkEnd.HOP_LIMIT, ""
         for _ in range(MAX_HOPS):
             try:
-                target = self._target_for(self._callee_of(call, module, owner), module)
+                target = self._target_for(self._callee_of(call, scope), scope.module)
             except ExternalCall:
                 if not visited:
                     raise
@@ -127,7 +185,7 @@ class CallDepthFollower:
                 ended_at = WalkEnd.REAL_LOGIC
                 break
             call = self._classifier.forwarded_call(function)
-            module, owner = self._files.at(target.path), target.owner
+            scope = self._scope_of(target, function)
         other_files = [target.path for target in visited if target.path != entry_path]
         return CallDepth(
             callee=callee,
@@ -142,19 +200,29 @@ class CallDepthFollower:
     def _function_in(self, target: _Target) -> FunctionNode:
         return self._files.at(target.path).definitions[(target.owner, target.name)]
 
-    def _callee_of(self, call: ast.Call, module: ModuleIndex, owner: str | None) -> _Callee:
+    def _callee_of(self, call: ast.Call, scope: _Scope) -> _Callee:
         func = call.func
         if isinstance(func, ast.Name):
             return _Callee(owner=None, name=func.id)
-        if isinstance(func, ast.Attribute) and owner:
-            receiver = func.value
-            if isinstance(receiver, ast.Name) and receiver.id == "self":
-                return _Callee(owner=owner, name=func.attr)
-            if isinstance(receiver, ast.Attribute) and self._is_self(receiver.value):
-                attribute_class = module.attribute_types.get((owner, receiver.attr))
-                if attribute_class:
-                    return _Callee(owner=attribute_class, name=func.attr)
+        if isinstance(func, ast.Attribute):
+            return _Callee(owner=self._receiver_class(func.value, scope), name=func.attr)
         raise ExternalCall(ast.unparse(func))
+
+    def _receiver_class(self, receiver: ast.expr, scope: _Scope) -> str:
+        if isinstance(receiver, ast.Name):
+            return self._class_of_name(receiver.id, scope)
+        if isinstance(receiver, ast.Attribute) and self._is_self(receiver.value) and scope.owner:
+            attribute_class = scope.module.attribute_types.get((scope.owner, receiver.attr))
+            if attribute_class:
+                return attribute_class
+        raise ExternalCall(ast.unparse(receiver))
+
+    def _class_of_name(self, name: str, scope: _Scope) -> str:
+        if name == "self" and scope.owner:
+            return scope.owner
+        if name in scope.parameter_types:
+            return scope.parameter_types[name]
+        raise ExternalCall(name)
 
     def _is_self(self, node: ast.expr) -> bool:
         return isinstance(node, ast.Name) and node.id == "self"

@@ -28,6 +28,15 @@ import ast
 from code_reviewer.pipeline.call_depth.thin_body import FunctionNode
 
 
+def annotated_parameters(function: FunctionNode) -> dict[str, str]:
+    arguments = function.args
+    return {
+        parameter.arg: parameter.annotation.id
+        for parameter in [*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs]
+        if isinstance(parameter.annotation, ast.Name)
+    }
+
+
 class ModuleIndex:
     def __init__(self, path: str, tree: ast.Module) -> None:
         self.path = path
@@ -56,11 +65,7 @@ class ModuleIndex:
                 self._index_attribute_types(class_node.name, member)
 
     def _index_attribute_types(self, class_name: str, init: FunctionNode) -> None:
-        parameter_types = {
-            parameter.arg: parameter.annotation.id
-            for parameter in init.args.args
-            if isinstance(parameter.annotation, ast.Name)
-        }
+        parameter_types = annotated_parameters(init)
         for statement in init.body:
             self._index_assignment(class_name, statement, parameter_types)
 
