@@ -15,6 +15,7 @@ from code_reviewer.config.settings import get_settings
 from code_reviewer.guardrails.errors import IntakeRejectedError
 from code_reviewer.guardrails.intake_screen import run_intake_screen
 from code_reviewer.pipeline.aggregator import Aggregator
+from code_reviewer.pipeline.call_depth.report_builder import CallDepthReportBuilder
 from code_reviewer.pipeline.dispatch import review_file_runnable
 from code_reviewer.pipeline.errors import FileTooLargeError, SubmissionTooLargeError
 from code_reviewer.pipeline.file_size import run_file_size_guard
@@ -93,6 +94,7 @@ async def run_pipeline(
     prepared_files, skipped_files = await asyncio.to_thread(
         prepare_files_for_pipeline, files, repo_data, agents_container.intake_llm
     )
+    prepared_files = await asyncio.to_thread(CallDepthReportBuilder(agents_container.rag_manager).build, prepared_files)
     entries = []
     reviewed_files = []
     for prepared_file in prepared_files:

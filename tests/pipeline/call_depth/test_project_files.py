@@ -98,3 +98,22 @@ def test_library_module_is_still_external_with_a_loader() -> None:
 
     with pytest.raises(ExternalCall):
         files.module_named("json")
+
+
+def test_file_that_does_not_parse_is_left_out_without_failing_the_others() -> None:
+    files = ProjectFiles({**SOURCES, "app/broken.py": "def broken(:\n"})
+
+    assert (files.has("app/broken.py"), files.has("app/pricing.py")) == (False, True)
+
+
+def test_file_with_a_null_byte_is_left_out() -> None:
+    files = ProjectFiles({**SOURCES, "app/binary.py": "x = 1\x00"})
+
+    assert files.has("app/binary.py") is False
+
+
+def test_import_of_a_file_that_does_not_parse_is_unresolved_not_external() -> None:
+    files = ProjectFiles({**SOURCES, "app/broken.py": "def broken(:\n"})
+
+    with pytest.raises(UnresolvedCall):
+        files.module_named("app.broken")

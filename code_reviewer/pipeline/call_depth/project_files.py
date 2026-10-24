@@ -20,9 +20,13 @@
     "app/service.py" was provided.
 """
 import ast
+import logging
 from typing import Protocol
 
 from code_reviewer.pipeline.call_depth.symbol_index import ModuleIndex
+
+
+logger = logging.getLogger(__name__)
 
 
 class ExternalCall(Exception):
@@ -40,7 +44,16 @@ class FileLoader(Protocol):
 class ProjectFiles:
     def __init__(self, sources: dict[str, str], loader: FileLoader | None = None) -> None:
         self._loader = loader
-        self._modules = {path: ModuleIndex(path, ast.parse(source)) for path, source in sources.items()}
+        self._modules = self._index_parsable(sources)
+
+    def _index_parsable(self, sources: dict[str, str]) -> dict[str, ModuleIndex]:
+        modules = {}
+        for path, source in sources.items():
+            try:
+                modules[path] = ModuleIndex(path, ast.parse(source))
+            except (SyntaxError, ValueError):
+                logger.warning("Call-depth walk cannot read %s: it does not parse", path)
+        return modules
 
     def has(self, path: str) -> bool:
         return path in self._modules

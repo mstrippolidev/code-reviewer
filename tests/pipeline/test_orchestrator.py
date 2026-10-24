@@ -5,6 +5,8 @@
     (LLM-backed, already covered by its own tests); agents are faked so
     these exercise the wiring only.
 """
+from typing import Any
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
@@ -21,7 +23,7 @@ from code_reviewer.rag.rerank import HistoryMatchReranker
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.rag.structural_hash_store import StructuralHashStore
 from code_reviewer.schemas.review import AgentOutput, AgentReviewEntry, CodeKey, Incident, ReviewScope, SizeStatus
-from code_reviewer.schemas.submission import SubmittedFile
+from code_reviewer.schemas.submission import PreparedFile, SubmittedFile
 
 
 class FakeEmbeddingIndex:
@@ -120,6 +122,25 @@ async def test_runs_every_agent_for_a_single_file(container: AgentsContainer) ->
 
     assert set(result.meta.agents_run) == {CodeKey.COH, CodeKey.VAR, CodeKey.TCASE, CodeKey.DRY}
     assert result.meta.skipped_files == []
+
+
+@pytest.mark.asyncio
+async def test_each_file_reaches_dispatch_with_its_call_depth_report(
+    container: AgentsContainer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dispatched: list[PreparedFile] = []
+    real_dispatch = orchestrator.review_file_runnable
+
+    async def record_then_dispatch(prepared_file: PreparedFile, *args: Any, **kwargs: Any) -> list[AgentReviewEntry]:
+        dispatched.append(prepared_file)
+        return await real_dispatch(prepared_file, *args, **kwargs)
+
+    monkeypatch.setattr(orchestrator, "review_file_runnable", record_then_dispatch)
+    chain = "def outer():\n    return inner()\n\ndef inner():\n    if True:\n        return 1\n    return 2\n"
+
+    await run_pipeline([_file("chain.py", chain)], container)
+
+    assert [call.callee for report in dispatched[0].call_depth_reports for call in report.calls] == ["inner"]
 
 
 @pytest.mark.asyncio
