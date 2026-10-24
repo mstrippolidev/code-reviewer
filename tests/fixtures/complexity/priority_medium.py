@@ -1,10 +1,3 @@
-"""
-    CMPLX priority=medium fixture: a flat, un-nested boolean condition with
-    four parts. It hides which part actually decides the outcome, but is
-    still followable top to bottom.
-"""
-
-
 def is_eligible_for_discount(user: dict) -> bool:
     return (
         user.get("is_member")

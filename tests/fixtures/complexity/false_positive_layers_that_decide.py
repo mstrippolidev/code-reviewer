@@ -1,8 +1,3 @@
-"""
-    CMPLX false-positive trap: three layers, and each one decides
-    something: the route validates, the service authorizes, the repository
-    hides the I/O. Three hops with real logic at every one is acceptable.
-"""
 from typing import Protocol
 
 

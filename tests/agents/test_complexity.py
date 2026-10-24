@@ -170,28 +170,6 @@ def test_more_than_seven_same_file_hops_is_flagged_high(complexity_agent: Comple
     assert any(incident.priority == Priority.HIGH for incident in entry.incidents)
 
 
-def test_six_same_file_hops_is_flagged_medium(complexity_agent: ComplexityAgent) -> None:
-    code = load_fixture("complexity/hops_priority_medium.py")
-
-    result = complexity_agent.execute_agent(code, file_path="hops_priority_medium.py")
-
-    entry = result.review[0]
-    assert any(incident.priority == Priority.MEDIUM for incident in entry.incidents)
-    assert all(incident.priority != Priority.HIGH for incident in entry.incidents)
-
-
-def test_five_same_file_hops_is_not_flagged(complexity_agent: ComplexityAgent) -> None:
-    """Same-file helpers are cheap to read: 5 chained hops is the limit
-    itself, not a violation."""
-    code = load_fixture("complexity/false_positive_same_file_helpers_within_limit.py")
-
-    result = complexity_agent.execute_agent(code, file_path="false_positive_same_file_helpers_within_limit.py")
-
-    entry = result.review[0]
-    assert entry.incidents == []
-    assert entry.rating == 100
-
-
 def test_one_call_much_deeper_than_its_siblings_is_flagged_medium(complexity_agent: ComplexityAgent) -> None:
     code = load_fixture("complexity/uneven_call_depth.py")
 

@@ -488,7 +488,7 @@ def test_call_text_names_the_line_the_callee_and_both_counts() -> None:
     )
 
     assert call.to_prompt_text() == (
-        "line 9 validate: hops in this file=1, hops in other files=0; ends at code that decides something"
+        "line 9 validate: hops in this file=1, hops in other files=0, distinct other files=0; ends at code that decides something"
     )
 
 
@@ -502,7 +502,7 @@ def test_call_text_lists_the_other_files_it_opened() -> None:
         ended_at=WalkEnd.REAL_LOGIC,
     )
 
-    assert "hops in other files=2 (app/pricing.py, app/rules.py);" in call.to_prompt_text()
+    assert "hops in other files=2, distinct other files=2 (app/pricing.py, app/rules.py);" in call.to_prompt_text()
 
 
 def test_call_text_gives_the_reason_a_call_was_not_followed() -> None:

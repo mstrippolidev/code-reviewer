@@ -1,22 +1,25 @@
-"""
-    Complexity fixture: seven branches combining multiple independent
-    conditions per branch, not a simple one-to-one lookup, driving up the
-    number of paths through the function.
-"""
-
-
-def calculate_order_priority(order: dict) -> str:
-    if order["is_vip"] and order["total"] > 1000:
-        return "urgent"
-    elif order["is_vip"]:
-        return "high"
-    elif order["total"] > 500 and order["items_count"] > 10:
-        return "high"
-    elif order["total"] > 500:
-        return "medium"
-    elif order["is_international"] and order["items_count"] > 5:
-        return "medium"
-    elif order["is_international"]:
-        return "low"
+def shipping_quote(order: dict) -> float:
+    cost = 0.0
+    if order["weight"] > 20:
+        cost += 15
+    elif order["weight"] > 10:
+        cost += 8
     else:
-        return "standard"
+        cost += 4
+    if order["is_international"]:
+        cost += 25
+        if order["country"] in ("KP", "IR", "SY"):
+            cost += 40
+    if order["is_express"]:
+        cost *= 1.5
+    if order["is_fragile"]:
+        cost += 6
+    if order["customer_tier"] == "gold":
+        cost *= 0.9
+    elif order["customer_tier"] == "silver":
+        cost *= 0.95
+    if order["coupon"] and order["coupon"] == "FREESHIP":
+        cost = 0.0
+    if cost > 100:
+        cost = 100.0
+    return cost

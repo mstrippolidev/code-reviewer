@@ -1,10 +1,3 @@
-"""
-    CMPLX regression fixture: four flat, top-level guard clauses (no
-    nesting) are the preferred flatter alternative to nested conditionals
-    and must not be flagged for exceeding 3 exit points.
-"""
-
-
 def apply_discount(order_total: float, is_member: bool, coupon: str) -> float:
     if order_total <= 0:
         return 0.0

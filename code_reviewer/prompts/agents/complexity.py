@@ -18,7 +18,9 @@ Flag a function or method if it:
    deep — each added level multiplies the number of paths a reader must
    track simultaneously.
 2. Uses a boolean condition with more than 3 parts joined by and/or — a
-   long condition hides which parts actually matter to the outcome.
+   long condition hides which parts actually matter to the outcome. A
+   condition with more than 3 parts is an incident however neatly it is
+   laid out across lines; a flat four-part condition is medium.
 3. Has more than 3 exit points that leave the function in different,
    hard-to-predict states. This is NOT about early-return guard clauses —
    a sequence of guard clauses at the top of a function, each handling one
@@ -38,22 +40,42 @@ Flag a function or method if it:
    it lives. Hops into different files are expensive, because each one
    means opening and holding another file: needing more than 3 different
    files to understand a small function is a high incident. Hops to
-   helpers in the same file are cheap, because the reader never leaves the
-   page: up to 5 chained hops in one file is acceptable, 6 or 7 is
-   medium, and more than 7 is high. When a path mixes both, judge the
-   files first and the same-file chain second. A layer earns its place
+   helpers in the same file are cheaper, because the reader never leaves
+   the page. Treat the same-file counts as a guide to severity, not an
+   exact line: about 5 chained hops or fewer is usually fine, 6 or 7 is
+   usually medium, and more than 7 is high. You see only this file, so
+   weigh how hard the path really is to follow: a short chain of layers
+   that add nothing may still deserve a low or medium incident, and a
+   longer chain whose layers each make a decision may deserve none.
+   When a path mixes both, judge the files first and the same-file chain
+   second. A layer earns its place
    only if it makes a decision — it validates, authorizes, translates
    between representations, enforces an invariant, or hides an external
    I/O boundary. A layer that only forwards its arguments, renames a
    call, or wraps another object without adding a decision is a
-   pass-through hop: it counts toward the total, and a pass-through into
-   another file is evidence even when the file count is within the limit.
-   If a navigation map is provided with the code, count hops from it:
-   each entry lists the symbol, its file, and whether it is thin (forwards
-   only) or real (decides something), and an unresolved hop is reported as
-   unresolved, never counted as zero. Without a map, judge only the
-   forwarding you can see in the code itself, and never guess at code you
-   were not shown.
+   pass-through hop: it counts toward the totals above, and by itself it
+   is at most a medium incident however short the chain. A pass-through into another file may
+   be reported at low when the file count is within the limit; exactly 3
+   files is the limit itself, not above it.
+   If a CALL DEPTH REPORT follows the code, take hop counts from it
+   instead of working them out yourself: it was built by following each
+   call through the real project files, including files you are not
+   shown. It has one block per function — a header line with how many
+   other files that function needs opened, then one indented line per
+   call with the call's line number, how many hops it took in this file
+   and in other files, which files, and how the walk ended. For example:
+     create_repo: other files opened=4
+       line 12 service.register: hops in this file=0, hops in other files=4, distinct other files=4 (a.py, b.py, c.py, d.py); ends at code that decides something
+   Every hop before the last one on a call only forwarded. Apply the
+   limits above to these numbers: distinct other files above 3 is high
+   (hops in other files is not a file count, several hops can stay inside
+   one file); hops in this file of 6 or 7 is medium, above 7 is high.
+   Judge the numbers as given; when the walk ended without reaching code
+   that decides something, the real depth can only be higher than the
+   counts, never lower. The report supplies the counts; you still judge
+   from the code you can see whether the layers make the path hard to
+   follow. Without a report, judge only the forwarding you can see in the
+   code itself, and never guess at code you were not shown.
 6. Has uneven call depth: a function makes several calls, most of which
    reach real logic in one step, but one call sends the reader down a
    deeper chain of forwarding layers before anything decides. The deeper
@@ -61,7 +83,9 @@ Flag a function or method if it:
    in item 5, because a reader scanning the function expects each line to
    cost about the same to understand and the odd one out hides the real
    work. Calls that are all equally shallow, or all equally deep for a
-   good reason, are not a problem.
+   good reason, are not a problem. With a report, compare the call lines
+   inside one function's block: the call whose hops stand well above its
+   siblings' is the incident.
 
 Judge clarity, not line count or function order — a longer function with
 one clear linear flow is fine; a short function with tangled branching is
@@ -78,7 +102,11 @@ judge with confidence, and they are what critical, high, or medium
 priority are reserved for. If you notice a real complexity problem that
 doesn't fit any of them, you may still report it, but it must be priority
 low — report it rather than suppress it, just at the lower confidence
-this review can vouch for it.
+this review can vouch for it. For example, a for loop with an else clause
+whose meaning the reader has to recall, or a flag set in one branch and
+tested several screens later, makes control flow harder to follow without
+being deep nesting, a long condition, many exit points, or a high branch
+count: report it at low.
 
 For each issue you flag, report one incident with:
 - priority: "critical" only when {CMPLX_CRITICAL_CRITERION}. This is
@@ -88,9 +116,12 @@ For each issue you flag, report one incident with:
   "medium" for a condition or exit-point count that slows understanding
   but is still followable, 6 or 7 same-file hops, or one call that is much
   deeper than its sibling calls; "low" for a mild case with limited
-  reach, or any real finding outside the six categories above.
+  reach, such as nesting exactly one level past the limit inside a short
+  helper, or any real finding outside the six categories above.
 - line_position: a "start-end" string (e.g. "20-45" for a range), never a
-  bare number. {CHUNK_LINE_NUMBERING_INSTRUCTION}
+  bare number. {CHUNK_LINE_NUMBERING_INSTRUCTION} For a hop or
+  uneven-depth incident found through the report, use the call's own line
+  from its report line (e.g. "12-12").
 - description: one sentence naming the actual function and what makes its
   flow hard to follow, not a restatement of the rule.
 - advice: a concrete restructuring — extract a guard clause, invert a

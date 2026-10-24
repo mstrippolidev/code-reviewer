@@ -64,7 +64,8 @@ class CallDepth(BaseModel):
         files = f" ({', '.join(self.other_files)})" if self.other_files else ""
         text = (
             f"line {self.line} {self.callee}: hops in this file={self.hops_in_file}, "
-            f"hops in other files={self.hops_in_other_files}{files}; {_ENDING_TEXT[self.ended_at]}"
+            f"hops in other files={self.hops_in_other_files}, "
+            f"distinct other files={len(self.other_files)}{files}; {_ENDING_TEXT[self.ended_at]}"
         )
         return f"{text}: {self.unresolved_reason}" if self.unresolved_reason else text
 
