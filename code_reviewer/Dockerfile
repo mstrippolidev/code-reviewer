@@ -27,15 +27,11 @@ RUN uv sync --locked --no-dev
 
 # intake_screen.py imports ProfanityFree from guardrails.hub, which needs the
 # validator package plus ./.guardrails/hub_registry.json (copied in at runtime).
-# Installed with pip from the Hub's private index rather than `guardrails hub
-# install`: the CLI fetches manifests from hub.api.guardrailsai.com, which no
-# longer resolves, while the package index itself still serves with a token.
-RUN --mount=type=secret,id=guardrails_api_key \
-    /app/.venv/bin/python -m pip install --no-cache-dir \
-        --index-url "https://__token__:$(cat /run/secrets/guardrails_api_key)@pypi.guardrailsai.com/simple" \
-        --extra-index-url https://pypi.org/simple \
-        guardrails-grhub-profanity-free \
-    && /app/.venv/bin/python -c "import guardrails_grhub_profanity_free"
+# Installed with pip from public PyPI rather than `guardrails hub install`: the
+# CLI fetches manifests from hub.api.guardrailsai.com, which no longer
+# resolves, and validators no longer need an API key.
+RUN /app/.venv/bin/python -m pip install --no-cache-dir guardrails-ai-profanity-free==0.1.0 \
+    && /app/.venv/bin/python -c "import guardrails_ai.profanity_free"
 
 # rag/rerank.py's HistoryMatchReranker loads this cross-encoder eagerly at
 # app startup (build_agent_roster, called from api/main.py's lifespan)
