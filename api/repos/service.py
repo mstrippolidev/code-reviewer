@@ -1,17 +1,15 @@
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Protocol
-
-from pydantic import BaseModel
 
 from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 from api.db.models.user import User
-from api.indexing.producer import PublishError
+from api.indexing.producer import PublishError, RepoIndexProducer
 from api.indexing.topics import REPO_FILE_RETRY, REPO_REGISTERED, REPO_STATUS_PROGRESS
 from api.integrations.github import (
     PYTHON_PERCENTAGE_THRESHOLD,
     GitHubCommitFetchError,
+    GitHubOAuthClient,
     GitHubRepo,
     GitHubRepoFetchError,
 )
@@ -19,13 +17,17 @@ from api.repos.errors import (
     BranchNotFoundError,
     GitHubVerificationUnavailableError,
     InsufficientPythonError,
+    NotRepoOwnerError,
     RepoEventPublishError,
     RepoIdMismatchError,
     RepoPurgeError,
 )
+from api.repos.repository import RegisteredRepoRepository
 from api.schemas.indexing import RepoRegisteredMessage
 from api.schemas.repos import RegisterRepoRequest, RepoStatusProgressMessage
+from api.security.token_cipher import TokenCipher
 from code_reviewer.rag.errors import VectorStoreDeletionError
+from code_reviewer.rag.indexer import LlamaIndexRagManager
 
 logger = logging.getLogger(__name__)
 
@@ -33,67 +35,30 @@ REGISTRATION_QUEUE_FAILURE = "Could not queue this repo for indexing"
 RETRY_QUEUE_FAILURE = "Could not schedule a retry of this repo's failed files"
 
 
-class RepoStore(Protocol):
-    """What the lifecycle needs from storage."""
-
-    async def reject_active_registration(self, repo_id: int) -> None: ...
-
-    async def add(self, registered: RegisteredRepo) -> None: ...
-
-    async def remove(self, repo: RegisteredRepo) -> None: ...
-
-    async def has_failed_files(self, repo_id: int) -> bool: ...
-
-    async def delete_indexed_files(self, repo_id: int) -> None: ...
-
-    async def commit_changes(self) -> None: ...
-
-
-class GitHubClient(Protocol):
-    """What the lifecycle needs from GitHub."""
-
-    async def fetch_repo(self, access_token: str, full_name: str) -> GitHubRepo: ...
-
-    async def fetch_branch_commit_sha(self, access_token: str, full_name: str, ref: str) -> str: ...
-
-
-class TokenDecryptor(Protocol):
-    """What the lifecycle needs to reveal a user's stored GitHub token."""
-
-    def decrypt(self, encrypted_token: str) -> str: ...
-
-
-class MessageProducer(Protocol):
-    """What the lifecycle needs to queue an event."""
-
-    async def publish(self, topic: str, message: BaseModel, key: bytes) -> None: ...
-
-
-class VectorStore(Protocol):
-    """What the lifecycle needs to remove a repo's embeddings."""
-
-    def delete_repo(self, repo_id: str) -> None: ...
-
-
 @dataclass(frozen=True)
 class RepoIntegrations:
     """The external systems a registered repo's lifecycle talks to."""
 
-    github_client: GitHubClient
-    token_cipher: TokenDecryptor
-    kafka_producer: MessageProducer
-    rag_manager: VectorStore
+    github_client: GitHubOAuthClient
+    token_cipher: TokenCipher
+    kafka_producer: RepoIndexProducer
+    rag_manager: LlamaIndexRagManager
 
 
 class RepoLifecycleService:
     """Carries a registered repo through its lifecycle: registration, pause/resume, retry, branch switch, removal."""
 
-    def __init__(self, repository: RepoStore, integrations: RepoIntegrations) -> None:
+    def __init__(self, repository: RegisteredRepoRepository, integrations: RepoIntegrations) -> None:
         self._repository = repository
         self._integrations = integrations
 
     async def register(self, request: RegisterRepoRequest, user: User) -> RegisteredRepo:
-        await self._repository.reject_active_registration(request.repo_id)
+        if not await self._repository.is_registered(request.repo_id):
+            return await self._register_new(request, user)
+        existing = await self._repository.find_by_repo_id(request.repo_id)
+        return await self._register_existing(existing, request, user)
+
+    async def _register_new(self, request: RegisterRepoRequest, user: User) -> RegisteredRepo:
         github_repo = await self._verify_registration(request, user)
         registered = RegisteredRepo(
             repo_id=github_repo.repo_id,
@@ -108,18 +73,33 @@ class RepoLifecycleService:
         await self._publish_registered(registered)
         return registered
 
-    async def pause(self, repo: RegisteredRepo) -> None:
+    async def _register_existing(
+        self, existing: RegisteredRepo, request: RegisterRepoRequest, user: User
+    ) -> RegisteredRepo:
+        await self._verify_registration(request, user)
+        if existing.status == RepoIndexStatus.FAILED and existing.registered_by_user_id == user.id:
+            existing.branch = request.branch or existing.branch
+            await self._restart_indexing(existing)
+            return existing
+        await self._repository.add_link(user.id, existing.repo_id)
+        await self._repository.commit_changes()
+        return existing
+
+    async def pause(self, repo: RegisteredRepo, user: User) -> None:
+        self._require_owner(repo, user)
         repo.status = RepoIndexStatus.PAUSED
         await self._repository.commit_changes()
         await self._publish_status_progress(repo)
 
-    async def resume(self, repo: RegisteredRepo) -> None:
+    async def resume(self, repo: RegisteredRepo, user: User) -> None:
+        self._require_owner(repo, user)
         repo.status = RepoIndexStatus.INDEXING
         await self._repository.commit_changes()
         await self._publish_status_progress(repo)
         await self._publish_registered(repo)
 
-    async def retry_failed_files(self, repo: RegisteredRepo) -> None:
+    async def retry_failed_files(self, repo: RegisteredRepo, user: User) -> None:
+        self._require_owner(repo, user)
         if not await self._repository.has_failed_files(repo.repo_id):
             return
         await self._publish_queued(REPO_FILE_RETRY, self._registration_message(repo), RETRY_QUEUE_FAILURE)
@@ -128,22 +108,25 @@ class RepoLifecycleService:
         await self._publish_status_progress(repo)
 
     async def switch_branch(self, repo: RegisteredRepo, branch: str, user: User) -> None:
+        self._require_owner(repo, user)
         await self._verify_branch_exists(repo.full_name, branch, user)
-        await self._purge_indexed_content(repo.repo_id)
         repo.branch = branch
-        repo.status = RepoIndexStatus.PENDING
-        repo.status_reason = None
-        repo.total_files_expected = None
-        repo.commit_sha = None
-        await self._repository.commit_changes()
-        await self._publish_registered(repo)
+        await self._restart_indexing(repo)
 
-    async def delete(self, repo: RegisteredRepo) -> None:
+    async def delete(self, repo: RegisteredRepo, user: User) -> None:
+        if repo.registered_by_user_id != user.id:
+            await self._repository.remove_link(user.id, repo.repo_id)
+            await self._repository.commit_changes()
+            return
         # Purge the vector store before the registration row: if the purge fails, the repo
         # stays registered (still authorized) rather than leaving unowned content behind.
         await self._purge_indexed_content(repo.repo_id)
         await self._repository.remove(repo)
         await self._repository.commit_changes()
+
+    def _require_owner(self, repo: RegisteredRepo, user: User) -> None:
+        if repo.registered_by_user_id != user.id:
+            raise NotRepoOwnerError()
 
     async def _verify_registration(self, request: RegisterRepoRequest, user: User) -> GitHubRepo:
         github_repo = await self._fetch_github_repo(request.full_name, user)
@@ -172,6 +155,15 @@ class RepoLifecycleService:
 
     def _access_token_of(self, user: User) -> str:
         return self._integrations.token_cipher.decrypt(user.encrypted_github_token)
+
+    async def _restart_indexing(self, repo: RegisteredRepo) -> None:
+        await self._purge_indexed_content(repo.repo_id)
+        repo.status = RepoIndexStatus.PENDING
+        repo.status_reason = None
+        repo.total_files_expected = None
+        repo.commit_sha = None
+        await self._repository.commit_changes()
+        await self._publish_registered(repo)
 
     async def _purge_indexed_content(self, repo_id: int) -> None:
         """Removes every indexed trace of a repo — vector store first, then the IndexedFile rows —

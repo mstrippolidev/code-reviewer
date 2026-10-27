@@ -59,16 +59,16 @@ class RecordingLifecycleService:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    async def pause(self, repo: RegisteredRepo) -> None:
+    async def pause(self, repo: RegisteredRepo, user: User) -> None:
         self.calls.append("pause")
 
-    async def resume(self, repo: RegisteredRepo) -> None:
+    async def resume(self, repo: RegisteredRepo, user: User) -> None:
         self.calls.append("resume")
 
-    async def retry_failed_files(self, repo: RegisteredRepo) -> None:
+    async def retry_failed_files(self, repo: RegisteredRepo, user: User) -> None:
         self.calls.append("retry_failed_files")
 
-    async def delete(self, repo: RegisteredRepo) -> None:
+    async def delete(self, repo: RegisteredRepo, user: User) -> None:
         self.calls.append("delete")
 
     async def switch_branch(self, repo: RegisteredRepo, branch: str, user: User) -> None:
