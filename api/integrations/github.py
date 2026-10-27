@@ -1,6 +1,7 @@
 """
     GitHub OAuth login integration: authorization URL, code exchange, and profile fetch.
 """
+import logging
 import asyncio
 import urllib.parse
 from dataclasses import dataclass
@@ -20,12 +21,14 @@ REPO_LANGUAGES_URL_TEMPLATE = "https://api.github.com/repos/{full_name}/language
 COMMIT_URL_TEMPLATE = "https://api.github.com/repos/{full_name}/commits/{ref}"
 TARBALL_URL_TEMPLATE = "https://api.github.com/repos/{full_name}/tarball/{ref}"
 BRANCHES_URL_TEMPLATE = "https://api.github.com/repos/{full_name}/branches"
+
 BRANCHES_PER_PAGE = 100
 PYTHON_PERCENTAGE_THRESHOLD = 50.0
 REPOS_PER_PAGE = 15
 WARMUP_CONNECTION_COUNT = 16
 REPO_INDEXING_REQUEST_TIMEOUT_SECONDS = 15.0
 
+logger = logging.getLogger("github_call")
 
 class GitHubRepoAccessLevel(str, Enum):
     """Which repos the OAuth grant should cover; GitHub has no scope for private-only access."""
@@ -58,6 +61,14 @@ class GitHubCommitFetchError(Exception):
 
 class GitHubTarballFetchError(Exception):
     """Raised when a repo's tarball snapshot cannot be downloaded."""
+
+
+class GitHubAccessCheckError(Exception):
+    """Raised when GitHub cannot say whether a user can see a repo."""
+
+
+class GitHubTokenRejectedError(GitHubAccessCheckError):
+    """Raised when GitHub no longer accepts a user's stored access token."""
 
 
 class GitHubBranchFetchError(Exception):
@@ -160,6 +171,12 @@ class GitHubOAuthClient:
         ]
 
     async def fetch_repo(self, access_token: str, full_name: str) -> GitHubRepo:
+        """
+            Fetch the files inside a repo.
+            Args:
+            - access_token: the access token from github.
+            - full_name: is the complete name of the repo, in other words the repo_name.
+        """
         headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/vnd.github+json"}
         try:
             response = await self._client.get(REPO_URL_TEMPLATE.format(full_name=full_name), headers=headers)
@@ -252,6 +269,25 @@ class GitHubOAuthClient:
             has_enough_python=python_percentage >= PYTHON_PERCENTAGE_THRESHOLD,
         )
 
+    async def user_have_access(self, access_token: str, full_name: str) -> bool:
+        """Whether the token's owner can see the repo; GitHub answers 404 for a private repo it will not show them.
+
+        Raises:
+            GitHubTokenRejectedError: If GitHub no longer accepts the token.
+            GitHubAccessCheckError: If GitHub cannot be reached or answers with an unexpected error.
+        """
+        headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/vnd.github+json"}
+        try:
+            response = await self._client.get(REPO_URL_TEMPLATE.format(full_name=full_name), headers=headers)
+        except httpx.HTTPError as error:
+            raise GitHubAccessCheckError("Could not reach GitHub to check repo access") from error
+        if response.status_code == httpx.codes.NOT_FOUND:
+            return False
+        if response.status_code == httpx.codes.UNAUTHORIZED:
+            raise GitHubTokenRejectedError("GitHub rejected the access token")
+        if not response.is_success:
+            raise GitHubAccessCheckError(f"GitHub repo access check failed with status {response.status_code}")
+        return True
 
 def _python_percentage(languages: dict[str, int]) -> float:
     total_bytes = sum(languages.values())

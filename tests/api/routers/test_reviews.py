@@ -13,9 +13,16 @@ from api.db.models.indexed_file import IndexedFile, IndexedFileStatus
 from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 from api.db.models.review_job import ReviewJob, ReviewJobStatus
 from api.db.models.user import User
-from api.dependencies import get_current_user, get_db_session, get_kafka_producer, require_user_or_guest
+from api.dependencies import (
+    get_current_user,
+    get_db_session,
+    get_kafka_producer,
+    get_repo_access_checker,
+    require_review_access,
+)
 from api.routers.reviews import router as reviews_router
 from api.schemas.reviews import ReviewRequestedMessage
+from tests.api.fake_repo_access import FakeRepoAccessChecker
 
 
 class FakeReviewProducer:
@@ -138,7 +145,8 @@ def _build_app(*, session: FakeAsyncSession, kafka_producer: FakeReviewProducer 
     app.dependency_overrides[get_db_session] = _fake_db_session
     app.dependency_overrides[get_kafka_producer] = lambda: kafka_producer or FakeReviewProducer()
     app.dependency_overrides[get_current_user] = lambda: _make_user()
-    app.dependency_overrides[require_user_or_guest] = lambda: None
+    app.dependency_overrides[require_review_access] = lambda: session.review_job
+    app.dependency_overrides[get_repo_access_checker] = lambda: FakeRepoAccessChecker()
     return app
 
 
@@ -188,15 +196,6 @@ def test_get_review_returns_the_job() -> None:
     assert response.status_code == 200
     assert response.json()["status"] == "completed"
     assert response.json()["file_paths"] == ["src/module.py"]
-
-
-def test_get_review_404s_for_an_unknown_review_id() -> None:
-    app = _build_app(session=FakeAsyncSession(review_job=None))
-    client = TestClient(app)
-
-    response = client.get(f"/api/reviews/{uuid.uuid4()}")
-
-    assert response.status_code == 404
 
 
 def test_get_review_file_content_returns_a_guest_files_stored_source() -> None:

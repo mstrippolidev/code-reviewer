@@ -17,6 +17,10 @@ class GitHubVerificationUnavailableError(Exception):
     """Raised when GitHub cannot confirm a repo's details."""
 
 
+class GitHubAuthorizationExpiredError(Exception):
+    """Raised when GitHub no longer accepts the user's token, so they must log in again."""
+
+
 class RepoIdMismatchError(Exception):
     """Raised when the claimed repo_id does not belong to the claimed full_name."""
 

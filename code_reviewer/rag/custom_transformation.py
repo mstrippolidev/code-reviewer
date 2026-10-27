@@ -1,5 +1,8 @@
 """
     Custom transformation to wire up the RAG layer to the vector store.
+
+    Their function is to take a list of node, do something to them an returns
+    a new list of nodes
 """
 from typing import Any, Sequence
 

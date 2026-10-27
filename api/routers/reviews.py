@@ -16,8 +16,8 @@ from api.dependencies import (
     get_current_user,
     get_db_session,
     get_kafka_producer,
-    require_registered_repo,
-    require_user_or_guest,
+    require_github_repo_access,
+    require_review_access,
     short_lived_db_session,
 )
 from api.indexing.producer import PublishError, RepoIndexProducer
@@ -40,7 +40,7 @@ _TERMINAL_JOB_STATUSES = frozenset({ReviewJobStatus.COMPLETED, ReviewJobStatus.F
 @router.post("/repos/{repo_id}/review", status_code=status.HTTP_202_ACCEPTED)
 async def submit_review(
     request: ReviewSubmissionRequest,
-    repo: RegisteredRepo = Depends(require_registered_repo),
+    repo: RegisteredRepo = Depends(require_github_repo_access),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
     kafka_producer: RepoIndexProducer = Depends(get_kafka_producer),
@@ -95,12 +95,8 @@ async def _publish_review_requested(job: ReviewJob, repo: RegisteredRepo, kafka_
 
 
 @router.get("/reviews/{review_id}")
-async def get_review(
-    review_id: uuid.UUID,
-    session: AsyncSession = Depends(get_db_session),
-    _identity: None = Depends(require_user_or_guest),
-) -> ReviewJobRead:
-    return ReviewJobRead.model_validate(await _require_review_job(review_id, session))
+async def get_review(job: ReviewJob = Depends(require_review_access)) -> ReviewJobRead:
+    return ReviewJobRead.model_validate(job)
 
 
 @router.get("/reviews/{review_id}/files/content")
@@ -108,10 +104,9 @@ async def get_review_file_content(
     review_id: uuid.UUID,
     file_path: str,
     session: AsyncSession = Depends(get_db_session),
-    _identity: None = Depends(require_user_or_guest),
+    job: ReviewJob = Depends(require_review_access),
 ) -> ReviewFileContentRead:
     """Serves a guest review's own submitted source; a repo review's source is served per repo instead."""
-    job = await _require_review_job(review_id, session)
     guest_file = await session.scalar(
         select(GuestReviewFile).where(GuestReviewFile.review_job_id == job.id, GuestReviewFile.file_path == file_path)
     )
@@ -134,7 +129,7 @@ async def _require_review_job(review_id: uuid.UUID, session: AsyncSession) -> Re
 async def stream_review(
     request: Request,
     review_id: uuid.UUID,
-    _identity: None = Depends(require_user_or_guest),
+    _access_gate: ReviewJob = Depends(require_review_access),
 ) -> AsyncIterator[ServerSentEvent]:
     broadcaster: ReviewProgressBroadcaster = request.app.state.review_progress_broadcaster
     # Subscribing before reading the job closes the window where a review reaching a

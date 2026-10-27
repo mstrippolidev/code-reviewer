@@ -6,6 +6,7 @@ import jwt
 ACCESS_TOKEN_PURPOSE = "access"
 OAUTH_STATE_PURPOSE = "oauth_state"
 GUEST_SESSION_PURPOSE = "guest_session"
+USER_SESSION_PURPOSE = "user_session"
 
 
 class InvalidAccessTokenError(Exception):
@@ -20,8 +21,12 @@ class InvalidOAuthStateError(Exception):
     """Raised when an OAuth 'state' value fails signature, expiry, or purpose verification."""
 
 
+class InvalidUserSessionTokenError(Exception):
+    """Raised when a user session cookie fails signature, expiry, or purpose verification."""
+
+
 class JwtTokenService:
-    """Issues and verifies HS256 JWTs for session access tokens, guest session cookies, and OAuth CSRF state values."""
+    """Issues and verifies HS256 JWTs for session access tokens, user and guest session cookies, and OAuth CSRF state values."""
 
     _ALGORITHM = "HS256"
 
@@ -65,6 +70,22 @@ class JwtTokenService:
             InvalidGuestSessionTokenError: If the token is malformed, expired, or not a guest session token.
         """
         payload = self._decode(token, expected_purpose=GUEST_SESSION_PURPOSE, error=InvalidGuestSessionTokenError)
+        return int(payload["sub"])
+
+    def issue_user_session_token(self, *, user_id: int) -> str:
+        return self._encode(
+            subject=str(user_id),
+            purpose=USER_SESSION_PURPOSE,
+            ttl_seconds=self._access_token_ttl_seconds,
+        )
+
+    def verify_user_session_token(self, token: str) -> int:
+        """Returns the user id embedded in the token.
+
+        Raises:
+            InvalidUserSessionTokenError: If the token is malformed, expired, or not a user session token.
+        """
+        payload = self._decode(token, expected_purpose=USER_SESSION_PURPOSE, error=InvalidUserSessionTokenError)
         return int(payload["sub"])
 
     def issue_oauth_state(self) -> str:

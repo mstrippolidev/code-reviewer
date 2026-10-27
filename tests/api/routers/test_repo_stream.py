@@ -17,10 +17,11 @@ from httpx import ASGITransport, AsyncClient
 from api.db.models.indexed_file import IndexedFile, IndexedFileStatus
 from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 from api.db.models.user import User
-from api.dependencies import get_current_user, get_db_session
+from api.dependencies import get_current_user, get_db_session, get_repo_access_checker
 from api.indexing.repo_progress_broadcaster import RepoProgressBroadcaster
 from api.routers.repos import router as repos_router
 from api.schemas.repos import RepoFileProgressMessage, RepoStatusProgressMessage
+from tests.api.fake_repo_access import FakeRepoAccessChecker
 
 _TIMEOUT = 2
 
@@ -133,6 +134,7 @@ def _build_app(*, session: FakeAsyncSession, broadcaster: RepoProgressBroadcaste
 
     app.dependency_overrides[get_db_session] = _fake_db_session
     app.dependency_overrides[get_current_user] = lambda: _make_user()
+    app.dependency_overrides[get_repo_access_checker] = lambda: FakeRepoAccessChecker()
     return app
 
 

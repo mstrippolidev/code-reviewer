@@ -6,6 +6,7 @@ import pytest
 import respx
 
 from api.integrations.github import (
+    GitHubAccessCheckError,
     GitHubBranchFetchError,
     GitHubOAuthClient,
     GitHubOAuthConfig,
@@ -13,6 +14,7 @@ from api.integrations.github import (
     GitHubProfileFetchError,
     GitHubRepoAccessLevel,
     GitHubRepoFetchError,
+    GitHubTokenRejectedError,
 )
 
 CONFIG = GitHubOAuthConfig(
@@ -281,3 +283,95 @@ async def test_fetch_repo_branches_raises_on_an_http_error() -> None:
 
     with pytest.raises(GitHubBranchFetchError):
         await _client().fetch_repo_branches("gho_token", "octocat/does-not-exist")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_user_have_access_is_true_when_github_shows_the_repo() -> None:
+    """Verify that a 200 from GitHub's repo endpoint means the token's owner can see the repo."""
+    respx.get("https://api.github.com/repos/octocat/hello-world").mock(return_value=httpx.Response(200, json={}))
+
+    has_access = await _client().user_have_access("gho_token", "octocat/hello-world")
+
+    assert has_access is True
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_user_have_access_is_false_when_github_answers_not_found() -> None:
+    """Verify that GitHub's 404 for a repo the user cannot see means no access, not an error."""
+    respx.get("https://api.github.com/repos/octocat/private").mock(return_value=httpx.Response(404))
+
+    has_access = await _client().user_have_access("gho_token", "octocat/private")
+
+    assert has_access is False
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_user_have_access_raises_when_github_rejects_the_token() -> None:
+    """Verify that a revoked token is reported as such instead of being read as 'no access'."""
+    respx.get("https://api.github.com/repos/octocat/hello-world").mock(return_value=httpx.Response(401))
+
+    with pytest.raises(GitHubTokenRejectedError):
+        await _client().user_have_access("gho_token", "octocat/hello-world")
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("status_code", [301, 403, 410, 422, 429, 451, 500, 502, 503])
+async def test_user_have_access_raises_on_an_unexpected_github_status(status_code: int) -> None:
+    """Verify that rate limits, outages, legal blocks and redirects are not mistaken for a denied user."""
+    respx.get("https://api.github.com/repos/octocat/hello-world").mock(return_value=httpx.Response(status_code))
+
+    with pytest.raises(GitHubAccessCheckError):
+        await _client().user_have_access("gho_token", "octocat/hello-world")
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    "network_error",
+    [httpx.ConnectError("down"), httpx.ReadTimeout("slow"), httpx.RemoteProtocolError("dropped")],
+    ids=["connect", "timeout", "protocol"],
+)
+async def test_user_have_access_raises_when_github_is_unreachable(network_error: httpx.HTTPError) -> None:
+    """Verify that a network failure is reported instead of being read as 'no access'."""
+    respx.get("https://api.github.com/repos/octocat/hello-world").mock(side_effect=network_error)
+
+    with pytest.raises(GitHubAccessCheckError):
+        await _client().user_have_access("gho_token", "octocat/hello-world")
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("status_code", [200, 204])
+async def test_user_have_access_is_true_for_any_successful_status(status_code: int) -> None:
+    """Verify that every 2xx answer counts as access, not only a 200."""
+    respx.get("https://api.github.com/repos/octocat/hello-world").mock(return_value=httpx.Response(status_code))
+
+    has_access = await _client().user_have_access("gho_token", "octocat/hello-world")
+
+    assert has_access is True
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_user_have_access_sends_the_token_as_a_bearer_credential() -> None:
+    """Verify that GitHub is asked as the user, with the token in the Authorization header."""
+    route = respx.get("https://api.github.com/repos/octocat/hello-world").mock(return_value=httpx.Response(200))
+
+    await _client().user_have_access("gho_token", "octocat/hello-world")
+
+    assert route.calls.last.request.headers["Authorization"] == "Bearer gho_token"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_user_have_access_asks_about_the_exact_full_name_it_was_given() -> None:
+    """Verify that mixed-case names, dots and dashes reach GitHub unchanged."""
+    route = respx.get("https://api.github.com/repos/Octo-Cat/hello.world_2").mock(return_value=httpx.Response(200))
+
+    await _client().user_have_access("gho_token", "Octo-Cat/hello.world_2")
+
+    assert route.called

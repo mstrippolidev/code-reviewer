@@ -16,6 +16,7 @@ from api.dependencies import (
     get_github_oauth_client,
     get_kafka_producer,
     get_rag_manager,
+    get_repo_access_checker,
     get_token_cipher,
 )
 from api.exception_handlers import register_repo_exception_handlers
@@ -26,6 +27,7 @@ from api.schemas.indexing import RepoRegisteredMessage
 from api.schemas.repos import RepoStatusProgressMessage
 from api.security.token_cipher import TokenCipher
 from code_reviewer.rag.errors import VectorStoreDeletionError
+from tests.api.fake_repo_access import FakeRepoAccessChecker
 
 
 class FakeGitHubOAuthClient:
@@ -105,10 +107,12 @@ class FakeAsyncSession:
     def _rows_for(self, statement) -> list[RegisteredRepo | IndexedFile]:
         entity = statement.column_descriptions[0]["entity"]
         rows = self._indexed_files if entity is IndexedFile else self._rows
-        requested_repo_id = next(iter(statement.compile().params.values()), None)
-        if requested_repo_id is None:
+        requested = next(iter(statement.compile().params.items()), None)
+        if requested is None:
             return rows
-        return [row for row in rows if row.repo_id == requested_repo_id]
+        param_name, value = requested
+        column = "registered_by_user_id" if param_name.startswith("registered_by_user_id") else "repo_id"
+        return [row for row in rows if getattr(row, column) == value]
 
     async def scalar(self, statement) -> RegisteredRepo | IndexedFile | None:
         rows = self._rows_for(statement)
@@ -210,6 +214,7 @@ def _build_app(
     token_cipher: TokenCipher | None = None,
     kafka_producer: FakeRepoIndexProducer | None = None,
     rag_manager: FakeRagManager | None = None,
+    access_checker: FakeRepoAccessChecker | None = None,
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(repos_router)
@@ -225,6 +230,7 @@ def _build_app(
     app.dependency_overrides[get_db_session] = _fake_db_session
     app.dependency_overrides[get_kafka_producer] = lambda: kafka_producer or FakeRepoIndexProducer()
     app.dependency_overrides[get_rag_manager] = lambda: rag_manager or FakeRagManager()
+    app.dependency_overrides[get_repo_access_checker] = lambda: access_checker or FakeRepoAccessChecker()
     if current_user is not None:
         app.dependency_overrides[get_current_user] = lambda: current_user
     return app
@@ -336,6 +342,24 @@ def test_register_repo_allows_re_registering_a_previously_failed_repo() -> None:
     assert response.json()["status"] == "pending"
 
 
+def test_list_registered_repos_returns_only_the_repos_the_caller_registered() -> None:
+    """Verify that one user's registered repos never appear in another user's list."""
+    mine = _make_registered_repo(id=1, repo_id=10, registered_by_user_id=1)
+    someone_elses = _make_registered_repo(id=2, repo_id=20, registered_by_user_id=2)
+    user, cipher = _make_authenticated_user()
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(),
+        session=FakeAsyncSession(existing=[mine, someone_elses]),
+        current_user=user,
+        token_cipher=cipher,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/repos")
+
+    assert [row["repo_id"] for row in response.json()] == [10]
+
+
 def test_list_registered_repos_returns_every_row() -> None:
     existing = RegisteredRepo(
         id=1,
@@ -419,6 +443,23 @@ def test_list_indexed_files_returns_the_repos_files() -> None:
 
     assert response.status_code == 200
     assert {row["file_path"] for row in response.json()} == {"src/a.py", "src/b.py"}
+
+
+def test_list_indexed_files_answers_404_when_github_denies_the_caller_access() -> None:
+    """Verify that a registered repo's files stay hidden from a user GitHub says cannot see the repo."""
+    user, cipher = _make_authenticated_user()
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(),
+        session=FakeAsyncSession(existing=[_make_registered_repo()], indexed_files=[_make_indexed_file()]),
+        current_user=user,
+        token_cipher=cipher,
+        access_checker=FakeRepoAccessChecker(denies=True),
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/repos/10/files")
+
+    assert response.status_code == 404
 
 
 def test_list_indexed_files_only_returns_files_for_the_requested_repo() -> None:
