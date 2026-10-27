@@ -9,6 +9,7 @@ data:
   GITHUB_OAUTH_CLIENT_ID: "CHANGE_ME"
   GITHUB_OAUTH_REDIRECT_URI: "http://CHANGE_ME/api/oauth/github/callback"
   KAFKA_BOOTSTRAP_SERVERS: "code-reviewer-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092"
+  REDIS_URL: "redis://redis.code-reviewer.svc.cluster.local:6379/0"
   LLM_PROVIDER: "bedrock"
   EMBEDDING_PROVIDER: "bedrock"
   BEDROCK_REGION: "us-east-2"

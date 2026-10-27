@@ -3,6 +3,7 @@ resources:
   - ../../base/postgres
   - ../../base/migrations
   - ../../base/kafka
+  - ../../base/redis
   - ../../base/api
   - ../../base/frontend
 
