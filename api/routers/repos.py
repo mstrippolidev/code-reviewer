@@ -123,11 +123,11 @@ async def stream_indexed_files(
 async def pause_repo_indexing(
     repo: RegisteredRepo = Depends(require_github_repo_access),
     service: RepoLifecycleService = Depends(get_repo_lifecycle_service),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> RegisteredRepoRead:
     if repo.status != RepoIndexStatus.INDEXING:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Repo is not currently indexing")
-    await service.pause(repo)
+    await service.pause(repo, current_user)
     return RegisteredRepoRead.model_validate(repo)
 
 
@@ -135,11 +135,11 @@ async def pause_repo_indexing(
 async def resume_repo_indexing(
     repo: RegisteredRepo = Depends(require_github_repo_access),
     service: RepoLifecycleService = Depends(get_repo_lifecycle_service),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> RegisteredRepoRead:
     if repo.status != RepoIndexStatus.PAUSED:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Repo is not paused")
-    await service.resume(repo)
+    await service.resume(repo, current_user)
     return RegisteredRepoRead.model_validate(repo)
 
 
@@ -147,11 +147,11 @@ async def resume_repo_indexing(
 async def retry_failed_files(
     repo: RegisteredRepo = Depends(require_github_repo_access),
     service: RepoLifecycleService = Depends(get_repo_lifecycle_service),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> RegisteredRepoRead:
     if repo.status not in _TERMINAL_REPO_STATUSES:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Repo indexing has not finished yet")
-    await service.retry_failed_files(repo)
+    await service.retry_failed_files(repo, current_user)
     return RegisteredRepoRead.model_validate(repo)
 
 
@@ -159,9 +159,9 @@ async def retry_failed_files(
 async def delete_registered_repo(
     repo: RegisteredRepo = Depends(require_github_repo_access),
     service: RepoLifecycleService = Depends(get_repo_lifecycle_service),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> None:
-    await service.delete(repo)
+    await service.delete(repo, current_user)
 
 
 @router.post("/{repo_id}/branch")

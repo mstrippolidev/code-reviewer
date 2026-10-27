@@ -3,6 +3,7 @@
 """
 from datetime import datetime
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -94,9 +95,11 @@ class FakeAsyncSession:
         self,
         existing: list[RegisteredRepo] | None = None,
         indexed_files: list[IndexedFile] | None = None,
+        links: list[tuple[int, int]] | None = None,
     ) -> None:
         self._rows: list[RegisteredRepo] = list(existing or [])
         self._indexed_files: list[IndexedFile] = list(indexed_files or [])
+        self._links = links if links is not None else [(row.registered_by_user_id, row.repo_id) for row in self._rows]
 
     async def __aenter__(self) -> "FakeAsyncSession":
         return self
@@ -111,8 +114,10 @@ class FakeAsyncSession:
         if requested is None:
             return rows
         param_name, value = requested
-        column = "registered_by_user_id" if param_name.startswith("registered_by_user_id") else "repo_id"
-        return [row for row in rows if getattr(row, column) == value]
+        if param_name.startswith("user_id"):
+            linked_repo_ids = {repo_id for user_id, repo_id in self._links if user_id == value}
+            return [row for row in rows if row.repo_id in linked_repo_ids]
+        return [row for row in rows if row.repo_id == value]
 
     async def scalar(self, statement) -> RegisteredRepo | IndexedFile | None:
         rows = self._rows_for(statement)
@@ -122,6 +127,8 @@ class FakeAsyncSession:
         return _ScalarsResult(self._rows_for(statement))
 
     async def execute(self, statement) -> None:
+        if statement.table.name == "user_repos":
+            return None
         requested_repo_id = next(iter(statement.compile().params.values()), None)
         self._indexed_files = [row for row in self._indexed_files if row.repo_id != requested_repo_id]
 
@@ -297,31 +304,54 @@ def test_register_repo_surfaces_a_github_verification_failure_as_a_bad_gateway()
     assert response.status_code == 502
 
 
-def test_register_repo_rejects_a_repo_id_already_registered() -> None:
-    existing = RegisteredRepo(
-        id=1,
-        repo_id=10,
-        owner_id=99,
-        full_name="octocat/hello-world",
-        default_branch="main",
-        branch="main",
-        registered_by_user_id=1,
-        status=RepoIndexStatus.COMPLETED,
-        created_at=datetime(2026, 1, 1),
-    )
-    repo = _make_github_repo()
+def _register_a_repo_owned_by_someone_else(
+    *, github_client: FakeGitHubOAuthClient, kafka_producer: FakeRepoIndexProducer
+) -> TestClient:
+    existing = _make_registered_repo(registered_by_user_id=2, status=RepoIndexStatus.COMPLETED)
     user, cipher = _make_authenticated_user()
     app = _build_app(
-        github_client=FakeGitHubOAuthClient(repo=repo),
+        github_client=github_client,
         session=FakeAsyncSession(existing=[existing]),
         current_user=user,
         token_cipher=cipher,
+        kafka_producer=kafka_producer,
     )
-    client = TestClient(app)
+    return TestClient(app)
+
+
+def test_register_repo_links_the_caller_to_a_repo_someone_else_registered() -> None:
+    """Verify that registering an already registered repo succeeds and returns the shared repo as it is."""
+    client = _register_a_repo_owned_by_someone_else(
+        github_client=FakeGitHubOAuthClient(repo=_make_github_repo()), kafka_producer=FakeRepoIndexProducer()
+    )
 
     response = client.post("/api/repos", json={"repo_id": 10, "full_name": "octocat/hello-world"})
 
-    assert response.status_code == 409
+    assert (response.status_code, response.json()["status"]) == (201, "completed")
+
+
+def test_register_repo_does_not_queue_indexing_for_a_repo_someone_else_registered() -> None:
+    """Verify that linking a second user never re-indexes the repo."""
+    producer = FakeRepoIndexProducer()
+    client = _register_a_repo_owned_by_someone_else(
+        github_client=FakeGitHubOAuthClient(repo=_make_github_repo()), kafka_producer=producer
+    )
+
+    client.post("/api/repos", json={"repo_id": 10, "full_name": "octocat/hello-world"})
+
+    assert producer.published == []
+
+
+def test_register_repo_answers_502_when_github_cannot_confirm_access_to_a_registered_repo() -> None:
+    """Verify that nobody is linked to a repo GitHub could not vouch for."""
+    client = _register_a_repo_owned_by_someone_else(
+        github_client=FakeGitHubOAuthClient(fetch_error=GitHubRepoFetchError("down")),
+        kafka_producer=FakeRepoIndexProducer(),
+    )
+
+    response = client.post("/api/repos", json={"repo_id": 10, "full_name": "octocat/hello-world"})
+
+    assert response.status_code == 502
 
 
 def test_register_repo_allows_re_registering_a_previously_failed_repo() -> None:
@@ -350,6 +380,23 @@ def test_list_registered_repos_returns_only_the_repos_the_caller_registered() ->
     app = _build_app(
         github_client=FakeGitHubOAuthClient(),
         session=FakeAsyncSession(existing=[mine, someone_elses]),
+        current_user=user,
+        token_cipher=cipher,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/repos")
+
+    assert [row["repo_id"] for row in response.json()] == [10]
+
+
+def test_list_registered_repos_includes_a_repo_registered_by_someone_else_when_the_caller_is_linked() -> None:
+    """Verify that a user who linked an already registered repo sees it in their own list."""
+    anas_repo = _make_registered_repo(id=1, repo_id=10, registered_by_user_id=2)
+    user, cipher = _make_authenticated_user()
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(),
+        session=FakeAsyncSession(existing=[anas_repo], links=[(2, 10), (user.id, 10)]),
         current_user=user,
         token_cipher=cipher,
     )
@@ -900,3 +947,74 @@ def test_switch_repo_branch_rejects_a_branch_github_cannot_find() -> None:
 
     assert response.status_code == 400
     assert registered.branch == "main"
+
+
+OWNER_ONLY_ROUTES = [
+    ("/api/repos/10/pause", None, RepoIndexStatus.INDEXING),
+    ("/api/repos/10/resume", None, RepoIndexStatus.PAUSED),
+    ("/api/repos/10/files/retry", None, RepoIndexStatus.COMPLETED),
+    ("/api/repos/10/branch", {"branch": "dev"}, RepoIndexStatus.COMPLETED),
+]
+OWNER_ONLY_IDS = ["pause", "resume", "retry", "branch"]
+
+
+def _client_for_a_user_who_is_not_the_owner(
+    repo_status: RepoIndexStatus,
+    kafka_producer: FakeRepoIndexProducer | None = None,
+    rag_manager: FakeRagManager | None = None,
+) -> TestClient:
+    repo = _make_registered_repo(registered_by_user_id=2, status=repo_status)
+    user, cipher = _make_authenticated_user()
+    app = _build_app(
+        github_client=FakeGitHubOAuthClient(),
+        session=FakeAsyncSession(existing=[repo]),
+        current_user=user,
+        token_cipher=cipher,
+        kafka_producer=kafka_producer,
+        rag_manager=rag_manager,
+    )
+    return TestClient(app)
+
+
+@pytest.mark.parametrize("path,body,repo_status", OWNER_ONLY_ROUTES, ids=OWNER_ONLY_IDS)
+def test_owner_only_route_answers_403_to_a_user_who_is_not_the_owner(
+    path: str, body: dict | None, repo_status: RepoIndexStatus
+) -> None:
+    """Verify that pause, resume, retry and branch switch belong to the user who registered the repo."""
+    client = _client_for_a_user_who_is_not_the_owner(repo_status)
+
+    response = client.post(path, json=body)
+
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize("path,body,repo_status", OWNER_ONLY_ROUTES, ids=OWNER_ONLY_IDS)
+def test_owner_only_route_queues_nothing_for_a_user_who_is_not_the_owner(
+    path: str, body: dict | None, repo_status: RepoIndexStatus
+) -> None:
+    """Verify that a refused action never reaches the indexing queue."""
+    producer = FakeRepoIndexProducer()
+    client = _client_for_a_user_who_is_not_the_owner(repo_status, kafka_producer=producer)
+
+    client.post(path, json=body)
+
+    assert producer.published == []
+
+
+def test_delete_by_a_user_who_is_not_the_owner_answers_204() -> None:
+    """Verify that a linked user can leave a repo they did not register."""
+    client = _client_for_a_user_who_is_not_the_owner(RepoIndexStatus.COMPLETED)
+
+    response = client.delete("/api/repos/10")
+
+    assert response.status_code == 204
+
+
+def test_delete_by_a_user_who_is_not_the_owner_leaves_the_index_alone() -> None:
+    """Verify that leaving a repo never purges the embeddings the owner and others still use."""
+    rag_manager = FakeRagManager()
+    client = _client_for_a_user_who_is_not_the_owner(RepoIndexStatus.COMPLETED, rag_manager=rag_manager)
+
+    client.delete("/api/repos/10")
+
+    assert rag_manager.deleted_repo_ids == []

@@ -17,6 +17,13 @@ class GitHubVerificationUnavailableError(Exception):
     """Raised when GitHub cannot confirm a repo's details."""
 
 
+class NotRepoOwnerError(Exception):
+    """Raised when a user other than the one who registered a repo tries an owner-only action on it."""
+
+    def __init__(self) -> None:
+        super().__init__("Only the user who registered this repo can do that")
+
+
 class GitHubAuthorizationExpiredError(Exception):
     """Raised when GitHub no longer accepts the user's token, so they must log in again."""
 

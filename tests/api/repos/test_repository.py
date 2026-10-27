@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 
 from api.db.models.indexed_file import IndexedFile, IndexedFileStatus
 from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
+from api.db.models.user_repo import UserRepo
 from api.repos.errors import IndexedFileNotFoundError, RepoAlreadyRegisteredError, RepoNotFoundError
 from api.repos.repository import RegisteredRepoRepository
 
@@ -21,11 +22,12 @@ class _NoRows:
 
 
 class RecordingSession:
-    def __init__(self, scalar_result=None, commit_error: Exception | None = None) -> None:
+    def __init__(self, scalar_result=None, flush_error: Exception | None = None) -> None:
         self._scalar_result = scalar_result
-        self._commit_error = commit_error
+        self._flush_error = flush_error
         self.statements: list = []
-        self.added: list[RegisteredRepo] = []
+        self.added: list[RegisteredRepo | UserRepo] = []
+        self.events: list[str] = []
         self.refreshed: list[RegisteredRepo] = []
         self.deleted: list[RegisteredRepo] = []
 
@@ -37,12 +39,15 @@ class RecordingSession:
         self.statements.append(statement)
         return _NoRows()
 
-    def add(self, row: RegisteredRepo) -> None:
+    async def execute(self, statement) -> None:
+        self.statements.append(statement)
+
+    def add(self, row: RegisteredRepo | UserRepo) -> None:
         self.added.append(row)
+        self.events.append(type(row).__name__)
 
     async def commit(self) -> None:
-        if self._commit_error:
-            raise self._commit_error
+        return None
 
     async def refresh(self, row: RegisteredRepo) -> None:
         self.refreshed.append(row)
@@ -51,7 +56,9 @@ class RecordingSession:
         self.deleted.append(row)
 
     async def flush(self) -> None:
-        return None
+        self.events.append("flush")
+        if self._flush_error:
+            raise self._flush_error
 
 
 def _make_registered_repo(**overrides) -> RegisteredRepo:
@@ -139,10 +146,93 @@ async def test_add_translates_a_unique_violation_into_already_registered() -> No
     Two requests can both pass the pre-check; the unique constraint settles the winner.
     """
     violation = IntegrityError("INSERT INTO registered_repos", {}, Exception("duplicate key"))
-    repository = RegisteredRepoRepository(RecordingSession(commit_error=violation))
+    repository = RegisteredRepoRepository(RecordingSession(flush_error=violation))
 
     with pytest.raises(RepoAlreadyRegisteredError, match="already registered"):
         await repository.add(_make_registered_repo())
+
+
+@pytest.mark.asyncio
+async def test_add_links_the_owner_to_the_new_repo() -> None:
+    """Verify that a newly registered repo shows up in its owner's list."""
+    session = RecordingSession()
+    registered = _make_registered_repo(repo_id=10, registered_by_user_id=7)
+
+    await RegisteredRepoRepository(session).add(registered)
+
+    link = session.added[-1]
+    assert (link.user_id, link.repo_id) == (7, 10)
+
+
+@pytest.mark.asyncio
+async def test_add_saves_the_repo_before_its_link() -> None:
+    """Verify that the repo row is flushed first, since the link's foreign key points at it."""
+    session = RecordingSession()
+
+    await RegisteredRepoRepository(session).add(_make_registered_repo())
+
+    assert session.events == ["RegisteredRepo", "flush", "UserRepo"]
+
+
+@pytest.mark.asyncio
+async def test_add_does_not_link_anyone_when_the_registration_conflicts() -> None:
+    """Verify that losing a registration race leaves no stray link behind."""
+    violation = IntegrityError("INSERT INTO registered_repos", {}, Exception("duplicate key"))
+    session = RecordingSession(flush_error=violation)
+
+    with pytest.raises(RepoAlreadyRegisteredError):
+        await RegisteredRepoRepository(session).add(_make_registered_repo())
+
+    assert all(not isinstance(row, UserRepo) for row in session.added)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("existing_link_id,expected", [(5, True), (None, False)])
+async def test_is_linked_reflects_whether_a_link_row_exists(existing_link_id: int | None, expected: bool) -> None:
+    """Verify that a user counts as linked exactly when a link row is found."""
+    repository = RegisteredRepoRepository(RecordingSession(scalar_result=existing_link_id))
+
+    assert await repository.is_linked(7, 10) is expected
+
+
+@pytest.mark.asyncio
+async def test_add_link_adds_a_link_when_the_user_is_not_linked_yet() -> None:
+    """Verify that linking a second user to an already registered repo stores their link."""
+    session = RecordingSession(scalar_result=None)
+
+    await RegisteredRepoRepository(session).add_link(7, 10)
+
+    assert [(link.user_id, link.repo_id) for link in session.added] == [(7, 10)]
+
+
+@pytest.mark.asyncio
+async def test_add_link_does_nothing_when_the_user_is_already_linked() -> None:
+    """Verify that registering the same repo twice is safe and never duplicates a link."""
+    session = RecordingSession(scalar_result=5)
+
+    await RegisteredRepoRepository(session).add_link(7, 10)
+
+    assert session.added == []
+
+
+@pytest.mark.asyncio
+async def test_remove_link_targets_only_that_users_link_to_that_repo() -> None:
+    """Verify that unlinking one user cannot remove another user's link or another repo's link."""
+    session = RecordingSession()
+
+    await RegisteredRepoRepository(session).remove_link(7, 10)
+
+    assert sorted(session.statements[0].compile().params.values()) == [7, 10]
+
+
+@pytest.mark.asyncio
+async def test_list_registered_by_reads_through_the_link_table() -> None:
+    """Verify that the list is built from the user's links, so a repo registered by someone else can appear."""
+    session = RecordingSession()
+
+    await RegisteredRepoRepository(session).list_registered_by(42)
+
+    assert "user_repos" in str(session.statements[0])
 
 
 @pytest.mark.asyncio
@@ -158,40 +248,30 @@ async def test_add_refreshes_the_row_so_server_defaults_are_loaded() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reject_active_registration_allows_a_repo_never_registered() -> None:
-    """Verify that a first-time registration deletes nothing."""
-    session = RecordingSession(scalar_result=None)
-    repository = RegisteredRepoRepository(session)
+@pytest.mark.parametrize("registered_id,expected", [(5, True), (None, False)])
+async def test_is_registered_reflects_whether_a_repo_row_exists(registered_id: int | None, expected: bool) -> None:
+    """Verify that a repo counts as registered exactly when its row is found, whatever its status."""
+    repository = RegisteredRepoRepository(RecordingSession(scalar_result=registered_id))
 
-    await repository.reject_active_registration(10)
-
-    assert session.deleted == []
+    assert await repository.is_registered(10) is expected
 
 
 @pytest.mark.asyncio
-async def test_reject_active_registration_removes_a_failed_registration() -> None:
-    """Verify that a failed registration is cleared so the repo can be registered again."""
-    failed = _make_registered_repo(status=RepoIndexStatus.FAILED)
-    session = RecordingSession(scalar_result=failed)
-    repository = RegisteredRepoRepository(session)
-
-    await repository.reject_active_registration(10)
-
-    assert session.deleted == [failed]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "active_status",
-    [RepoIndexStatus.PENDING, RepoIndexStatus.INDEXING, RepoIndexStatus.PAUSED, RepoIndexStatus.COMPLETED],
-)
-async def test_reject_active_registration_refuses_every_non_failed_status(active_status: RepoIndexStatus) -> None:
-    """Verify that only a FAILED registration may be replaced; any live one is a conflict."""
-    existing = _make_registered_repo(status=active_status)
+async def test_find_by_repo_id_returns_the_registered_repo() -> None:
+    """Verify that the stored row is returned as is."""
+    existing = _make_registered_repo()
     repository = RegisteredRepoRepository(RecordingSession(scalar_result=existing))
 
-    with pytest.raises(RepoAlreadyRegisteredError):
-        await repository.reject_active_registration(10)
+    assert await repository.find_by_repo_id(10) is existing
+
+
+@pytest.mark.asyncio
+async def test_find_by_repo_id_raises_when_the_repo_is_not_registered() -> None:
+    """Verify that a missing repo is an error, never a None the caller might forget to check."""
+    repository = RegisteredRepoRepository(RecordingSession(scalar_result=None))
+
+    with pytest.raises(RepoNotFoundError):
+        await repository.find_by_repo_id(10)
 
 
 @pytest.mark.asyncio
@@ -218,10 +298,10 @@ async def test_list_registered_by_filters_on_the_registering_user() -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_registered_by_filters_on_the_registered_by_user_column() -> None:
-    """Verify that the id is compared with who registered the repo, not with the repo's own id."""
+async def test_list_registered_by_compares_the_id_with_the_links_user_column() -> None:
+    """Verify that the id is compared with the link's user, not with the repo's own id."""
     session = RecordingSession()
 
     await RegisteredRepoRepository(session).list_registered_by(42)
 
-    assert "registered_by_user_id" in str(session.statements[0])
+    assert "user_repos.user_id" in str(session.statements[0])
