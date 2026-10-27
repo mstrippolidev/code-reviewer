@@ -15,6 +15,11 @@ from api.repos.errors import IndexedFileNotFoundError, RepoAlreadyRegisteredErro
 from api.repos.repository import RegisteredRepoRepository
 
 
+class _NoRows:
+    def all(self) -> list:
+        return []
+
+
 class RecordingSession:
     def __init__(self, scalar_result=None, commit_error: Exception | None = None) -> None:
         self._scalar_result = scalar_result
@@ -27,6 +32,10 @@ class RecordingSession:
     async def scalar(self, statement):
         self.statements.append(statement)
         return self._scalar_result
+
+    async def scalars(self, statement):
+        self.statements.append(statement)
+        return _NoRows()
 
     def add(self, row: RegisteredRepo) -> None:
         self.added.append(row)
@@ -196,3 +205,23 @@ async def test_find_indexed_content_raises_when_the_file_has_no_stored_source() 
 
     with pytest.raises(IndexedFileNotFoundError, match="src/module.py"):
         await repository.find_indexed_content(10, "src/module.py")
+
+
+@pytest.mark.asyncio
+async def test_list_registered_by_filters_on_the_registering_user() -> None:
+    """Verify that the list query is scoped to the caller's id, so no other user's repo can come back."""
+    session = RecordingSession()
+
+    await RegisteredRepoRepository(session).list_registered_by(42)
+
+    assert 42 in session.statements[0].compile().params.values()
+
+
+@pytest.mark.asyncio
+async def test_list_registered_by_filters_on_the_registered_by_user_column() -> None:
+    """Verify that the id is compared with who registered the repo, not with the repo's own id."""
+    session = RecordingSession()
+
+    await RegisteredRepoRepository(session).list_registered_by(42)
+
+    assert "registered_by_user_id" in str(session.statements[0])

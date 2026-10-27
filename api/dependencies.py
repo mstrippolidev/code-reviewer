@@ -1,10 +1,12 @@
 import asyncio
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from functools import lru_cache
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,9 +14,11 @@ from api.config.settings import get_api_settings
 from api.db.engine import DatabaseEngine
 from api.db.models.guest_session import GuestSession
 from api.db.models.registered_repo import RegisteredRepo
+from api.db.models.review_job import ReviewJob
 from api.db.models.user import User
 from api.indexing.producer import RepoIndexProducer
 from api.integrations.github import GitHubOAuthClient, GitHubOAuthConfig
+from api.repos.access import RepoAccessChecker
 from api.repos.repository import RegisteredRepoRepository
 from api.repos.service import RepoIntegrations, RepoLifecycleService
 from api.review.review_progress_broadcaster import ReviewProgressBroadcaster
@@ -77,6 +81,10 @@ def get_frontend_base_url() -> str:
 
 def get_kafka_producer(request: Request) -> RepoIndexProducer:
     return request.app.state.kafka_producer
+
+
+def get_redis(request: Request) -> Redis:
+    return request.app.state.redis
 
 
 def get_rag_manager(request: Request) -> LlamaIndexRagManager:
@@ -207,3 +215,51 @@ async def require_registered_repo(
     if repo is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Repo {repo_id} is not registered")
     return repo
+
+
+def get_repo_access_checker(
+    github_oauth_client: GitHubOAuthClient = Depends(get_github_oauth_client),
+    token_cipher: TokenCipher = Depends(get_token_cipher),
+    redis: Redis = Depends(get_redis),
+) -> RepoAccessChecker:
+    return RepoAccessChecker(github_oauth_client, token_cipher, redis)
+
+
+async def require_github_repo_access(
+    repo: RegisteredRepo = Depends(require_registered_repo),
+    user: User = Depends(get_current_user),
+    checker: RepoAccessChecker = Depends(get_repo_access_checker),
+) -> RegisteredRepo:
+    """Shared by any route that acts on a registered repo: GitHub must confirm the caller can see it."""
+    await checker.require_access(user, repo)
+    return repo
+
+
+async def require_review_access(
+    review_id: uuid.UUID,
+    request: Request,
+    checker: RepoAccessChecker = Depends(get_repo_access_checker),
+    jwt_service: JwtTokenService = Depends(get_jwt_service),
+) -> ReviewJob:
+    """Returns the review if the caller may read it: a guest their own, a user a review of a repo GitHub shows them.
+
+    Opens its own short session so an SSE route does not hold a DB connection for the whole stream.
+    """
+    user_id = _optional_user_id(await optional_bearer_scheme(request), jwt_service)
+    guest_session_id = _optional_guest_session_id(request, jwt_service)
+    if user_id is None and guest_session_id is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired access token")
+    not_found = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Review {review_id} was not found")
+    async with short_lived_db_session(request) as session:
+        job = await session.scalar(select(ReviewJob).where(ReviewJob.review_id == review_id))
+        if job is None:
+            raise not_found
+        if job.guest_session_id is not None and job.guest_session_id == guest_session_id:
+            return job
+        if job.repo_id is None or user_id is None:
+            raise not_found
+        user = await session.get(User, user_id)
+        repo = await session.scalar(select(RegisteredRepo).where(RegisteredRepo.repo_id == job.repo_id))
+        if user is None or repo is None or not await checker.has_access(user, repo):
+            raise not_found
+        return job

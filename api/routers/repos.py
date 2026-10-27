@@ -8,11 +8,13 @@ from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 from api.db.models.user import User
 from api.dependencies import (
     get_current_user,
+    get_repo_access_checker,
     get_repo_lifecycle_service,
     get_repo_repository,
-    require_registered_repo,
+    require_github_repo_access,
 )
 from api.indexing.repo_progress_broadcaster import RepoProgressBroadcaster
+from api.repos.access import RepoAccessChecker
 from api.repos.repository import RegisteredRepoRepository
 from api.repos.service import RepoLifecycleService
 from api.schemas.repos import (
@@ -34,10 +36,10 @@ _STREAM_CLOSING_STATUSES = _TERMINAL_REPO_STATUSES | {RepoIndexStatus.PAUSED}
 
 @router.get("")
 async def list_registered_repos(
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     repository: RegisteredRepoRepository = Depends(get_repo_repository),
 ) -> list[RegisteredRepoRead]:
-    repos = await repository.list_all()
+    repos = await repository.list_registered_by(current_user.id)
     return [RegisteredRepoRead.model_validate(repo) for repo in repos]
 
 
@@ -45,10 +47,12 @@ async def list_registered_repos(
 async def get_repo_by_name(
     full_name: str = Query(min_length=1),
     with_files: bool = False,
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     repository: RegisteredRepoRepository = Depends(get_repo_repository),
+    access_checker: RepoAccessChecker = Depends(get_repo_access_checker),
 ) -> RegisteredRepoWithFilesRead:
     repo = await repository.find_by_full_name(full_name)
+    await access_checker.require_access(current_user, repo)
     files = await repository.list_indexed_files(repo.repo_id) if with_files else []
     return RegisteredRepoWithFilesRead(
         repo=RegisteredRepoRead.model_validate(repo),
@@ -69,7 +73,7 @@ async def register_repo(
 @router.get("/{repo_id}/files")
 async def list_indexed_files(
     _current_user: User = Depends(get_current_user),
-    repo: RegisteredRepo = Depends(require_registered_repo),
+    repo: RegisteredRepo = Depends(require_github_repo_access),
     repository: RegisteredRepoRepository = Depends(get_repo_repository),
 ) -> list[IndexedFileRead]:
     files = await repository.list_indexed_files(repo.repo_id)
@@ -79,7 +83,7 @@ async def list_indexed_files(
 @router.get("/{repo_id}/files/content")
 async def get_indexed_file_content(
     file_path: str,
-    repo: RegisteredRepo = Depends(require_registered_repo),
+    repo: RegisteredRepo = Depends(require_github_repo_access),
     _current_user: User = Depends(get_current_user),
     repository: RegisteredRepoRepository = Depends(get_repo_repository),
 ) -> IndexedFileContentRead:
@@ -90,7 +94,7 @@ async def get_indexed_file_content(
 @router.get("/{repo_id}/files/stream", response_class=EventSourceResponse)
 async def stream_indexed_files(
     request: Request,
-    repo: RegisteredRepo = Depends(require_registered_repo),
+    repo: RegisteredRepo = Depends(require_github_repo_access),
     repository: RegisteredRepoRepository = Depends(get_repo_repository),
     _current_user: User = Depends(get_current_user),
 ) -> AsyncIterator[ServerSentEvent]:
@@ -117,7 +121,7 @@ async def stream_indexed_files(
 
 @router.post("/{repo_id}/pause")
 async def pause_repo_indexing(
-    repo: RegisteredRepo = Depends(require_registered_repo),
+    repo: RegisteredRepo = Depends(require_github_repo_access),
     service: RepoLifecycleService = Depends(get_repo_lifecycle_service),
     _current_user: User = Depends(get_current_user),
 ) -> RegisteredRepoRead:
@@ -129,7 +133,7 @@ async def pause_repo_indexing(
 
 @router.post("/{repo_id}/resume")
 async def resume_repo_indexing(
-    repo: RegisteredRepo = Depends(require_registered_repo),
+    repo: RegisteredRepo = Depends(require_github_repo_access),
     service: RepoLifecycleService = Depends(get_repo_lifecycle_service),
     _current_user: User = Depends(get_current_user),
 ) -> RegisteredRepoRead:
@@ -141,7 +145,7 @@ async def resume_repo_indexing(
 
 @router.post("/{repo_id}/files/retry")
 async def retry_failed_files(
-    repo: RegisteredRepo = Depends(require_registered_repo),
+    repo: RegisteredRepo = Depends(require_github_repo_access),
     service: RepoLifecycleService = Depends(get_repo_lifecycle_service),
     _current_user: User = Depends(get_current_user),
 ) -> RegisteredRepoRead:
@@ -153,7 +157,7 @@ async def retry_failed_files(
 
 @router.delete("/{repo_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_registered_repo(
-    repo: RegisteredRepo = Depends(require_registered_repo),
+    repo: RegisteredRepo = Depends(require_github_repo_access),
     service: RepoLifecycleService = Depends(get_repo_lifecycle_service),
     _current_user: User = Depends(get_current_user),
 ) -> None:
@@ -163,7 +167,7 @@ async def delete_registered_repo(
 @router.post("/{repo_id}/branch")
 async def switch_repo_branch(
     request: SwitchBranchRequest,
-    repo: RegisteredRepo = Depends(require_registered_repo),
+    repo: RegisteredRepo = Depends(require_github_repo_access),
     current_user: User = Depends(get_current_user),
     service: RepoLifecycleService = Depends(get_repo_lifecycle_service),
 ) -> RegisteredRepoRead:

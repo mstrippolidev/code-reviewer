@@ -12,9 +12,10 @@ from fastapi.testclient import TestClient
 from api.db.models.indexed_file import IndexedFile, IndexedFileStatus
 from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 from api.db.models.user import User
-from api.dependencies import get_current_user, get_db_session
+from api.dependencies import get_current_user, get_db_session, get_repo_access_checker
 from api.exception_handlers import register_repo_exception_handlers
 from api.routers.repos import router as repos_router
+from tests.api.fake_repo_access import FakeRepoAccessChecker
 
 REGISTERED_NAME = "octocat/hello-world"
 
@@ -87,7 +88,11 @@ def _make_indexed_file(**overrides) -> IndexedFile:
     return IndexedFile(**defaults)
 
 
-def _build_app(repos: list[RegisteredRepo], indexed_files: list[IndexedFile]) -> FastAPI:
+def _build_app(
+    repos: list[RegisteredRepo],
+    indexed_files: list[IndexedFile],
+    access_checker: FakeRepoAccessChecker | None = None,
+) -> FastAPI:
     app = FastAPI()
     app.include_router(repos_router)
     register_repo_exception_handlers(app)
@@ -96,15 +101,30 @@ def _build_app(repos: list[RegisteredRepo], indexed_files: list[IndexedFile]) ->
         yield FakeAsyncSession(repos, indexed_files)
 
     app.dependency_overrides[get_db_session] = _fake_db_session
+    app.dependency_overrides[get_repo_access_checker] = lambda: access_checker or FakeRepoAccessChecker()
     return app
 
 
 def _build_client(
-    repos: list[RegisteredRepo] | None = None, indexed_files: list[IndexedFile] | None = None
+    repos: list[RegisteredRepo] | None = None,
+    indexed_files: list[IndexedFile] | None = None,
+    access_checker: FakeRepoAccessChecker | None = None,
 ) -> TestClient:
-    app = _build_app(repos or [], indexed_files or [])
+    app = _build_app(repos or [], indexed_files or [], access_checker)
     app.dependency_overrides[get_current_user] = _make_user
     return TestClient(app)
+
+
+def test_get_repo_by_name_hides_a_repo_the_caller_cannot_access_on_github() -> None:
+    """Verify that a repo registered by someone else answers 404 when GitHub denies the caller access.
+
+    A 404 rather than a 403 keeps a private repo's registration from being confirmed to strangers.
+    """
+    client = _build_client(repos=[_make_registered_repo()], access_checker=FakeRepoAccessChecker(denies=True))
+
+    response = client.get("/api/repos/name", params={"full_name": REGISTERED_NAME})
+
+    assert response.status_code == 404
 
 
 def test_get_repo_by_name_returns_the_matching_repo() -> None:

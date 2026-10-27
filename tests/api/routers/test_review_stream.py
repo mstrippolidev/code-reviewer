@@ -16,7 +16,7 @@ from httpx import ASGITransport, AsyncClient
 
 from api.db.models.review_job import ReviewJob, ReviewJobStatus
 from api.db.models.user import User
-from api.dependencies import get_current_user, require_user_or_guest
+from api.dependencies import get_current_user, require_review_access
 from api.review.review_progress_broadcaster import ReviewProgressBroadcaster
 from api.routers.reviews import router as reviews_router
 from api.schemas.reviews import ReviewAgentProgressMessage, ReviewFileProgressMessage, ReviewStatusMessage
@@ -76,7 +76,7 @@ def _build_app(*, session: FakeAsyncSession, broadcaster: ReviewProgressBroadcas
     app.state.database_engine = FakeDatabaseEngine(session)
 
     app.dependency_overrides[get_current_user] = lambda: _make_user()
-    app.dependency_overrides[require_user_or_guest] = lambda: None
+    app.dependency_overrides[require_review_access] = lambda: session.review_job
     return app
 
 

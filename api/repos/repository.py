@@ -13,8 +13,10 @@ class RegisteredRepoRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def list_all(self) -> list[RegisteredRepo]:
-        result = await self._session.scalars(select(RegisteredRepo))
+    async def list_registered_by(self, user_id: int) -> list[RegisteredRepo]:
+        result = await self._session.scalars(
+            select(RegisteredRepo).where(RegisteredRepo.registered_by_user_id == user_id)
+        )
         return list(result.all())
 
     async def find_by_full_name(self, full_name: str) -> RegisteredRepo:

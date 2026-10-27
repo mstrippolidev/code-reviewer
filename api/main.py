@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from redis.asyncio import Redis
 
 from api.config.settings import ApiSettings, get_api_settings
 from api.db.engine import DatabaseEngine
@@ -51,6 +52,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_api_settings()
     app.state.database_engine = DatabaseEngine(settings.async_database_url)
     app.state.http_client = httpx.AsyncClient(http2=True)
+    app.state.redis = Redis.from_url(settings.redis_url)
     app.state.kafka_producer = RepoIndexProducer(settings.kafka_bootstrap_servers)
     app.state.repo_completion_finalizer = RepoCompletionFinalizer(app.state.kafka_producer)
     embedding = build_embedding()
@@ -87,6 +89,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await task
     await app.state.kafka_producer.stop()
     await app.state.http_client.aclose()
+    await app.state.redis.aclose()
     await app.state.database_engine.dispose()
 
 

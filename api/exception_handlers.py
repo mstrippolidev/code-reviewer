@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 
 from api.repos.errors import (
     BranchNotFoundError,
+    GitHubAuthorizationExpiredError,
     GitHubVerificationUnavailableError,
     IndexedFileNotFoundError,
     InsufficientPythonError,
@@ -24,6 +25,7 @@ REPO_ERROR_STATUS_CODES: dict[type[Exception], int] = {
     RepoIdMismatchError: status.HTTP_400_BAD_REQUEST,
     InsufficientPythonError: status.HTTP_400_BAD_REQUEST,
     BranchNotFoundError: status.HTTP_400_BAD_REQUEST,
+    GitHubAuthorizationExpiredError: status.HTTP_401_UNAUTHORIZED,
     GitHubVerificationUnavailableError: status.HTTP_502_BAD_GATEWAY,
     RepoEventPublishError: status.HTTP_502_BAD_GATEWAY,
     RepoPurgeError: status.HTTP_502_BAD_GATEWAY,
