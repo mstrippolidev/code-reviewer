@@ -22,6 +22,11 @@ class ApiSettings(BaseSettings):
     api_jwt_access_token_ttl_seconds: int = 3600
     api_oauth_state_ttl_seconds: int = 300
 
+    oauth_code_ttl_seconds: int = 60
+    oauth_access_token_ttl_seconds: int = 3600
+    oauth_refresh_idle_ttl_seconds: int = 7 * 24 * 3600
+    oauth_refresh_absolute_ttl_seconds: int = 30 * 24 * 3600
+
     api_token_encryption_key: str
 
     github_oauth_client_id: str
@@ -29,6 +34,7 @@ class ApiSettings(BaseSettings):
     github_oauth_redirect_uri: str
 
     frontend_base_url: str = "http://localhost:5173"
+    api_public_base_url: str = "http://localhost:8000"
 
     kafka_bootstrap_servers: str
     redis_url: str = "redis://localhost:6379/0"

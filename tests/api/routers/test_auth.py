@@ -1,12 +1,16 @@
 """
     Tests for the /api/oauth/github router against fakes: no real DB, no real GitHub calls.
 """
+from urllib.parse import parse_qs, urlsplit
+
+import pytest
 from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api.db.models.user import User
 from api.dependencies import (
+    USER_SESSION_COOKIE,
     get_current_user,
     get_db_session,
     get_frontend_base_url,
@@ -123,6 +127,47 @@ def test_login_redirects_to_the_github_authorize_url() -> None:
     assert response.headers["location"].startswith("https://github.com/login/oauth/authorize")
 
 
+def test_login_carries_a_safe_return_to_inside_the_signed_state() -> None:
+    jwt_service = JwtTokenService(secret_key=SECRET_KEY, access_token_ttl_seconds=3600, state_token_ttl_seconds=300)
+    app = _build_app(github_client=FakeGitHubOAuthClient())
+    app.dependency_overrides[get_jwt_service] = lambda: jwt_service
+    client = TestClient(app, follow_redirects=False)
+
+    response = client.get("/api/oauth/github/login", params={"return_to": "/oauth/authorize?client_id=abc"})
+
+    state = parse_qs(urlsplit(response.headers["location"]).query)["state"][0]
+    assert jwt_service.verify_oauth_state(state) == "/oauth/authorize?client_id=abc"
+
+
+@pytest.mark.parametrize(
+    "return_to",
+    ["https://evil.example.com/", "//evil.example.com/oauth/authorize?x=1", "/api/repos", "/oauth/authorize"],
+)
+def test_login_rejects_a_return_to_that_is_not_a_local_authorize_request(return_to: str) -> None:
+    client = TestClient(_build_app(github_client=FakeGitHubOAuthClient()), follow_redirects=False)
+
+    response = client.get("/api/oauth/github/login", params={"return_to": return_to})
+
+    assert response.status_code == 400
+
+
+def test_callback_resumes_the_pending_authorize_request_and_still_sets_the_cookie() -> None:
+    jwt_service = JwtTokenService(secret_key=SECRET_KEY, access_token_ttl_seconds=3600, state_token_ttl_seconds=300)
+    fake_client = FakeGitHubOAuthClient(
+        token_grant=GitHubTokenGrant(access_token="gho_token", granted_scopes="repo,read:user"),
+        profile=GitHubUserProfile(github_id=1, github_username="octocat", email=None, avatar_url=None),
+    )
+    app = _build_app(github_client=fake_client)
+    app.dependency_overrides[get_jwt_service] = lambda: jwt_service
+    state = jwt_service.issue_oauth_state(return_to="/oauth/authorize?client_id=abc&state=xyz")
+    client = TestClient(app, follow_redirects=False)
+
+    response = client.get("/api/oauth/github/callback", params={"code": "abc", "state": state})
+
+    assert response.headers["location"] == "/oauth/authorize?client_id=abc&state=xyz"
+    assert jwt_service.verify_user_session_token(response.cookies[USER_SESSION_COOKIE]) == 1
+
+
 def test_callback_rejects_a_denied_login() -> None:
     app = _build_app(github_client=FakeGitHubOAuthClient())
     client = TestClient(app, follow_redirects=False)
@@ -165,6 +210,25 @@ def test_callback_redirects_to_the_frontend_with_an_access_token() -> None:
 
     assert response.status_code == 307
     assert response.headers["location"].startswith(f"{FRONTEND_BASE_URL}/callback?token=")
+
+
+def test_callback_sets_an_httponly_session_cookie_for_the_logged_in_user() -> None:
+    jwt_service = JwtTokenService(secret_key=SECRET_KEY, access_token_ttl_seconds=3600, state_token_ttl_seconds=300)
+    fake_client = FakeGitHubOAuthClient(
+        token_grant=GitHubTokenGrant(access_token="gho_token", granted_scopes="repo,read:user"),
+        profile=GitHubUserProfile(github_id=1, github_username="octocat", email=None, avatar_url=None),
+    )
+    app = _build_app(github_client=fake_client)
+    app.dependency_overrides[get_jwt_service] = lambda: jwt_service
+    state = jwt_service.issue_oauth_state()
+    client = TestClient(app, follow_redirects=False)
+
+    response = client.get("/api/oauth/github/callback", params={"code": "abc", "state": state})
+
+    assert jwt_service.verify_user_session_token(response.cookies[USER_SESSION_COOKIE]) == 1
+    set_cookie_header = response.headers["set-cookie"].lower()
+    assert "httponly" in set_cookie_header
+    assert "samesite=lax" in set_cookie_header
 
 
 def test_callback_surfaces_a_github_token_exchange_failure_as_a_bad_gateway() -> None:

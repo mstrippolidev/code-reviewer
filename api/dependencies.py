@@ -22,14 +22,19 @@ from api.repos.access import RepoAccessChecker
 from api.repos.repository import RegisteredRepoRepository
 from api.repos.service import RepoIntegrations, RepoLifecycleService
 from api.review.review_progress_broadcaster import ReviewProgressBroadcaster
-from api.security.jwt_service import InvalidAccessTokenError, InvalidGuestSessionTokenError, JwtTokenService
+from api.security.jwt_service import (
+    InvalidAccessTokenError,
+    InvalidGuestSessionTokenError,
+    InvalidUserSessionTokenError,
+    JwtTokenService,
+)
 from api.security.token_cipher import TokenCipher
 from code_reviewer.agents.registry import AgentsContainer
 from code_reviewer.rag.indexer import LlamaIndexRagManager
 
 GUEST_SESSION_COOKIE = "guest_session_token"
+USER_SESSION_COOKIE = "user_session_token"
 
-bearer_scheme = HTTPBearer(auto_error=True)
 optional_bearer_scheme = HTTPBearer(auto_error=False)
 
 
@@ -124,32 +129,6 @@ def get_repo_lifecycle_service(
     return RepoLifecycleService(repository, integrations)
 
 
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
-    session: AsyncSession = Depends(get_db_session),
-    jwt_service: JwtTokenService = Depends(get_jwt_service),
-) -> User:
-    user_id = _verify_bearer_token(credentials.credentials, jwt_service)
-    return await _load_user_by_id(user_id, session)
-
-
-def _verify_bearer_token(token: str, jwt_service: JwtTokenService) -> int:
-    try:
-        return jwt_service.verify_access_token(token)
-    except InvalidAccessTokenError as error:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired access token",
-        ) from error
-
-
-async def _load_user_by_id(user_id: int, session: AsyncSession) -> User:
-    user = await session.get(User, user_id)
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired access token")
-    return user
-
-
 async def get_guest_session(
     request: Request,
     session: AsyncSession = Depends(get_db_session),
@@ -175,15 +154,49 @@ def _verify_guest_cookie(token: str | None, jwt_service: JwtTokenService) -> int
 
 
 def _optional_user_id(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(optional_bearer_scheme),
     jwt_service: JwtTokenService = Depends(get_jwt_service),
 ) -> int | None:
+    bearer_user_id = _user_id_from_bearer(credentials, jwt_service)
+    if bearer_user_id is not None:
+        return bearer_user_id
+    return user_id_from_session_cookie(request, jwt_service)
+
+
+def _user_id_from_bearer(credentials: HTTPAuthorizationCredentials | None, jwt_service: JwtTokenService) -> int | None:
     if credentials is None:
         return None
     try:
         return jwt_service.verify_access_token(credentials.credentials)
     except InvalidAccessTokenError:
         return None
+
+
+def user_id_from_session_cookie(request: Request, jwt_service: JwtTokenService) -> int | None:
+    token = request.cookies.get(USER_SESSION_COOKIE)
+    if token is None:
+        return None
+    try:
+        return jwt_service.verify_user_session_token(token)
+    except InvalidUserSessionTokenError:
+        return None
+
+
+async def get_current_user(
+    user_id: int | None = Depends(_optional_user_id),
+    session: AsyncSession = Depends(get_db_session),
+) -> User:
+    if user_id is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired access token")
+    return await _load_user_by_id(user_id, session)
+
+
+async def _load_user_by_id(user_id: int, session: AsyncSession) -> User:
+    user = await session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired access token")
+    return user
 
 
 def _optional_guest_session_id(
@@ -202,7 +215,7 @@ def require_user_or_guest(
     user_id: int | None = Depends(_optional_user_id),
     guest_session_id: int | None = Depends(_optional_guest_session_id),
 ) -> None:
-    """Admits either a GitHub-authenticated bearer token or a guest session cookie, for read-only review routes."""
+    """Admits a GitHub-authenticated user (bearer token or session cookie) or a guest session cookie, for read-only review routes."""
     if user_id is None and guest_session_id is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired access token")
 
@@ -245,7 +258,7 @@ async def require_review_access(
 
     Opens its own short session so an SSE route does not hold a DB connection for the whole stream.
     """
-    user_id = _optional_user_id(await optional_bearer_scheme(request), jwt_service)
+    user_id = _optional_user_id(request, await optional_bearer_scheme(request), jwt_service)
     guest_session_id = _optional_guest_session_id(request, jwt_service)
     if user_id is None and guest_session_id is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired access token")

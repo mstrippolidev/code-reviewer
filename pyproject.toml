@@ -39,6 +39,7 @@ dependencies = [
     "torch (>=2.2.0,<3.0.0)",
     "mcp[cli]>=2.3.0",
     "redis>=8.1.0",
+    "python-multipart>=0.0.32",
 ]
 
 
@@ -52,12 +53,13 @@ torch = { index = "pytorch-cpu" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m 'not db and not llm and not kafka and not bedrock and not sns'"
+addopts = "-m 'not db and not llm and not kafka and not bedrock and not sns and not redis'"
 markers = [
     "llm: exercises a real local Ollama model, slower and requires Ollama running",
     "db: exercises a real local Postgres instance, requires the code_reviewer database and schema to already exist",
     "kafka: exercises the real local Kafka cluster (kafka-dev namespace), requires the broker running",
     "bedrock: exercises the real AWS Bedrock API, requires AWS credentials and model access",
+    "redis: exercises the real local Redis (REDIS_URL), requires it running; keys use a unique test prefix and are deleted after",
     "sns: publishes a real notification to the portfolio SNS topic, which emails its subscriber; requires AWS credentials",
 ]
 

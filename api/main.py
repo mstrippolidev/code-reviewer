@@ -33,8 +33,10 @@ from api.routers.agents import router as agents_router
 from api.routers.auth import router as auth_router
 from api.routers.guest import router as guest_router
 from api.routers.health import router as health_router
+from api.routers.oauth import router as oauth_router
 from api.routers.repos import router as repos_router
 from api.routers.reviews import router as reviews_router
+from api.security.origin_guard import CookieOriginGuard
 from code_reviewer.agents.llm.factory import build_llm
 from code_reviewer.agents.registry import build_agent_roster
 from code_reviewer.rag.chunk_explainer import ChunkExplainer
@@ -161,6 +163,7 @@ def _register_routers(app: FastAPI) -> None:
     app.include_router(health_router)
     app.include_router(agents_router)
     app.include_router(auth_router)
+    app.include_router(oauth_router)
     app.include_router(repos_router)
     app.include_router(reviews_router)
     app.include_router(guest_router)
@@ -177,10 +180,15 @@ def _register_cors(app: FastAPI) -> None:
     )
 
 
+def _register_origin_guard(app: FastAPI) -> None:
+    app.add_middleware(CookieOriginGuard, allowed_origins=frozenset({get_api_settings().frontend_base_url}))
+
+
 def create_app() -> FastAPI:
     configure_logging(get_api_settings())
     app = FastAPI(title="My FastAPI Application", version="1.0.0", lifespan=lifespan)
     _register_routers(app)
+    _register_origin_guard(app)
     _register_cors(app)
     register_exception_handlers(app)
     return app

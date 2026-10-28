@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 from api.db.models.review_job import ReviewJob, ReviewJobStatus
 from api.db.models.user import User
-from api.dependencies import GUEST_SESSION_COOKIE, get_jwt_service, get_repo_access_checker
+from api.dependencies import GUEST_SESSION_COOKIE, USER_SESSION_COOKIE, get_jwt_service, get_repo_access_checker
 from api.exception_handlers import register_repo_exception_handlers
 from api.repos.errors import GitHubAuthorizationExpiredError, GitHubVerificationUnavailableError
 from api.routers.reviews import router as reviews_router
@@ -157,6 +157,15 @@ def test_user_reads_a_review_of_a_repo_github_shows_them() -> None:
     client = _client(job)
 
     assert _get(client, job, _as_user(client)).status_code == 200
+
+
+def test_user_with_only_a_session_cookie_reads_a_review_of_a_repo_github_shows_them() -> None:
+    """Verify that a web login (cookie, no Authorization header) opens reviews like a bearer token does."""
+    job = _repo_review()
+    client = _client(job)
+    client.cookies.set(USER_SESSION_COOKIE, JWT_SERVICE.issue_user_session_token(user_id=USER_ID))
+
+    assert _get(client, job).status_code == 200
 
 
 def test_user_cannot_read_a_review_of_a_repo_github_hides_from_them() -> None:

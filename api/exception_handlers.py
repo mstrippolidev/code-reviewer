@@ -3,6 +3,7 @@ import logging
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
+from api.oauth.exception_handlers import register_oauth_exception_handlers
 from api.repos.errors import (
     BranchNotFoundError,
     GitHubAuthorizationExpiredError,
@@ -56,4 +57,5 @@ def register_repo_exception_handlers(app: FastAPI) -> None:
 
 def register_exception_handlers(app: FastAPI) -> None:
     register_repo_exception_handlers(app)
+    register_oauth_exception_handlers(app)
     app.add_exception_handler(Exception, handle_unexpected_error)
