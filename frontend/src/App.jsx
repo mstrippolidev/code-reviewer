@@ -6,6 +6,7 @@ import { CallbackPage } from './pages/CallbackPage'
 import { GitHubAccessLevelPage } from './pages/GitHubAccessLevelPage'
 import { GuestReviewPage } from './pages/GuestReviewPage'
 import { LoginPage } from './pages/LoginPage'
+import { OAuthConsentPage } from './pages/OAuthConsentPage'
 import { RepoBrowserPage } from './pages/RepoBrowserPage'
 import { ReviewPage } from './pages/ReviewPage'
 import { ReviewPreviewPage } from './pages/ReviewPreviewPage'
@@ -21,6 +22,7 @@ function App() {
           <Route path="/" element={<LoginPage />} />
           <Route path="/login" element={<GitHubAccessLevelPage />} />
           <Route path="/callback" element={<CallbackPage />} />
+          <Route path="/consent" element={<OAuthConsentPage />} />
           <Route
             path="/guest"
             element={

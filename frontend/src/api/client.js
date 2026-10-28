@@ -202,6 +202,36 @@ export async function submitGuestReview(files) {
   return response.json()
 }
 
+export class OAuthConsentError extends Error {}
+
+// Consent is decided with the web session cookie alone: whoever started the MCP login may have
+// no localStorage token at all.
+export async function fetchOAuthClient(clientId) {
+  const response = await fetch(`${API_BASE_URL}/oauth/clients/${encodeURIComponent(clientId)}`)
+  if (!response.ok) {
+    throw new OAuthConsentError('This application is not registered')
+  }
+  return response.json()
+}
+
+export async function submitOAuthDecision(authorizeParams, approve) {
+  const response = await fetch(`${API_BASE_URL}/oauth/authorize/decision`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ ...authorizeParams, approve }),
+  })
+  if (response.status === 401) {
+    throw new UnauthorizedError('Session expired')
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}))
+    throw new OAuthConsentError(body.error_description ?? `Request failed with status ${response.status}`)
+  }
+  const { redirect_to: redirectTo } = await response.json()
+  return redirectTo
+}
+
 export async function openReviewStream(token, reviewId, signal) {
   const response = await fetch(`${API_BASE_URL}/api/reviews/${reviewId}/stream`, {
     headers: authHeaders(token),
