@@ -53,8 +53,7 @@ class JwtTokenService:
         Raises:
             InvalidAccessTokenError: If the token is malformed, expired, or not an access token.
         """
-        payload = self._decode(token, expected_purpose=ACCESS_TOKEN_PURPOSE, error=InvalidAccessTokenError)
-        return int(payload["sub"])
+        return self._decode_subject_id(token, expected_purpose=ACCESS_TOKEN_PURPOSE, error=InvalidAccessTokenError)
 
     def issue_guest_session_token(self, *, guest_session_id: int) -> str:
         return self._encode(
@@ -69,8 +68,9 @@ class JwtTokenService:
         Raises:
             InvalidGuestSessionTokenError: If the token is malformed, expired, or not a guest session token.
         """
-        payload = self._decode(token, expected_purpose=GUEST_SESSION_PURPOSE, error=InvalidGuestSessionTokenError)
-        return int(payload["sub"])
+        return self._decode_subject_id(
+            token, expected_purpose=GUEST_SESSION_PURPOSE, error=InvalidGuestSessionTokenError
+        )
 
     def issue_user_session_token(self, *, user_id: int) -> str:
         return self._encode(
@@ -85,29 +85,48 @@ class JwtTokenService:
         Raises:
             InvalidUserSessionTokenError: If the token is malformed, expired, or not a user session token.
         """
-        payload = self._decode(token, expected_purpose=USER_SESSION_PURPOSE, error=InvalidUserSessionTokenError)
-        return int(payload["sub"])
+        return self._decode_subject_id(token, expected_purpose=USER_SESSION_PURPOSE, error=InvalidUserSessionTokenError)
 
-    def issue_oauth_state(self) -> str:
-        return self._encode(
+    def issue_oauth_state(self, return_to: str | None = None) -> str:
+        payload = self._base_payload(
             subject=str(uuid.uuid4()),
             purpose=OAUTH_STATE_PURPOSE,
             ttl_seconds=self._state_token_ttl_seconds,
         )
+        if return_to is not None:
+            payload["return_to"] = return_to
+        return self._sign(payload)
 
-    def verify_oauth_state(self, state: str) -> None:
-        """Raises InvalidOAuthStateError if the state is malformed, expired, or not an OAuth state token."""
-        self._decode(state, expected_purpose=OAUTH_STATE_PURPOSE, error=InvalidOAuthStateError)
+    def verify_oauth_state(self, state: str) -> str | None:
+        """Returns the return_to path the state was issued with, if any.
+
+        Raises:
+            InvalidOAuthStateError: If the state is malformed, expired, or not an OAuth state token.
+        """
+        payload = self._decode(state, expected_purpose=OAUTH_STATE_PURPOSE, error=InvalidOAuthStateError)
+        return payload.get("return_to")
 
     def _encode(self, *, subject: str, purpose: str, ttl_seconds: int) -> str:
+        return self._sign(self._base_payload(subject=subject, purpose=purpose, ttl_seconds=ttl_seconds))
+
+    def _base_payload(self, *, subject: str, purpose: str, ttl_seconds: int) -> dict:
         issued_at = int(time.time())
-        payload = {
+        return {
             "sub": subject,
             "purpose": purpose,
             "iat": issued_at,
             "exp": issued_at + ttl_seconds,
         }
+
+    def _sign(self, payload: dict) -> str:
         return jwt.encode(payload, self._secret_key, algorithm=self._ALGORITHM)
+
+    def _decode_subject_id(self, token: str, *, expected_purpose: str, error: type[Exception]) -> int:
+        payload = self._decode(token, expected_purpose=expected_purpose, error=error)
+        try:
+            return int(payload["sub"])
+        except (KeyError, TypeError, ValueError) as subject_error:
+            raise error("Token subject is not a valid id") from subject_error
 
     def _decode(self, token: str, *, expected_purpose: str, error: type[Exception]) -> dict:
         try:

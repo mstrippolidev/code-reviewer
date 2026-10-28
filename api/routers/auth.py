@@ -5,8 +5,10 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.config.settings import get_api_settings
 from api.db.models.user import User
 from api.dependencies import (
+    USER_SESSION_COOKIE,
     get_current_user,
     get_db_session,
     get_frontend_base_url,
@@ -23,6 +25,8 @@ from api.integrations.github import (
     GitHubRepoFetchError,
     GitHubTokenGrant,
 )
+from api.oauth.errors import InvalidReturnToError
+from api.oauth.return_to import require_safe_return_to
 from api.schemas.auth import UserRead
 from api.schemas.github import GitHubRepo, GitHubUserProfile
 from api.security.jwt_service import InvalidOAuthStateError, JwtTokenService
@@ -43,10 +47,11 @@ class AuthenticatedGitHubIdentity:
 @router.get("/login")
 async def login(
     access_level: GitHubRepoAccessLevel = Query(default=GitHubRepoAccessLevel.ALL),
+    return_to: str | None = Query(default=None),
     github_oauth_client: GitHubOAuthClient = Depends(get_github_oauth_client),
     jwt_service: JwtTokenService = Depends(get_jwt_service),
 ) -> RedirectResponse:
-    state = jwt_service.issue_oauth_state()
+    state = jwt_service.issue_oauth_state(return_to=_validated_return_to(return_to))
     authorize_url = github_oauth_client.build_authorize_url(state=state, access_level=access_level)
     return RedirectResponse(authorize_url)
 
@@ -63,7 +68,7 @@ async def callback(
     frontend_base_url: str = Depends(get_frontend_base_url),
 ) -> RedirectResponse:
     _reject_denied_or_incomplete_callback(code, state, error)
-    _verify_state(state, jwt_service)
+    return_to = _verify_state(state, jwt_service)
 
     token_grant = await _fetch_github_token_grant(code, github_oauth_client)
     profile = await _fetch_github_profile(token_grant.access_token, github_oauth_client)
@@ -75,8 +80,9 @@ async def callback(
 
     user = await _create_or_update_user_from_github_login(identity, session)
     access_token = jwt_service.issue_access_token(user_id=user.id)
-    redirect_url = f"{frontend_base_url}/callback?token={access_token}"
-    return RedirectResponse(redirect_url)
+    response = RedirectResponse(return_to or f"{frontend_base_url}/callback?token={access_token}")
+    _set_user_session_cookie(response, user.id, jwt_service)
+    return response
 
 
 @router.get("/me")
@@ -118,6 +124,18 @@ async def list_repo_branches(
         ) from error
 
 
+def _set_user_session_cookie(response: RedirectResponse, user_id: int, jwt_service: JwtTokenService) -> None:
+    settings = get_api_settings()
+    response.set_cookie(
+        key=USER_SESSION_COOKIE,
+        value=jwt_service.issue_user_session_token(user_id=user_id),
+        max_age=settings.api_jwt_access_token_ttl_seconds,
+        httponly=True,
+        samesite="lax",
+        secure=settings.api_environment != "local",
+    )
+
+
 def _reject_denied_or_incomplete_callback(code: str | None, state: str | None, error: str | None) -> None:
     if error is not None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="GitHub login was not authorized")
@@ -125,9 +143,18 @@ def _reject_denied_or_incomplete_callback(code: str | None, state: str | None, e
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing OAuth code or state")
 
 
-def _verify_state(state: str, jwt_service: JwtTokenService) -> None:
+def _validated_return_to(return_to: str | None) -> str | None:
+    if return_to is None:
+        return None
     try:
-        jwt_service.verify_oauth_state(state)
+        return require_safe_return_to(return_to)
+    except InvalidReturnToError as error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
+
+
+def _verify_state(state: str, jwt_service: JwtTokenService) -> str | None:
+    try:
+        return jwt_service.verify_oauth_state(state)
     except InvalidOAuthStateError as error:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
