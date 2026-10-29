@@ -21,6 +21,8 @@ from api.dependencies import (
 from api.routers.guest import router as guest_router
 from api.schemas.reviews import ReviewRequestedMessage
 from api.security.jwt_service import JwtTokenService
+from api.security.rate_limit_dependencies import get_rate_limiter
+from tests.api.fake_rate_limit import AllowAllRateLimiter
 
 _GUEST_SESSION_ID = 7
 
@@ -57,6 +59,9 @@ class FakeAsyncSession:
     async def get(self, model: type, row_id: int) -> object | None:
         return GuestSession(id=row_id) if model is GuestSession and row_id == _GUEST_SESSION_ID else None
 
+    async def scalar(self, _statement) -> None:
+        return None
+
 
 @pytest.fixture
 def jwt_service() -> JwtTokenService:
@@ -88,6 +93,7 @@ def client(jwt_service: JwtTokenService, producer: FakeReviewProducer, session: 
     app.dependency_overrides[get_db_session] = _fake_db_session
     app.dependency_overrides[get_kafka_producer] = lambda: producer
     app.dependency_overrides[get_jwt_service] = lambda: jwt_service
+    app.dependency_overrides[get_rate_limiter] = lambda: AllowAllRateLimiter()
     return TestClient(app)
 
 

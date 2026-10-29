@@ -31,13 +31,18 @@ from api.schemas.reviews import (
     ReviewStatusMessage,
     ReviewSubmissionRequest,
 )
+from api.security.rate_limit_dependencies import limit_review_submissions
 
 router = APIRouter(prefix="/api", tags=["Reviews"])
 
 _TERMINAL_JOB_STATUSES = frozenset({ReviewJobStatus.COMPLETED, ReviewJobStatus.FAILED})
 
 
-@router.post("/repos/{repo_id}/review", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/repos/{repo_id}/review",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(limit_review_submissions)],
+)
 async def submit_review(
     request: ReviewSubmissionRequest,
     repo: RegisteredRepo = Depends(require_github_repo_access),

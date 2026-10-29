@@ -27,6 +27,7 @@ from api.schemas.repos import (
     RepoStatusProgressMessage,
     SwitchBranchRequest,
 )
+from api.security.rate_limit_dependencies import limit_repo_registrations
 
 router = APIRouter(prefix="/api/repos", tags=["Repos"])
 
@@ -60,7 +61,7 @@ async def get_repo_by_name(
     )
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED, dependencies=[Depends(limit_repo_registrations)])
 async def register_repo(
     request: RegisterRepoRequest,
     current_user: User = Depends(get_current_user),

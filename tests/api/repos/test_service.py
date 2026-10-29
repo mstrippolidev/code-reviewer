@@ -12,16 +12,29 @@ from pydantic import BaseModel
 from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 from api.db.models.user import User
 from api.integrations.github import GitHubRepo
-from api.repos.errors import NotRepoOwnerError, RepoIdMismatchError, RepoPurgeError
+from api.repos.errors import NotRepoOwnerError, RepoIdMismatchError, RepoPurgeError, TooManyIndexJobsError
 from api.repos.service import RepoIntegrations, RepoLifecycleService
 from api.schemas.repos import RegisterRepoRequest
 from code_reviewer.rag.errors import VectorStoreDeletionError
 
 
 class FakeRepoStore:
-    def __init__(self, calls: list[tuple[str, object]], registered: RegisteredRepo | None = None) -> None:
+    def __init__(
+        self,
+        calls: list[tuple[str, object]],
+        registered: RegisteredRepo | None = None,
+        unfinished_indexings: int = 0,
+        has_failures: bool = True,
+    ) -> None:
         self._calls = calls
         self._registered = registered
+        self._unfinished_indexings = unfinished_indexings
+        self._has_failures = has_failures
+        self.counted: list[tuple[int, int]] = []
+
+    async def count_active_indexing(self, user_id: int, excluding_repo_id: int) -> int:
+        self.counted.append((user_id, excluding_repo_id))
+        return self._unfinished_indexings
 
     async def is_registered(self, repo_id: int) -> bool:
         return self._registered is not None
@@ -42,7 +55,7 @@ class FakeRepoStore:
         self._calls.append(("remove", repo.repo_id))
 
     async def has_failed_files(self, repo_id: int) -> bool:
-        return True
+        return self._has_failures
 
     async def delete_indexed_files(self, repo_id: int) -> None:
         self._calls.append(("delete_indexed_files", repo_id))
@@ -141,6 +154,7 @@ def _build_service(
     producer: FakeProducer | None = None,
     delete_error: Exception | None = None,
     registered: RegisteredRepo | None = None,
+    store: FakeRepoStore | None = None,
 ) -> RepoLifecycleService:
     recorded_calls = [] if calls is None else calls
     integrations = RepoIntegrations(
@@ -149,10 +163,11 @@ def _build_service(
         kafka_producer=producer or FakeProducer(),
         rag_manager=FakeVectorStore(recorded_calls, delete_error),
     )
-    return RepoLifecycleService(FakeRepoStore(recorded_calls, registered), integrations)
+    return RepoLifecycleService(store or FakeRepoStore(recorded_calls, registered), integrations, MAX_UNFINISHED_INDEXINGS)
 
 
-REQUEST = RegisterRepoRequest(repo_id=10, full_name="octocat/hello-world")
+MAX_UNFINISHED_INDEXINGS = 3
+REQUEST =RegisterRepoRequest(repo_id=10, full_name="octocat/hello-world")
 
 
 @pytest.mark.asyncio
@@ -434,3 +449,88 @@ async def test_switch_branch_by_another_user_does_not_ask_github_about_the_branc
         await service.switch_branch(_make_registered_repo(registered_by_user_id=1), "dev", _make_user(user_id=2))
 
     assert github_client.branch_lookups == []
+
+
+INDEXING_STARTERS = [
+    lambda service, repo, user: service.register(REQUEST, user),
+    lambda service, repo, user: service.resume(repo, user),
+    lambda service, repo, user: service.retry_failed_files(repo, user),
+    lambda service, repo, user: service.switch_branch(repo, "dev", user),
+]
+INDEXING_STARTER_IDS = ["register_new", "resume", "retry", "switch_branch"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("start", INDEXING_STARTERS, ids=INDEXING_STARTER_IDS)
+async def test_starting_indexing_at_the_unfinished_limit_is_refused(start) -> None:
+    """Verify that every path that starts indexing stops once the owner already has the maximum unfinished."""
+    producer = FakeProducer()
+    store = FakeRepoStore([], unfinished_indexings=MAX_UNFINISHED_INDEXINGS)
+    service = _build_service(producer=producer, store=store)
+
+    with pytest.raises(TooManyIndexJobsError, match=f"already have {MAX_UNFINISHED_INDEXINGS} repos"):
+        await start(service, _make_registered_repo(status=RepoIndexStatus.PAUSED), _make_user())
+
+    assert producer.attempts == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("start", INDEXING_STARTERS, ids=INDEXING_STARTER_IDS)
+async def test_starting_indexing_below_the_unfinished_limit_is_allowed(start) -> None:
+    """Verify that one slot left is enough."""
+    producer = FakeProducer()
+    store = FakeRepoStore([], unfinished_indexings=MAX_UNFINISHED_INDEXINGS - 1)
+    service = _build_service(producer=producer, store=store)
+
+    await start(service, _make_registered_repo(status=RepoIndexStatus.PAUSED), _make_user())
+
+    assert producer.attempts >= 1
+
+
+@pytest.mark.asyncio
+async def test_a_failed_repo_restarted_by_its_owner_is_refused_at_the_unfinished_limit() -> None:
+    """Verify that the owner restart of a failed repo counts like any other start."""
+    failed = _make_registered_repo(status=RepoIndexStatus.FAILED)
+    store = FakeRepoStore([], registered=failed, unfinished_indexings=MAX_UNFINISHED_INDEXINGS)
+    service = _build_service(store=store)
+
+    with pytest.raises(TooManyIndexJobsError):
+        await service.register(REQUEST, _make_user())
+
+    assert failed.status == RepoIndexStatus.FAILED
+
+
+@pytest.mark.asyncio
+async def test_linking_a_second_user_is_never_blocked_by_the_unfinished_limit() -> None:
+    """Verify that adding a link starts no indexing, so the limit does not apply to it."""
+    calls: list[tuple[str, object]] = []
+    healthy = _make_registered_repo(status=RepoIndexStatus.COMPLETED)
+    store = FakeRepoStore(calls, registered=healthy, unfinished_indexings=MAX_UNFINISHED_INDEXINGS)
+    service = _build_service(store=store)
+
+    await service.register(REQUEST, _make_user(user_id=2))
+
+    assert calls == [("add_link", (2, 10))]
+
+
+@pytest.mark.asyncio
+async def test_retry_with_no_failed_files_is_not_blocked_by_the_unfinished_limit() -> None:
+    """Verify that a retry with nothing to retry stays the harmless no-op it already was."""
+    producer = FakeProducer()
+    store = FakeRepoStore([], unfinished_indexings=MAX_UNFINISHED_INDEXINGS, has_failures=False)
+    service = _build_service(producer=producer, store=store)
+
+    await service.retry_failed_files(_make_registered_repo(), _make_user())
+
+    assert producer.attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_the_count_is_taken_for_the_acting_user_and_excludes_the_repo_itself() -> None:
+    """Verify that a repo already indexing is not counted against its own restart."""
+    store = FakeRepoStore([])
+    service = _build_service(store=store)
+
+    await service.resume(_make_registered_repo(repo_id=10, registered_by_user_id=7), _make_user(user_id=7))
+
+    assert store.counted == [(7, 10)]

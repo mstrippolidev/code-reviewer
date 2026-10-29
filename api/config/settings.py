@@ -42,6 +42,11 @@ class ApiSettings(BaseSettings):
     max_concurrent_file_indexing: int = 4
     max_concurrent_file_dispatch: int = 8
 
+    max_repo_registrations_per_minute: int = 5
+    max_review_submissions_per_minute: int = 5
+    max_guest_review_submissions_per_minute: int = 3
+    max_unfinished_repo_indexings_per_user: int = 3
+
     @property
     def async_database_url(self) -> URL:
         return self._build_database_url("postgresql+asyncpg")

@@ -18,6 +18,7 @@ from api.indexing.producer import PublishError, RepoIndexProducer
 from api.review.topics import REVIEW_REQUESTED
 from api.schemas.reviews import GuestReviewSubmissionRequest, ReviewJobRead, ReviewRequestedMessage
 from api.security.jwt_service import JwtTokenService
+from api.security.rate_limit_dependencies import limit_guest_review_submissions
 
 router = APIRouter(prefix="/api/guest", tags=["Guest"])
 
@@ -43,7 +44,7 @@ async def start_guest_session(
     )
 
 
-@router.post("/review", status_code=status.HTTP_202_ACCEPTED)
+@router.post("/review", status_code=status.HTTP_202_ACCEPTED, dependencies=[Depends(limit_guest_review_submissions)])
 async def submit_guest_review(
     request: GuestReviewSubmissionRequest,
     guest_session: GuestSession = Depends(get_guest_session),
