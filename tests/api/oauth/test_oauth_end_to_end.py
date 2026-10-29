@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 import pytest
 import pytest_asyncio
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from redis.asyncio import Redis
 from sqlalchemy import delete, select
 
@@ -19,7 +19,7 @@ from api.db.engine import DatabaseEngine
 from api.db.models.oauth_client import OAuthClient
 from api.db.models.oauth_token import OAuthToken
 from api.db.models.user import User
-from api.dependencies import USER_SESSION_COOKIE, get_jwt_service
+from api.dependencies import USER_SESSION_COOKIE, get_current_user, get_jwt_service
 from api.oauth.exception_handlers import register_oauth_exception_handlers
 from api.routers.oauth import router as oauth_router
 
@@ -38,6 +38,11 @@ async def app() -> AsyncIterator[FastAPI]:
     application = FastAPI()
     application.include_router(oauth_router)
     register_oauth_exception_handlers(application)
+
+    @application.get("/whoami")
+    async def whoami(user: User = Depends(get_current_user)) -> dict[str, int]:
+        return {"user_id": user.id}
+
     application.state.database_engine = DatabaseEngine(settings.async_database_url)
     application.state.redis = Redis.from_url(settings.redis_url)
 
@@ -135,3 +140,50 @@ async def test_register_consent_exchange_refresh_and_reuse_detection(client: htt
         rows = (await session.scalars(select(OAuthToken).where(OAuthToken.client_id == client_id))).all()
     assert len(rows) == 2
     assert all(token_row.revoked_at is not None for token_row in rows)
+
+
+async def _issue_tokens(client: httpx.AsyncClient) -> dict[str, str]:
+    registration = await client.post("/oauth/register", json={"client_name": CLIENT_NAME, "redirect_uris": [REDIRECT_URI]})
+    client_id = registration.json()["client_id"]
+    params = _authorize_params(client_id)
+    decision = await client.post("/oauth/authorize/decision", json=params | {"approve": True})
+    code = _query(decision.json()["redirect_to"])["code"][0]
+    issued = await _token(
+        client,
+        grant_type="authorization_code",
+        client_id=client_id,
+        code=code,
+        redirect_uri=REDIRECT_URI,
+        code_verifier=VERIFIER,
+    )
+    return issued.json()
+
+
+async def _stored_user_id(app: FastAPI) -> int:
+    async with app.state.database_engine.new_session() as session:
+        return await session.scalar(select(User.id).where(User.github_id == USER_GITHUB_ID))
+
+
+def _cookieless_client(app: FastAPI) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+
+
+async def test_an_issued_access_token_authenticates_a_protected_route_until_it_is_revoked(
+    client: httpx.AsyncClient, app: FastAPI
+) -> None:
+    tokens = await _issue_tokens(client)
+    user_id = await _stored_user_id(app)
+    bearer = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    async with _cookieless_client(app) as anonymous:
+        assert (await anonymous.get("/whoami")).status_code == 401
+
+        authorized = await anonymous.get("/whoami", headers=bearer)
+        assert authorized.status_code == 200
+        assert authorized.json() == {"user_id": user_id}
+
+        refresh_as_bearer = {"Authorization": f"Bearer {tokens['refresh_token']}"}
+        assert (await anonymous.get("/whoami", headers=refresh_as_bearer)).status_code == 401
+
+        assert (await anonymous.post("/oauth/revoke", data={"token": tokens["access_token"]})).status_code == 200
+        assert (await anonymous.get("/whoami", headers=bearer)).status_code == 401

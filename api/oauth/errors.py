@@ -5,6 +5,10 @@ class InvalidGrantError(Exception):
     """
 
 
+class InvalidOAuthAccessTokenError(Exception):
+    """Raised when a bearer value is not a live OAuth access token: unknown, revoked or expired."""
+
+
 class UnknownClientError(Exception):
     """Raised when a client_id is not registered."""
 
