@@ -1,10 +1,7 @@
-import httpx
-
+from mcp_server.api_client import build_api_client
 from mcp_server.app import mcp
-from mcp_server.config import get_mcp_settings
+from mcp_server.custom_caller_auth import CallerBearerAuth
 from mcp_server.repo_status import HttpRepoStatusSource, RepoStatusTools
-
-API_TIMEOUT_SECONDS = 10.0
 
 
 def ping(message: str) -> str:
@@ -19,18 +16,9 @@ def ping(message: str) -> str:
     return f"pong: {message}"
 
 
-def _build_api_client() -> httpx.AsyncClient:
-    settings = get_mcp_settings()
-    return httpx.AsyncClient(
-        base_url=settings.mcp_api_base_url,
-        headers={"Authorization": f"Bearer {settings.mcp_api_access_token}"},
-        timeout=API_TIMEOUT_SECONDS,
-    )
-
-
 mcp.add_tool(ping)
-mcp.add_tool(RepoStatusTools(HttpRepoStatusSource(_build_api_client())).get_repo_status)
+mcp.add_tool(RepoStatusTools(HttpRepoStatusSource(build_api_client(auth=CallerBearerAuth()))).get_repo_status)
 
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http")
+    mcp.run(transport="streamable-http", port=8001)
