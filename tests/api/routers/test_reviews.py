@@ -22,6 +22,8 @@ from api.dependencies import (
 )
 from api.routers.reviews import router as reviews_router
 from api.schemas.reviews import ReviewRequestedMessage
+from api.security.rate_limit_dependencies import get_rate_limiter
+from tests.api.fake_rate_limit import AllowAllRateLimiter
 from tests.api.fake_repo_access import FakeRepoAccessChecker
 
 
@@ -147,6 +149,7 @@ def _build_app(*, session: FakeAsyncSession, kafka_producer: FakeReviewProducer 
     app.dependency_overrides[get_current_user] = lambda: _make_user()
     app.dependency_overrides[require_review_access] = lambda: session.review_job
     app.dependency_overrides[get_repo_access_checker] = lambda: FakeRepoAccessChecker()
+    app.dependency_overrides[get_rate_limiter] = lambda: AllowAllRateLimiter()
     return app
 
 

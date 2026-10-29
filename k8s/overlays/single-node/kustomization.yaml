@@ -98,6 +98,9 @@ patches:
       - op: replace
         path: /data/GITHUB_OAUTH_REDIRECT_URI
         value: "https://codereview.mstrippolidev.com/api/oauth/github/callback"
+      - op: add
+        path: /data/API_PUBLIC_BASE_URL
+        value: "https://codereview.mstrippolidev.com"
       - op: remove
         path: /data/GITHUB_OAUTH_CLIENT_ID
       - op: add

@@ -26,8 +26,10 @@ from api.integrations.github import GitHubCommitFetchError, GitHubRepo, GitHubRe
 from api.routers.repos import router as repos_router
 from api.schemas.indexing import RepoRegisteredMessage
 from api.schemas.repos import RepoStatusProgressMessage
+from api.security.rate_limit_dependencies import get_rate_limiter
 from api.security.token_cipher import TokenCipher
 from code_reviewer.rag.errors import VectorStoreDeletionError
+from tests.api.fake_rate_limit import AllowAllRateLimiter
 from tests.api.fake_repo_access import FakeRepoAccessChecker
 
 
@@ -119,7 +121,9 @@ class FakeAsyncSession:
             return [row for row in rows if row.repo_id in linked_repo_ids]
         return [row for row in rows if row.repo_id == value]
 
-    async def scalar(self, statement) -> RegisteredRepo | IndexedFile | None:
+    async def scalar(self, statement) -> RegisteredRepo | IndexedFile | int | None:
+        if statement.column_descriptions[0]["name"] == "count":
+            return 0
         rows = self._rows_for(statement)
         return rows[0] if rows else None
 
@@ -238,6 +242,7 @@ def _build_app(
     app.dependency_overrides[get_kafka_producer] = lambda: kafka_producer or FakeRepoIndexProducer()
     app.dependency_overrides[get_rag_manager] = lambda: rag_manager or FakeRagManager()
     app.dependency_overrides[get_repo_access_checker] = lambda: access_checker or FakeRepoAccessChecker()
+    app.dependency_overrides[get_rate_limiter] = lambda: AllowAllRateLimiter()
     if current_user is not None:
         app.dependency_overrides[get_current_user] = lambda: current_user
     return app

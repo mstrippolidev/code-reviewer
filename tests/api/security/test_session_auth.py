@@ -26,6 +26,9 @@ class FakeSession:
     async def get(self, _model, user_id: int) -> User | None:
         return self._users.get(user_id)
 
+    async def scalar(self, _statement) -> None:
+        return None
+
 
 def _user(user_id: int) -> User:
     return User(id=user_id, github_id=user_id, github_username=f"user{user_id}", encrypted_github_token="x")

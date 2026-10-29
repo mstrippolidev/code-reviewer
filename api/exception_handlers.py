@@ -16,7 +16,9 @@ from api.repos.errors import (
     RepoIdMismatchError,
     RepoNotFoundError,
     RepoPurgeError,
+    TooManyIndexJobsError,
 )
+from api.security.rate_limit import RateLimitExceededError
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,7 @@ REPO_ERROR_STATUS_CODES: dict[type[Exception], int] = {
     GitHubVerificationUnavailableError: status.HTTP_502_BAD_GATEWAY,
     RepoEventPublishError: status.HTTP_502_BAD_GATEWAY,
     RepoPurgeError: status.HTTP_502_BAD_GATEWAY,
+    TooManyIndexJobsError: status.HTTP_429_TOO_MANY_REQUESTS,
 }
 
 
@@ -45,6 +48,14 @@ class ErrorMessageHandler:
         return JSONResponse(status_code=self._status_code, content={"detail": str(error)})
 
 
+async def handle_rate_limit_exceeded(request: Request, error: RateLimitExceededError) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content={"detail": str(error)},
+        headers={"Retry-After": str(error.retry_after_seconds)},
+    )
+
+
 async def handle_unexpected_error(request: Request, error: Exception) -> JSONResponse:
     logger.error("Unhandled error on %s %s", request.method, request.url.path, exc_info=error)
     return JSONResponse(status_code=500, content={"detail": "An unexpected error occurred"})
@@ -56,6 +67,7 @@ def register_repo_exception_handlers(app: FastAPI) -> None:
 
 
 def register_exception_handlers(app: FastAPI) -> None:
+    app.add_exception_handler(RateLimitExceededError, handle_rate_limit_exceeded)
     register_repo_exception_handlers(app)
     register_oauth_exception_handlers(app)
     app.add_exception_handler(Exception, handle_unexpected_error)

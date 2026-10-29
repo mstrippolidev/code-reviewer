@@ -18,6 +18,9 @@ from api.db.models.review_job import ReviewJob
 from api.db.models.user import User
 from api.indexing.producer import RepoIndexProducer
 from api.integrations.github import GitHubOAuthClient, GitHubOAuthConfig
+from api.oauth.access_token_verifier import OAuthAccessTokenVerifier
+from api.oauth.errors import InvalidOAuthAccessTokenError
+from api.oauth.token_repository import OAuthTokenRepository
 from api.repos.access import RepoAccessChecker
 from api.repos.repository import RegisteredRepoRepository
 from api.repos.service import RepoIntegrations, RepoLifecycleService
@@ -126,7 +129,7 @@ def get_repo_lifecycle_service(
     rag_manager: LlamaIndexRagManager = Depends(get_rag_manager),
 ) -> RepoLifecycleService:
     integrations = RepoIntegrations(github_oauth_client, token_cipher, kafka_producer, rag_manager)
-    return RepoLifecycleService(repository, integrations)
+    return RepoLifecycleService(repository, integrations, get_api_settings().max_unfinished_repo_indexings_per_user)
 
 
 async def get_guest_session(
@@ -153,24 +156,58 @@ def _verify_guest_cookie(token: str | None, jwt_service: JwtTokenService) -> int
         ) from error
 
 
-def _optional_user_id(
+class UserIdResolver:
+    """Finds the caller's user id: bearer login JWT, then bearer OAuth access token, then session cookie."""
+
+    def __init__(self, jwt_service: JwtTokenService, oauth_token_verifier: OAuthAccessTokenVerifier) -> None:
+        self._jwt_service = jwt_service
+        self._oauth_token_verifier = oauth_token_verifier
+
+    async def resolve(self, request: Request, credentials: HTTPAuthorizationCredentials | None) -> int | None:
+        """Returns None when no credential identifies a user; a bad bearer falls through to the cookie."""
+        bearer_user_id = await self._user_id_from_bearer(credentials)
+        if bearer_user_id is not None:
+            return bearer_user_id
+        return user_id_from_session_cookie(request, self._jwt_service)
+
+    async def _user_id_from_bearer(self, credentials: HTTPAuthorizationCredentials | None) -> int | None:
+        if credentials is None:
+            return None
+        jwt_user_id = self._user_id_from_login_jwt(credentials.credentials)
+        if jwt_user_id is not None:
+            return jwt_user_id
+        return await self._user_id_from_oauth_token(credentials.credentials)
+
+    def _user_id_from_login_jwt(self, token: str) -> int | None:
+        try:
+            return self._jwt_service.verify_access_token(token)
+        except InvalidAccessTokenError:
+            return None
+
+    async def _user_id_from_oauth_token(self, token: str) -> int | None:
+        try:
+            return await self._oauth_token_verifier.verify(token)
+        except InvalidOAuthAccessTokenError:
+            return None
+
+
+def build_user_id_resolver(jwt_service: JwtTokenService, session: AsyncSession) -> UserIdResolver:
+    return UserIdResolver(jwt_service, OAuthAccessTokenVerifier(OAuthTokenRepository(session)))
+
+
+def get_user_id_resolver(
+    jwt_service: JwtTokenService = Depends(get_jwt_service),
+    session: AsyncSession = Depends(get_db_session),
+) -> UserIdResolver:
+    return build_user_id_resolver(jwt_service, session)
+
+
+async def _optional_user_id(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(optional_bearer_scheme),
-    jwt_service: JwtTokenService = Depends(get_jwt_service),
+    resolver: UserIdResolver = Depends(get_user_id_resolver),
 ) -> int | None:
-    bearer_user_id = _user_id_from_bearer(credentials, jwt_service)
-    if bearer_user_id is not None:
-        return bearer_user_id
-    return user_id_from_session_cookie(request, jwt_service)
-
-
-def _user_id_from_bearer(credentials: HTTPAuthorizationCredentials | None, jwt_service: JwtTokenService) -> int | None:
-    if credentials is None:
-        return None
-    try:
-        return jwt_service.verify_access_token(credentials.credentials)
-    except InvalidAccessTokenError:
-        return None
+    return await resolver.resolve(request, credentials)
 
 
 def user_id_from_session_cookie(request: Request, jwt_service: JwtTokenService) -> int | None:
@@ -258,12 +295,13 @@ async def require_review_access(
 
     Opens its own short session so an SSE route does not hold a DB connection for the whole stream.
     """
-    user_id = _optional_user_id(request, await optional_bearer_scheme(request), jwt_service)
+    credentials = await optional_bearer_scheme(request)
     guest_session_id = _optional_guest_session_id(request, jwt_service)
-    if user_id is None and guest_session_id is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired access token")
     not_found = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Review {review_id} was not found")
     async with short_lived_db_session(request) as session:
+        user_id = await build_user_id_resolver(jwt_service, session).resolve(request, credentials)
+        if user_id is None and guest_session_id is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired access token")
         job = await session.scalar(select(ReviewJob).where(ReviewJob.review_id == review_id))
         if job is None:
             raise not_found

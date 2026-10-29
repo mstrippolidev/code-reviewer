@@ -3,7 +3,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.models.indexed_file import IndexedFile, IndexedFileStatus
-from api.db.models.registered_repo import RegisteredRepo
+from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 from api.db.models.user_repo import UserRepo
 from api.repos.errors import IndexedFileNotFoundError, RepoAlreadyRegisteredError, RepoNotFoundError
 
@@ -66,6 +66,15 @@ class RegisteredRepoRepository:
             .limit(1)
         )
         return failed_file_id is not None
+
+    async def count_active_indexing(self, user_id: int, excluding_repo_id: int) -> int:
+        """How many repos `user_id` owns that are queued or being indexed, not counting `excluding_repo_id`."""
+        statement = select(func.count(RegisteredRepo.id)).where(
+            RegisteredRepo.registered_by_user_id == user_id,
+            RegisteredRepo.repo_id != excluding_repo_id,
+            RegisteredRepo.status.in_([RepoIndexStatus.PENDING, RepoIndexStatus.INDEXING]),
+        )
+        return await self._session.scalar(statement)
 
     async def is_registered(self, repo_id: int) -> bool:
         registered_id = await self._session.scalar(

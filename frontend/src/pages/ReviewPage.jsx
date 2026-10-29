@@ -1,5 +1,4 @@
 import { useParams } from 'react-router-dom'
-import { TOKEN_STORAGE_KEY } from '../api/client'
 import { ReviewDashboard } from '../components/ReviewDashboard'
 import { useAgentCatalog } from '../hooks/useAgentCatalog'
 import { useReviewStream } from '../hooks/useReviewStream'
@@ -8,14 +7,12 @@ import { buildFileReports } from '../utils/buildFileReports'
 
 export function ReviewPage() {
   const { reviewId } = useParams()
-  const token = localStorage.getItem(TOKEN_STORAGE_KEY)
   const handleUnauthorized = useUnauthorizedHandler()
   const { job, reviewedFiles, failedFiles, agentProgress, connectionStatus } = useReviewStream(
-    token,
     reviewId,
     handleUnauthorized
   )
-  const catalog = useAgentCatalog(token)
+  const catalog = useAgentCatalog()
 
   if (connectionStatus === 'error') {
     return <p className="page centered note error">Could not connect to this review.</p>

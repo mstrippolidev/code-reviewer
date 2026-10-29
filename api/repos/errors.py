@@ -24,6 +24,15 @@ class NotRepoOwnerError(Exception):
         super().__init__("Only the user who registered this repo can do that")
 
 
+class TooManyIndexJobsError(Exception):
+    """Raised when a user already has as many repos being indexed as they are allowed at once."""
+
+    def __init__(self, limit: int) -> None:
+        super().__init__(
+            f"You already have {limit} repos being indexed. Wait for one to finish before starting another."
+        )
+
+
 class GitHubAuthorizationExpiredError(Exception):
     """Raised when GitHub no longer accepts the user's token, so they must log in again."""
 

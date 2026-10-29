@@ -10,6 +10,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from api.db.models.oauth_token import OAuthToken
 from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 from api.db.models.review_job import ReviewJob, ReviewJobStatus
 from api.db.models.user import User
@@ -37,6 +38,8 @@ class FakeSession:
 
     async def scalar(self, statement) -> ReviewJob | RegisteredRepo | None:
         entity = statement.column_descriptions[0]["entity"]
+        if entity is OAuthToken:
+            return None
         return self._job if entity is ReviewJob else self._repo
 
     async def get(self, _model, _row_id: int) -> User | None:

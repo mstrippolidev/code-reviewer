@@ -23,6 +23,8 @@ from api.exception_handlers import register_repo_exception_handlers
 from api.repos.errors import GitHubAuthorizationExpiredError, GitHubVerificationUnavailableError
 from api.routers.repos import router as repos_router
 from api.routers.reviews import router as reviews_router
+from api.security.rate_limit_dependencies import get_rate_limiter
+from tests.api.fake_rate_limit import AllowAllRateLimiter
 from tests.api.fake_repo_access import FakeRepoAccessChecker
 
 USER_ID = 7
@@ -116,6 +118,7 @@ def _build_client(
     app.dependency_overrides[get_repo_access_checker] = lambda: checker
     app.dependency_overrides[get_repo_lifecycle_service] = lambda: service or RecordingLifecycleService()
     app.dependency_overrides[get_kafka_producer] = lambda: producer or RecordingProducer()
+    app.dependency_overrides[get_rate_limiter] = lambda: AllowAllRateLimiter()
     return TestClient(app)
 
 

@@ -21,6 +21,7 @@ from api.repos.errors import (
     RepoEventPublishError,
     RepoIdMismatchError,
     RepoPurgeError,
+    TooManyIndexJobsError,
 )
 from api.repos.repository import RegisteredRepoRepository
 from api.schemas.indexing import RepoRegisteredMessage
@@ -48,9 +49,12 @@ class RepoIntegrations:
 class RepoLifecycleService:
     """Carries a registered repo through its lifecycle: registration, pause/resume, retry, branch switch, removal."""
 
-    def __init__(self, repository: RegisteredRepoRepository, integrations: RepoIntegrations) -> None:
+    def __init__(
+        self, repository: RegisteredRepoRepository, integrations: RepoIntegrations, max_unfinished_indexings: int
+    ) -> None:
         self._repository = repository
         self._integrations = integrations
+        self._max_unfinished_indexings = max_unfinished_indexings
 
     async def register(self, request: RegisterRepoRequest, user: User) -> RegisteredRepo:
         if not await self._repository.is_registered(request.repo_id):
@@ -59,6 +63,7 @@ class RepoLifecycleService:
         return await self._register_existing(existing, request, user)
 
     async def _register_new(self, request: RegisterRepoRequest, user: User) -> RegisteredRepo:
+        await self._require_index_capacity(request.repo_id, user)
         github_repo = await self._verify_registration(request, user)
         registered = RegisteredRepo(
             repo_id=github_repo.repo_id,
@@ -78,6 +83,7 @@ class RepoLifecycleService:
     ) -> RegisteredRepo:
         await self._verify_registration(request, user)
         if existing.status == RepoIndexStatus.FAILED and existing.registered_by_user_id == user.id:
+            await self._require_index_capacity(existing.repo_id, user)
             existing.branch = request.branch or existing.branch
             await self._restart_indexing(existing)
             return existing
@@ -93,6 +99,7 @@ class RepoLifecycleService:
 
     async def resume(self, repo: RegisteredRepo, user: User) -> None:
         self._require_owner(repo, user)
+        await self._require_index_capacity(repo.repo_id, user)
         repo.status = RepoIndexStatus.INDEXING
         await self._repository.commit_changes()
         await self._publish_status_progress(repo)
@@ -102,6 +109,7 @@ class RepoLifecycleService:
         self._require_owner(repo, user)
         if not await self._repository.has_failed_files(repo.repo_id):
             return
+        await self._require_index_capacity(repo.repo_id, user)
         await self._publish_queued(REPO_FILE_RETRY, self._registration_message(repo), RETRY_QUEUE_FAILURE)
         repo.status = RepoIndexStatus.INDEXING
         await self._repository.commit_changes()
@@ -109,6 +117,7 @@ class RepoLifecycleService:
 
     async def switch_branch(self, repo: RegisteredRepo, branch: str, user: User) -> None:
         self._require_owner(repo, user)
+        await self._require_index_capacity(repo.repo_id, user)
         await self._verify_branch_exists(repo.full_name, branch, user)
         repo.branch = branch
         await self._restart_indexing(repo)
@@ -123,6 +132,11 @@ class RepoLifecycleService:
         await self._purge_indexed_content(repo.repo_id)
         await self._repository.remove(repo)
         await self._repository.commit_changes()
+
+    async def _require_index_capacity(self, repo_id: int, user: User) -> None:
+        unfinished = await self._repository.count_active_indexing(user.id, repo_id)
+        if unfinished >= self._max_unfinished_indexings:
+            raise TooManyIndexJobsError(self._max_unfinished_indexings)
 
     def _require_owner(self, repo: RegisteredRepo, user: User) -> None:
         if repo.registered_by_user_id != user.id:

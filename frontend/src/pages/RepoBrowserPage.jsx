@@ -9,7 +9,6 @@ import {
   RepoFetchError,
   RepoIndexingControlError,
   SubmitReviewError,
-  TOKEN_STORAGE_KEY,
   UnauthorizedError,
   deleteRepo,
   fetchRegisteredRepos,
@@ -29,12 +28,12 @@ const FINISHED_REPO_STATUSES = new Set(['completed', 'failed'])
 const STATUS_PROGRESS_PERCENT_BEFORE_FILES_APPEAR = { pending: 5, indexing: 10, completed: 100, failed: 100 }
 const MAX_REVIEW_FILES = 15 // mirrors .env's MAX_FILES_PER_SUBMISSION
 
-function useGithubRepos(token, onUnauthorized) {
+function useGithubRepos(onUnauthorized) {
   const [repos, setRepos] = useState([])
   const [status, setStatus] = useState('loading')
 
   useEffect(() => {
-    fetchUserRepos(token)
+    fetchUserRepos()
       .then((fetchedRepos) => {
         setRepos(fetchedRepos)
         setStatus('ready')
@@ -46,17 +45,17 @@ function useGithubRepos(token, onUnauthorized) {
         }
         setStatus(error instanceof RepoFetchError ? 'error' : 'unauthenticated')
       })
-  }, [token, onUnauthorized])
+  }, [onUnauthorized])
 
   return { repos, status }
 }
 
-function useRegisteredRepos(token, onUnauthorized) {
+function useRegisteredRepos(onUnauthorized) {
   const [registeredRepos, setRegisteredRepos] = useState([])
   const [hasError, setHasError] = useState(false)
 
   const refresh = useCallback(() => {
-    fetchRegisteredRepos(token)
+    fetchRegisteredRepos()
       .then((fetchedRepos) => {
         setRegisteredRepos(fetchedRepos)
         setHasError(false)
@@ -68,7 +67,7 @@ function useRegisteredRepos(token, onUnauthorized) {
         }
         setHasError(true)
       })
-  }, [token, onUnauthorized])
+  }, [onUnauthorized])
 
   useEffect(refresh, [refresh])
 
@@ -91,11 +90,10 @@ function computeProgressPercent(repo, settledFileCount) {
 }
 
 export function RepoBrowserPage() {
-  const token = localStorage.getItem(TOKEN_STORAGE_KEY)
   const navigate = useNavigate()
   const handleUnauthorized = useUnauthorizedHandler()
-  const { repos, status } = useGithubRepos(token, handleUnauthorized)
-  const { registeredRepos, refresh } = useRegisteredRepos(token, handleUnauthorized)
+  const { repos, status } = useGithubRepos(handleUnauthorized)
+  const { registeredRepos, refresh } = useRegisteredRepos(handleUnauthorized)
   const [selectedRepoId, setSelectedRepoId] = useState(null)
   const [registerError, setRegisterError] = useState(null)
   const [viewedRepoId, setViewedRepoId] = useState(null)
@@ -121,7 +119,7 @@ export function RepoBrowserPage() {
     settledFileCount,
     failedFileCount,
     refresh: refreshFileTree,
-  } = useRepoFileTree(token, viewedRepoId, handleUnauthorized)
+  } = useRepoFileTree(viewedRepoId, handleUnauthorized)
   const viewedRepo = baseViewedRepo && liveRepoStatus ? { ...baseViewedRepo, ...liveRepoStatus } : baseViewedRepo
   const isFinished = viewedRepo ? FINISHED_REPO_STATUSES.has(viewedRepo.status) : false
 
@@ -129,7 +127,7 @@ export function RepoBrowserPage() {
     setReviewError(null)
     setSubmittingReview(true)
     try {
-      const job = await submitReview(token, viewedRepo.repo_id, [...selectedFiles])
+      const job = await submitReview(viewedRepo.repo_id, [...selectedFiles])
       navigate(`/reviews/${job.review_id}`)
     } catch (error) {
       if (error instanceof UnauthorizedError) {
@@ -145,7 +143,7 @@ export function RepoBrowserPage() {
   async function handleRetryFailedClick() {
     setControlError(null)
     try {
-      await retryFailedFiles(token, viewedRepo.repo_id)
+      await retryFailedFiles(viewedRepo.repo_id)
       refresh()
       refreshFileTree()
     } catch (error) {
@@ -160,7 +158,7 @@ export function RepoBrowserPage() {
   async function handleResumeClick() {
     setControlError(null)
     try {
-      await resumeRepoIndexing(token, viewedRepo.repo_id)
+      await resumeRepoIndexing(viewedRepo.repo_id)
       refresh()
       refreshFileTree()
     } catch (error) {
@@ -181,7 +179,7 @@ export function RepoBrowserPage() {
     setPendingDeleteRepo(null)
     setControlError(null)
     try {
-      await deleteRepo(token, repo.repo_id)
+      await deleteRepo(repo.repo_id)
       setViewedRepoId(null)
       refresh()
     } catch (error) {
@@ -198,7 +196,7 @@ export function RepoBrowserPage() {
     setPendingBranchSwitch(null)
     setControlError(null)
     try {
-      await switchRepoBranch(token, viewedRepo.repo_id, branch)
+      await switchRepoBranch(viewedRepo.repo_id, branch)
       refresh()
       refreshFileTree()
     } catch (error) {
@@ -220,7 +218,7 @@ export function RepoBrowserPage() {
     return <p className="page centered">Loading your repositories...</p>
   }
   if (status === 'unauthenticated') {
-    return <p className="page centered">No access token found. Please log in again.</p>
+    return <p className="page centered">You are not signed in. Please log in again.</p>
   }
   if (status === 'error') {
     return <p className="page centered">Could not load your GitHub repositories.</p>
@@ -255,7 +253,7 @@ export function RepoBrowserPage() {
     setPendingRegisterRepo(null)
     setRegisterError(null)
     try {
-      const registered = await registerRepo(token, { repo_id: repo.repo_id, full_name: repo.full_name, branch })
+      const registered = await registerRepo({ repo_id: repo.repo_id, full_name: repo.full_name, branch })
       setViewedRepoId(registered.repo_id)
       refresh()
     } catch (error) {
@@ -373,7 +371,6 @@ export function RepoBrowserPage() {
                 </p>
                 <div className="repo-progress-actions">
                   <BranchSelect
-                    token={token}
                     fullName={viewedRepo.full_name}
                     value={viewedRepo.branch}
                     disabled={!isFinished}
@@ -462,7 +459,6 @@ export function RepoBrowserPage() {
             using the app while it runs in the background.
           </p>
           <BranchSelect
-            token={token}
             fullName={pendingRegisterRepo.full_name}
             value={registerBranch}
             onChange={setRegisterBranch}

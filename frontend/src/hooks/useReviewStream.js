@@ -6,7 +6,7 @@ const STREAM_RECONNECT_DELAY_MS = 1500
 const MAX_CONSECUTIVE_CONNECT_FAILURES = 3
 const TERMINAL_STATUSES = new Set(['completed', 'failed'])
 
-export function useReviewStream(token, reviewId, onUnauthorized) {
+export function useReviewStream(reviewId, onUnauthorized) {
   const [job, setJob] = useState(null)
   const [reviewedFiles, setReviewedFiles] = useState(new Set())
   const [failedFiles, setFailedFiles] = useState(new Set())
@@ -26,7 +26,7 @@ export function useReviewStream(token, reviewId, onUnauthorized) {
       while (!controller.signal.aborted) {
         let opened = false
         try {
-          const response = await openReviewStream(token, reviewId, controller.signal)
+          const response = await openReviewStream(reviewId, controller.signal)
           opened = true
           consecutiveConnectFailures = 0
           setConnectionStatus('ready')
@@ -82,7 +82,7 @@ export function useReviewStream(token, reviewId, onUnauthorized) {
 
     run()
     return () => controller.abort()
-  }, [token, reviewId, onUnauthorized])
+  }, [reviewId, onUnauthorized])
 
   return { job, reviewedFiles, failedFiles, agentProgress, connectionStatus }
 }
