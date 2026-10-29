@@ -195,7 +195,7 @@ def test_callback_rejects_an_invalid_state() -> None:
     assert response.status_code == 400
 
 
-def test_callback_redirects_to_the_frontend_with_an_access_token() -> None:
+def test_callback_redirects_to_the_frontend_without_a_token_in_the_url() -> None:
     jwt_service = JwtTokenService(secret_key=SECRET_KEY, access_token_ttl_seconds=3600, state_token_ttl_seconds=300)
     fake_client = FakeGitHubOAuthClient(
         token_grant=GitHubTokenGrant(access_token="gho_token", granted_scopes="repo,read:user"),
@@ -209,7 +209,7 @@ def test_callback_redirects_to_the_frontend_with_an_access_token() -> None:
     response = client.get("/api/oauth/github/callback", params={"code": "abc", "state": state})
 
     assert response.status_code == 307
-    assert response.headers["location"].startswith(f"{FRONTEND_BASE_URL}/callback?token=")
+    assert response.headers["location"] == f"{FRONTEND_BASE_URL}/callback"
 
 
 def test_callback_sets_an_httponly_session_cookie_for_the_logged_in_user() -> None:
@@ -229,6 +229,27 @@ def test_callback_sets_an_httponly_session_cookie_for_the_logged_in_user() -> No
     set_cookie_header = response.headers["set-cookie"].lower()
     assert "httponly" in set_cookie_header
     assert "samesite=lax" in set_cookie_header
+
+
+def test_logout_expires_the_session_cookie() -> None:
+    jwt_service = JwtTokenService(secret_key=SECRET_KEY, access_token_ttl_seconds=3600, state_token_ttl_seconds=300)
+    client = TestClient(_build_app(github_client=FakeGitHubOAuthClient()))
+    client.cookies.set(USER_SESSION_COOKIE, jwt_service.issue_user_session_token(user_id=1))
+
+    response = client.post("/api/oauth/github/logout")
+
+    assert response.status_code == 204
+    set_cookie_header = response.headers["set-cookie"].lower()
+    assert f"{USER_SESSION_COOKIE}=" in set_cookie_header
+    assert "max-age=0" in set_cookie_header
+    assert "httponly" in set_cookie_header
+    assert "samesite=lax" in set_cookie_header
+
+
+def test_logout_without_a_session_still_answers_204() -> None:
+    client = TestClient(_build_app(github_client=FakeGitHubOAuthClient()))
+
+    assert client.post("/api/oauth/github/logout").status_code == 204
 
 
 def test_callback_surfaces_a_github_token_exchange_failure_as_a_bad_gateway() -> None:

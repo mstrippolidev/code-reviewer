@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -79,8 +79,7 @@ async def callback(
     )
 
     user = await _create_or_update_user_from_github_login(identity, session)
-    access_token = jwt_service.issue_access_token(user_id=user.id)
-    response = RedirectResponse(return_to or f"{frontend_base_url}/callback?token={access_token}")
+    response = RedirectResponse(return_to or f"{frontend_base_url}/callback")
     _set_user_session_cookie(response, user.id, jwt_service)
     return response
 
@@ -88,6 +87,17 @@ async def callback(
 @router.get("/me")
 async def read_current_user(current_user: User = Depends(get_current_user)) -> UserRead:
     return UserRead.model_validate(current_user)
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout() -> Response:
+    """Ends the browser session by expiring the session cookie, which page scripts cannot clear themselves.
+
+    Answers 204 with or without a session; it does not revoke bearer tokens.
+    """
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    _clear_user_session_cookie(response)
+    return response
 
 
 @router.get("/repos")
@@ -133,6 +143,15 @@ def _set_user_session_cookie(response: RedirectResponse, user_id: int, jwt_servi
         httponly=True,
         samesite="lax",
         secure=settings.api_environment != "local",
+    )
+
+
+def _clear_user_session_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=USER_SESSION_COOKIE,
+        httponly=True,
+        samesite="lax",
+        secure=get_api_settings().api_environment != "local",
     )
 
 
