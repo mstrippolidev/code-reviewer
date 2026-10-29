@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react'
 import { fetchRepoBranches } from '../api/client'
 
-export function BranchSelect({ token, fullName, value, onChange, disabled }) {
+export function BranchSelect({ fullName, value, onChange, disabled }) {
   const [branches, setBranches] = useState([])
   const [status, setStatus] = useState('loading')
 
   useEffect(() => {
     let cancelled = false
     setStatus('loading')
-    fetchRepoBranches(token, fullName)
+    fetchRepoBranches(fullName)
       .then((fetchedBranches) => {
         if (!cancelled) {
           setBranches(fetchedBranches)
@@ -23,7 +23,7 @@ export function BranchSelect({ token, fullName, value, onChange, disabled }) {
     return () => {
       cancelled = true
     }
-  }, [token, fullName])
+  }, [fullName])
 
   if (status === 'loading') {
     return <p className="note">Loading branches…</p>

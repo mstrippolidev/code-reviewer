@@ -17,7 +17,7 @@ function upsertByFilePath(files, incomingFile) {
   return next
 }
 
-export function useRepoFileTree(token, repoId, onUnauthorized) {
+export function useRepoFileTree(repoId, onUnauthorized) {
   const [trackedRepoId, setTrackedRepoId] = useState(repoId)
   const [files, setFiles] = useState([])
   const [repoStatus, setRepoStatus] = useState(null)
@@ -49,7 +49,7 @@ export function useRepoFileTree(token, repoId, onUnauthorized) {
       while (!controller.signal.aborted) {
         let opened = false
         try {
-          const response = await openIndexedFilesStream(token, repoId, controller.signal)
+          const response = await openIndexedFilesStream(repoId, controller.signal)
           opened = true
           setStatus('ready')
           for await (const event of parseEventStream(response)) {
@@ -82,7 +82,7 @@ export function useRepoFileTree(token, repoId, onUnauthorized) {
 
     run()
     return () => controller.abort()
-  }, [token, repoId, onUnauthorized, retryNonce])
+  }, [repoId, onUnauthorized, retryNonce])
 
   const refresh = useCallback(() => setRetryNonce((nonce) => nonce + 1), [])
   const settledFileCount = files.filter((file) => TERMINAL_FILE_STATUSES.has(file.status)).length

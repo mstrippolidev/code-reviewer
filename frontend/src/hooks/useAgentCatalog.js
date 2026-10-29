@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { fetchAgents } from '../api/client'
 
-export function useAgentCatalog(token) {
+export function useAgentCatalog() {
   const [agentsByCodeKey, setAgentsByCodeKey] = useState({})
   const [order, setOrder] = useState([])
 
@@ -10,7 +10,7 @@ export function useAgentCatalog(token) {
 
     async function load() {
       try {
-        const agents = await fetchAgents(token)
+        const agents = await fetchAgents()
         if (!active) {
           return
         }
@@ -25,7 +25,7 @@ export function useAgentCatalog(token) {
     return () => {
       active = false
     }
-  }, [token])
+  }, [])
 
   return { agentsByCodeKey, order }
 }

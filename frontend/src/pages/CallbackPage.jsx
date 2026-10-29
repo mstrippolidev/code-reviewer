@@ -1,18 +1,14 @@
 import { useEffect } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
-import { TOKEN_STORAGE_KEY } from '../api/client'
+import { useNavigate } from 'react-router-dom'
+import { useAuth } from '../auth/useAuth'
 
 export function CallbackPage() {
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
-  const token = searchParams.get('token')
+  const { refresh } = useAuth()
 
   useEffect(() => {
-    if (token) {
-      localStorage.setItem(TOKEN_STORAGE_KEY, token)
-    }
-    navigate('/repos', { replace: true })
-  }, [token, navigate])
+    refresh().then(() => navigate('/repos', { replace: true }))
+  }, [refresh, navigate])
 
   return <p className="page centered">Signing you in...</p>
 }

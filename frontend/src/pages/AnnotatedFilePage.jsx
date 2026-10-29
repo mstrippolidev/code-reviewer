@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { TOKEN_STORAGE_KEY, fetchIndexedFileContent, fetchReviewFileContent } from '../api/client'
+import { fetchIndexedFileContent, fetchReviewFileContent } from '../api/client'
 import { AnnotatedSource, CODE_LINE_HEIGHT } from '../components/AnnotatedSource'
 import { RatingBadge } from '../components/RatingBadge'
 import { useAgentCatalog } from '../hooks/useAgentCatalog'
@@ -15,18 +15,16 @@ export function AnnotatedFilePage() {
   const filePath = searchParams.get('path')
   const repoId = searchParams.get('repo_id')
   const focusedPosition = searchParams.get('focus')
-  const token = localStorage.getItem(TOKEN_STORAGE_KEY)
-  const catalog = useAgentCatalog(token)
+  const catalog = useAgentCatalog()
   const handleUnauthorized = useUnauthorizedHandler()
   // The same live stream ReviewPage uses, not a one-shot fetch: a file's
   // own incidents should appear the instant each agent reports, not only
   // once the whole file's dispatch (let alone the whole PR) has settled.
   const { job, reviewedFiles, failedFiles, agentProgress, connectionStatus } = useReviewStream(
-    token,
     reviewId,
     handleUnauthorized
   )
-  const { content, loadState: contentLoadState } = useFileContent(token, { reviewId, repoId, filePath })
+  const { content, loadState: contentLoadState } = useFileContent({ reviewId, repoId, filePath })
   const report = job
     ? buildFileReports({ job, agentProgress, reviewedFiles, failedFiles, catalog }).find(
         (entry) => entry.filePath === filePath
@@ -93,7 +91,7 @@ export function AnnotatedFilePage() {
   )
 }
 
-function useFileContent(token, { reviewId, repoId, filePath }) {
+function useFileContent({ reviewId, repoId, filePath }) {
   const [content, setContent] = useState('')
   const [loadState, setLoadState] = useState('loading')
 
@@ -101,8 +99,8 @@ function useFileContent(token, { reviewId, repoId, filePath }) {
     const controller = new AbortController()
     // A guest review has no repo: its source was stored with the review itself.
     const request = repoId
-      ? fetchIndexedFileContent(token, repoId, filePath, controller.signal)
-      : fetchReviewFileContent(token, reviewId, filePath, controller.signal)
+      ? fetchIndexedFileContent(repoId, filePath, controller.signal)
+      : fetchReviewFileContent(reviewId, filePath, controller.signal)
 
     request
       .then((file) => {
@@ -118,7 +116,7 @@ function useFileContent(token, { reviewId, repoId, filePath }) {
     return () => {
       controller.abort()
     }
-  }, [token, reviewId, repoId, filePath])
+  }, [reviewId, repoId, filePath])
 
   return { content, loadState }
 }

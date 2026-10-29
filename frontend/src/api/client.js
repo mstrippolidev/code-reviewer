@@ -1,5 +1,4 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
-export const TOKEN_STORAGE_KEY = 'access_token'
 // The guest cookie itself is httpOnly and invisible to JS; this flag only lets the
 // router know a guest session was started, the server still verifies the cookie.
 export const GUEST_STORAGE_KEY = 'guest_session'
@@ -22,14 +21,10 @@ export class UnauthorizedError extends Error {}
 
 export class GuestSessionError extends Error {}
 
-// A guest has no bearer token; its identity rides on an httpOnly cookie instead,
-// which a cross-origin fetch only sends with credentials: 'include'.
-function authHeaders(token) {
-  return token ? { Authorization: `Bearer ${token}` } : {}
-}
-
-async function getJson(url, token, ErrorClass, signal) {
-  const response = await fetch(url, { headers: authHeaders(token), credentials: 'include', signal })
+// Identity rides on httpOnly cookies (user session or guest), which a cross-origin fetch
+// only sends with credentials: 'include'.
+async function getJson(url, ErrorClass, signal) {
+  const response = await fetch(url, { credentials: 'include', signal })
   if (response.status === 401) {
     throw new UnauthorizedError('Session expired')
   }
@@ -43,17 +38,17 @@ export function githubLoginUrl(accessLevel) {
   return `${API_BASE_URL}/api/oauth/github/login?access_level=${accessLevel}`
 }
 
-export async function fetchUserRepos(token) {
-  return getJson(`${API_BASE_URL}/api/oauth/github/repos`, token, RepoFetchError)
+export async function fetchUserRepos() {
+  return getJson(`${API_BASE_URL}/api/oauth/github/repos`, RepoFetchError)
 }
 
-export async function fetchRegisteredRepos(token) {
-  return getJson(`${API_BASE_URL}/api/repos`, token, RepoFetchError)
+export async function fetchRegisteredRepos() {
+  return getJson(`${API_BASE_URL}/api/repos`, RepoFetchError)
 }
 
-export async function openIndexedFilesStream(token, repoId, signal) {
+export async function openIndexedFilesStream(repoId, signal) {
   const response = await fetch(`${API_BASE_URL}/api/repos/${repoId}/files/stream`, {
-    headers: authHeaders(token),
+    credentials: 'include',
     signal,
   })
   if (response.status === 401) {
@@ -65,10 +60,11 @@ export async function openIndexedFilesStream(token, repoId, signal) {
   return response
 }
 
-export async function registerRepo(token, { repo_id: repoId, full_name: fullName, branch }) {
+export async function registerRepo({ repo_id: repoId, full_name: fullName, branch }) {
   const response = await fetch(`${API_BASE_URL}/api/repos`, {
     method: 'POST',
-    headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
     body: JSON.stringify({ repo_id: repoId, full_name: fullName, branch }),
   })
   if (response.status === 401) {
@@ -81,18 +77,18 @@ export async function registerRepo(token, { repo_id: repoId, full_name: fullName
   return response.json()
 }
 
-export async function fetchRepoBranches(token, fullName) {
+export async function fetchRepoBranches(fullName) {
   return getJson(
     `${API_BASE_URL}/api/oauth/github/repos/branches?full_name=${encodeURIComponent(fullName)}`,
-    token,
     RepoBranchFetchError
   )
 }
 
-export async function switchRepoBranch(token, repoId, branch) {
+export async function switchRepoBranch(repoId, branch) {
   const response = await fetch(`${API_BASE_URL}/api/repos/${repoId}/branch`, {
     method: 'POST',
-    headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
     body: JSON.stringify({ branch }),
   })
   if (response.status === 401) {
@@ -105,16 +101,16 @@ export async function switchRepoBranch(token, repoId, branch) {
   return response.json()
 }
 
-export async function resumeRepoIndexing(token, repoId) {
-  return postRepoControl(token, `${API_BASE_URL}/api/repos/${repoId}/resume`)
+export async function resumeRepoIndexing(repoId) {
+  return postRepoControl(`${API_BASE_URL}/api/repos/${repoId}/resume`)
 }
 
-export async function retryFailedFiles(token, repoId) {
-  return postRepoControl(token, `${API_BASE_URL}/api/repos/${repoId}/files/retry`)
+export async function retryFailedFiles(repoId) {
+  return postRepoControl(`${API_BASE_URL}/api/repos/${repoId}/files/retry`)
 }
 
-async function postRepoControl(token, url) {
-  const response = await fetch(url, { method: 'POST', headers: authHeaders(token) })
+async function postRepoControl(url) {
+  const response = await fetch(url, { method: 'POST', credentials: 'include' })
   if (response.status === 401) {
     throw new UnauthorizedError('Session expired')
   }
@@ -125,10 +121,10 @@ async function postRepoControl(token, url) {
   return response.json()
 }
 
-export async function deleteRepo(token, repoId) {
+export async function deleteRepo(repoId) {
   const response = await fetch(`${API_BASE_URL}/api/repos/${repoId}`, {
     method: 'DELETE',
-    headers: authHeaders(token),
+    credentials: 'include',
   })
   if (response.status === 401) {
     throw new UnauthorizedError('Session expired')
@@ -139,10 +135,11 @@ export async function deleteRepo(token, repoId) {
   }
 }
 
-export async function submitReview(token, repoId, filePaths) {
+export async function submitReview(repoId, filePaths) {
   const response = await fetch(`${API_BASE_URL}/api/repos/${repoId}/review`, {
     method: 'POST',
-    headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
     body: JSON.stringify({ file_paths: filePaths }),
   })
   if (response.status === 401) {
@@ -155,23 +152,21 @@ export async function submitReview(token, repoId, filePaths) {
   return response.json()
 }
 
-export async function fetchAgents(token) {
-  return getJson(`${API_BASE_URL}/api/agents`, token, AgentCatalogFetchError)
+export async function fetchAgents() {
+  return getJson(`${API_BASE_URL}/api/agents`, AgentCatalogFetchError)
 }
 
-export async function fetchIndexedFileContent(token, repoId, filePath, signal) {
+export async function fetchIndexedFileContent(repoId, filePath, signal) {
   return getJson(
     `${API_BASE_URL}/api/repos/${repoId}/files/content?file_path=${encodeURIComponent(filePath)}`,
-    token,
     FileContentFetchError,
     signal
   )
 }
 
-export async function fetchReviewFileContent(token, reviewId, filePath, signal) {
+export async function fetchReviewFileContent(reviewId, filePath, signal) {
   return getJson(
     `${API_BASE_URL}/api/reviews/${reviewId}/files/content?file_path=${encodeURIComponent(filePath)}`,
-    token,
     FileContentFetchError,
     signal
   )
@@ -204,8 +199,6 @@ export async function submitGuestReview(files) {
 
 export class OAuthConsentError extends Error {}
 
-// Consent is decided with the web session cookie alone: whoever started the MCP login may have
-// no localStorage token at all.
 export async function fetchOAuthClient(clientId) {
   const response = await fetch(`${API_BASE_URL}/oauth/clients/${encodeURIComponent(clientId)}`)
   if (!response.ok) {
@@ -232,9 +225,8 @@ export async function submitOAuthDecision(authorizeParams, approve) {
   return redirectTo
 }
 
-export async function openReviewStream(token, reviewId, signal) {
+export async function openReviewStream(reviewId, signal) {
   const response = await fetch(`${API_BASE_URL}/api/reviews/${reviewId}/stream`, {
-    headers: authHeaders(token),
     credentials: 'include',
     signal,
   })
@@ -245,4 +237,21 @@ export async function openReviewStream(token, reviewId, signal) {
     throw new SubmitReviewError(`Request failed with status ${response.status}`)
   }
   return response
+}
+
+export class CurrentUserFetchError extends Error {}
+
+export async function fetchCurrentUser() {
+  const response = await fetch(`${API_BASE_URL}/api/oauth/github/me`, { credentials: 'include' })
+  if (response.status === 401) {
+    throw new UnauthorizedError('Not signed in')
+  }
+  if (!response.ok) {
+    throw new CurrentUserFetchError(`Request failed with status ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function logout() {
+  await fetch(`${API_BASE_URL}/api/oauth/github/logout`, { method: 'POST', credentials: 'include' })
 }
