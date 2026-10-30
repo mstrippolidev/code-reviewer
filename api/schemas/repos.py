@@ -9,7 +9,7 @@ from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 class RegisterRepoRequest(BaseModel):
     """What the client claims about the repo to register; verified against GitHub before it's trusted."""
 
-    repo_id: int
+    repo_id: int | None = None
     full_name: str
     branch: str | None = None
 
