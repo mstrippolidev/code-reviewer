@@ -7,7 +7,7 @@ import pytest_asyncio
 from mcp.client import Client
 from mcp.server import MCPServer
 
-from mcp_server.repo_status import (
+from mcp_server.tools.repo_status import (
     HttpRepoStatusSource,
     RepoNotFound,
     RepoState,

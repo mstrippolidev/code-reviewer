@@ -57,14 +57,16 @@ class RepoLifecycleService:
         self._max_unfinished_indexings = max_unfinished_indexings
 
     async def register(self, request: RegisterRepoRequest, user: User) -> RegisteredRepo:
-        if not await self._repository.is_registered(request.repo_id):
-            return await self._register_new(request, user)
-        existing = await self._repository.find_by_repo_id(request.repo_id)
+        github_repo = await self._verify_registration(request, user)
+        if not await self._repository.is_registered(github_repo.repo_id):
+            return await self._register_new(request, user, github_repo)
+        existing = await self._repository.find_by_repo_id(github_repo.repo_id)
         return await self._register_existing(existing, request, user)
 
-    async def _register_new(self, request: RegisterRepoRequest, user: User) -> RegisteredRepo:
-        await self._require_index_capacity(request.repo_id, user)
-        github_repo = await self._verify_registration(request, user)
+    async def _register_new(
+        self, request: RegisterRepoRequest, user: User, github_repo: GitHubRepo
+    ) -> RegisteredRepo:
+        await self._require_index_capacity(github_repo.repo_id, user)
         registered = RegisteredRepo(
             repo_id=github_repo.repo_id,
             owner_id=github_repo.owner_id,
@@ -81,7 +83,6 @@ class RepoLifecycleService:
     async def _register_existing(
         self, existing: RegisteredRepo, request: RegisterRepoRequest, user: User
     ) -> RegisteredRepo:
-        await self._verify_registration(request, user)
         if existing.status == RepoIndexStatus.FAILED and existing.registered_by_user_id == user.id:
             await self._require_index_capacity(existing.repo_id, user)
             existing.branch = request.branch or existing.branch
@@ -144,13 +145,15 @@ class RepoLifecycleService:
 
     async def _verify_registration(self, request: RegisterRepoRequest, user: User) -> GitHubRepo:
         github_repo = await self._fetch_github_repo(request.full_name, user)
-        if github_repo.repo_id != request.repo_id:
+        if request.repo_id is not None and github_repo.repo_id != request.repo_id:
             raise RepoIdMismatchError("repo_id does not match full_name")
         if not github_repo.has_enough_python:
             raise InsufficientPythonError(
                 f"Repo is only {github_repo.python_percentage}% Python; "
                 f"must be at least {PYTHON_PERCENTAGE_THRESHOLD}%"
             )
+        if request.branch is not None:
+            await self._verify_branch_exists(github_repo.full_name, request.branch, user)
         return github_repo
 
     async def _fetch_github_repo(self, full_name: str, user: User) -> GitHubRepo:
