@@ -18,8 +18,14 @@ from mcp_server.app import mcp
 from mcp_server.config import get_mcp_settings
 from mcp_server.custom_caller_auth import CallerBearerAuth
 from mcp_server.custom_token_verification import CURRENT_USER_PATH, ApiTokenVerifier
+from mcp_server.tools.index_repo import REGISTER_REPO_PATH, IndexRepoTool
+from mcp_server.tools.repo_status import REPO_BY_NAME_PATH, HttpRepoStatusSource
 
 PUBLIC_URL = "http://localhost:8001"
+REPO_WITH_NO_FILES = {
+    "repo": {"status": "indexing", "branch": "main", "commit_sha": None, "total_files_expected": None},
+    "files": [],
+}
 PROTOCOL_VERSION = "2025-06-18"
 JSON_HEADERS = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
 USER_IDS_BY_TOKEN = {"token-a": 1, "token-b": 2}
@@ -28,6 +34,7 @@ USER_IDS_BY_TOKEN = {"token-a": 1, "token-b": 2}
 class FakeApi:
     def __init__(self) -> None:
         self.authorizations: list[str | None] = []
+        self.registrations: list[str | None] = []
         self.unreachable = False
 
     def handle(self, request: httpx.Request) -> httpx.Response:
@@ -38,6 +45,11 @@ class FakeApi:
         user_id = USER_IDS_BY_TOKEN.get((authorization or "").removeprefix("Bearer "))
         if user_id is None:
             return httpx.Response(401)
+        if request.method == "POST" and request.url.path == REGISTER_REPO_PATH:
+            self.registrations.append(authorization)
+            return httpx.Response(201, json={})
+        if request.url.path == REPO_BY_NAME_PATH:
+            return httpx.Response(200, json=REPO_WITH_NO_FILES)
         return httpx.Response(200, json={"id": user_id})
 
 
@@ -56,6 +68,7 @@ def _build_server(api: FakeApi) -> MCPServer:
         return response.json()["id"]
 
     server.add_tool(whoami)
+    server.add_tool(IndexRepoTool(forwarding_client, HttpRepoStatusSource(forwarding_client)).index_repo)
     return server
 
 
@@ -97,10 +110,16 @@ async def _open_session(client: httpx.AsyncClient, token: str) -> dict[str, str]
     return session_headers
 
 
-async def _call_whoami(client: httpx.AsyncClient, token: str) -> int:
+async def _call_tool(client: httpx.AsyncClient, token: str, name: str, arguments: dict) -> dict:
     headers = await _open_session(client, token)
-    response = await _rpc(client, headers, {"id": 2, "method": "tools/call", "params": {"name": "whoami", "arguments": {}}})
-    return json.loads(response.text)["result"]["structuredContent"]["result"]
+    params = {"name": name, "arguments": arguments}
+    response = await _rpc(client, headers, {"id": 2, "method": "tools/call", "params": params})
+    return json.loads(response.text)["result"]
+
+
+async def _call_whoami(client: httpx.AsyncClient, token: str) -> int:
+    result = await _call_tool(client, token, "whoami", {})
+    return result["structuredContent"]["result"]
 
 
 @pytest.mark.asyncio
@@ -153,3 +172,20 @@ async def test_an_unreachable_api_fails_the_request_instead_of_challenging(api: 
         response = await client.post("/mcp", json={}, headers=JSON_HEADERS | {"Authorization": "Bearer token-a"})
 
     assert response.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_index_repo_registers_the_repo_with_the_callers_own_token(api: FakeApi) -> None:
+    async with _serving(api) as client:
+        await _call_tool(client, "token-a", "index_repo", {"repo_full_name": "acme/api"})
+
+    assert api.registrations == ["Bearer token-a"]
+
+
+@pytest.mark.asyncio
+async def test_index_repo_for_two_callers_registers_each_with_their_own_token(api: FakeApi) -> None:
+    async with _serving(api) as client:
+        await _call_tool(client, "token-a", "index_repo", {"repo_full_name": "acme/api"})
+        await _call_tool(client, "token-b", "index_repo", {"repo_full_name": "acme/api"})
+
+    assert api.registrations == ["Bearer token-a", "Bearer token-b"]

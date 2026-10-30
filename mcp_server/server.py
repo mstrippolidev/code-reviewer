@@ -1,7 +1,10 @@
+from mcp.types import ToolAnnotations
+
 from mcp_server.api_client import build_api_client
 from mcp_server.app import mcp
 from mcp_server.custom_caller_auth import CallerBearerAuth
-from mcp_server.repo_status import HttpRepoStatusSource, RepoStatusTools
+from mcp_server.tools.index_repo import IndexRepoTool
+from mcp_server.tools.repo_status import HttpRepoStatusSource, RepoStatusTools
 
 
 def ping(message: str) -> str:
@@ -17,7 +20,14 @@ def ping(message: str) -> str:
 
 
 mcp.add_tool(ping)
-mcp.add_tool(RepoStatusTools(HttpRepoStatusSource(build_api_client(auth=CallerBearerAuth()))).get_repo_status)
+api_client = build_api_client(auth=CallerBearerAuth())
+status_source = HttpRepoStatusSource(api_client)
+
+mcp.add_tool(RepoStatusTools(status_source).get_repo_status)
+mcp.add_tool(
+    IndexRepoTool(api_client, status_source).index_repo,
+    annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True),
+)
 
 
 if __name__ == "__main__":
