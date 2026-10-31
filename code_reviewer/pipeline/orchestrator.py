@@ -168,6 +168,7 @@ def _prepare_pairing(
     try:
         size_status = _run_source_file_guards(pairing.source_file.content, context.intake_llm)
     except (SubmissionTooLargeError, FileTooLargeError, IntakeRejectedError) as error:
+        _log_rejection(pairing.source_file.file_path, error)
         return None, [_skipped_file(pairing.source_file.file_path, error)]
     except Exception:
         logger.exception("Guard execution failed unexpectedly for file_path=%s", pairing.source_file.file_path)
@@ -210,6 +211,9 @@ def _run_source_file_guards(content: str, intake_llm: LLMInterface | None) -> Si
 def _skipped_file(file_path: str, error: Exception) -> SkippedFile:
     return SkippedFile(file_path=file_path, reason=_SKIP_REASONS[type(error)])
 
+def _log_rejection(file_path: str, error: Exception) -> None:
+    logger.warning("File rejected file_path=%s reason=%s detail=%s", file_path, _SKIP_REASONS[type(error)], error)
+
 def _screen_test_files(
     test_files: list[SubmittedFile], intake_llm: LLMInterface | None
 ) -> tuple[list[SubmittedFile], list[SkippedFile]]:
@@ -221,6 +225,7 @@ def _screen_test_files(
         try:
             _run_test_file_guards(test_file.content, intake_llm)
         except (SubmissionTooLargeError, IntakeRejectedError) as error:
+            _log_rejection(test_file.file_path, error)
             rejected.append(_skipped_file(test_file.file_path, error))
         except Exception:
             logger.exception("Guard execution failed unexpectedly for file_path=%s", test_file.file_path)

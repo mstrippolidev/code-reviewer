@@ -50,4 +50,5 @@ class BaseLLMValidator(Validator):
 
         if verdict.is_valid:
             return PassResult()
+        logger.warning("%s rejected the content: %s", type(self).__name__, verdict.reason)
         return FailResult(error_message=verdict.reason)
