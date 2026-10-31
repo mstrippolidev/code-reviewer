@@ -291,7 +291,7 @@ async def require_review_access(
     checker: RepoAccessChecker = Depends(get_repo_access_checker),
     jwt_service: JwtTokenService = Depends(get_jwt_service),
 ) -> ReviewJob:
-    """Returns the review if the caller may read it: a guest their own, a user a review of a repo GitHub shows them.
+    """Returns the review if the caller may read it: a guest their own, a user their own repoless review, or a review of a repo GitHub shows them.
 
     Opens its own short session so an SSE route does not hold a DB connection for the whole stream.
     """
@@ -306,6 +306,8 @@ async def require_review_access(
         if job is None:
             raise not_found
         if job.guest_session_id is not None and job.guest_session_id == guest_session_id:
+            return job
+        if user_id is not None and job.repo_id is None and job.requested_by_user_id == user_id:
             return job
         if job.repo_id is None or user_id is None:
             raise not_found

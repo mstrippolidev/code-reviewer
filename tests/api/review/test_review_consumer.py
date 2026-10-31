@@ -113,6 +113,16 @@ class FakeProgressPublisher(ReviewProgressPublisher):
         self.published.append(event)
 
 
+class FakeAgentsContainer:
+    """Stands in for AgentsContainer: records the selection restricted_to was given."""
+
+    def __init__(self, selected_keys: frozenset[CodeKey] | None = None) -> None:
+        self.selected_keys = selected_keys
+
+    def restricted_to(self, code_keys: frozenset[CodeKey] | None) -> "FakeAgentsContainer":
+        return FakeAgentsContainer(code_keys)
+
+
 def _make_message(**overrides) -> ReviewRequestedMessage:
     defaults = {
         "review_id": uuid.uuid4(),
@@ -140,6 +150,7 @@ def _make_job(review_msg: ReviewRequestedMessage) -> ReviewJob:
         repo_id=review_msg.repo_id,
         requested_by_user_id=review_msg.requested_by_user_id,
         file_paths=review_msg.file_paths,
+        agents=review_msg.agents,
         status=ReviewJobStatus.PENDING,
         status_reason=None,
         result=None,
@@ -204,7 +215,7 @@ def _make_consumer(
 ) -> ReviewRequestConsumer:
     dependencies = ReviewRequestConsumerDependencies(
         database_engine=FakeDatabaseEngine(session),
-        agents_container=None,
+        agents_container=FakeAgentsContainer(),
         progress_publisher=broadcaster,
         dlq_producer=dlq_producer or FakeDlqProducer(),
     )
@@ -485,10 +496,12 @@ class _PipelineCallRecorder:
     def __init__(self) -> None:
         self.files: list | None = None
         self.repo_data: object = "not called"
+        self.agents_container: FakeAgentsContainer | None = None
 
     async def __call__(self, files, agents_container, repo_data=None, **kwargs) -> AggregatorOutput:
         self.files = files
         self.repo_data = repo_data
+        self.agents_container = agents_container
         return _make_result()
 
 
@@ -535,6 +548,88 @@ async def test_guest_review_with_no_stored_files_marks_the_job_failed() -> None:
     await consumer._handle_parsed_message(review_msg, msg=raw_msg, consumer=None)
 
     assert job.status == ReviewJobStatus.FAILED
+
+
+def _arrange_repo_review(
+    monkeypatch: pytest.MonkeyPatch, **message_overrides
+) -> tuple[_PipelineCallRecorder, ReviewRequestConsumer, ReviewRequestedMessage]:
+    review_msg = _make_message(**message_overrides)
+    indexed_file = IndexedFile(
+        id=1, repo_id=10, file_path="a.py", status=IndexedFileStatus.INDEXED, content="x = 1\n"
+    )
+    session = FakeAsyncSession(
+        registered_repo=_make_repo(), review_job=_make_job(review_msg), indexed_files=[indexed_file]
+    )
+    consumer = _make_consumer(session=session, broadcaster=FakeProgressPublisher())
+    recorder = _PipelineCallRecorder()
+    monkeypatch.setattr(review_consumer, "run_pipeline", recorder)
+    return recorder, consumer, review_msg
+
+
+@pytest.mark.asyncio
+async def test_review_with_requested_agents_runs_the_pipeline_restricted_to_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify that the agents on the message, not the full roster, reach the pipeline."""
+    recorder, consumer, review_msg = _arrange_repo_review(monkeypatch, agents=["TEST", "TCASE"])
+
+    await consumer._run_review(review_msg)
+
+    assert recorder.agents_container.selected_keys == frozenset({CodeKey.TEST, CodeKey.TCASE})
+
+
+@pytest.mark.asyncio
+async def test_review_without_requested_agents_runs_the_full_roster(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify that a message with no agents leaves the pipeline unrestricted."""
+    recorder, consumer, review_msg = _arrange_repo_review(monkeypatch)
+
+    await consumer._run_review(review_msg)
+
+    assert recorder.agents_container.selected_keys is None
+
+
+def _arrange_user_repoless_review(
+    monkeypatch: pytest.MonkeyPatch, **message_overrides
+) -> tuple[_PipelineCallRecorder, ReviewRequestConsumer, ReviewRequestedMessage]:
+    review_msg = ReviewRequestedMessage(
+        review_id=uuid.uuid4(), file_paths=["src/a.py"], requested_by_user_id=1, **message_overrides
+    )
+    stored_file = GuestReviewFile(id=1, review_job_id=1, file_path="src/a.py", content="def a():\n    return 1\n")
+    session = FakeAsyncSession(review_job=_make_job(review_msg), guest_files=[stored_file])
+    consumer = _make_consumer(session=session, broadcaster=FakeProgressPublisher())
+    recorder = _PipelineCallRecorder()
+    monkeypatch.setattr(review_consumer, "run_pipeline", recorder)
+    return recorder, consumer, review_msg
+
+
+@pytest.mark.asyncio
+async def test_user_repoless_review_runs_the_pipeline_with_no_repo_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify that a logged-in user's review with no repo reaches the pipeline as repo-less, so repo-only agents degrade."""
+    recorder, consumer, review_msg = _arrange_user_repoless_review(monkeypatch)
+
+    await consumer._run_review(review_msg)
+
+    assert recorder.repo_data is None
+
+
+@pytest.mark.asyncio
+async def test_user_repoless_review_reviews_the_files_stored_with_its_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify that the content comes from the rows the route stored, since nothing is indexed for it."""
+    recorder, consumer, review_msg = _arrange_user_repoless_review(monkeypatch)
+
+    await consumer._run_review(review_msg)
+
+    assert [(f.file_path, f.content) for f in recorder.files] == [("src/a.py", "def a():\n    return 1\n")]
+
+
+@pytest.mark.asyncio
+async def test_user_repoless_review_runs_restricted_to_the_requested_agents(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify that the agents chosen for a repoless review reach the pipeline."""
+    recorder, consumer, review_msg = _arrange_user_repoless_review(monkeypatch, agents=["TEST"])
+
+    await consumer._run_review(review_msg)
+
+    assert recorder.agents_container.selected_keys == frozenset({CodeKey.TEST})
 
 
 def test_degraded_reason_names_each_failed_agent_by_file() -> None:

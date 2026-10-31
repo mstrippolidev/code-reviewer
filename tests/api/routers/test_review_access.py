@@ -79,6 +79,10 @@ def _guest_review(guest_session_id: int = GUEST_ID) -> ReviewJob:
     return _repo_review(repo_id=None, requested_by_user_id=None, guest_session_id=guest_session_id)
 
 
+def _repoless_review(requested_by_user_id: int = USER_ID) -> ReviewJob:
+    return _repo_review(repo_id=None, requested_by_user_id=requested_by_user_id)
+
+
 def _registered_repo() -> RegisteredRepo:
     return RegisteredRepo(id=1, repo_id=10, full_name="octocat/hello-world")
 
@@ -207,6 +211,53 @@ def test_user_asking_for_a_guest_review_costs_no_github_call() -> None:
     _get(client, job, _as_user(client))
 
     assert checker.calls == []
+
+
+def test_user_reads_their_own_repoless_review() -> None:
+    """Verify that the user who submitted raw files can open the review, though it belongs to no repo."""
+    job = _repoless_review()
+    client = _client(job)
+
+    assert _get(client, job, _as_user(client)).status_code == 200
+
+
+def test_user_reading_their_own_repoless_review_costs_no_github_call() -> None:
+    """Verify that a review with no repo has nothing to check on GitHub."""
+    job = _repoless_review()
+    checker = FakeRepoAccessChecker()
+    client = _client(job, checker=checker)
+
+    _get(client, job, _as_user(client))
+
+    assert checker.calls == []
+
+
+def test_user_cannot_read_another_users_repoless_review() -> None:
+    """Verify that raw files one user submitted are private to that user."""
+    job = _repoless_review(requested_by_user_id=USER_ID + 1)
+    client = _client(job)
+
+    assert _get(client, job, _as_user(client)).status_code == 404
+
+
+def test_guest_cannot_read_a_users_repoless_review() -> None:
+    """Verify that a guest session never reaches a logged-in user's raw-file review."""
+    job = _repoless_review()
+    client = _client(job)
+    _as_guest(client)
+
+    assert _get(client, job).status_code == 404
+
+
+@pytest.mark.parametrize("suffix", ["", "/files/content?file_path=a.py", "/stream"], ids=["report", "content", "stream"])
+def test_every_review_read_route_refuses_another_user_for_a_repoless_review(suffix: str) -> None:
+    """Verify that the report, the file content and the live stream of a repoless review all stay private."""
+    job = _repoless_review(requested_by_user_id=USER_ID + 1)
+    client = _client(job)
+
+    response = client.get(f"/api/reviews/{job.review_id}{suffix}", headers=_as_user(client))
+
+    assert response.status_code == 404
 
 
 def test_unknown_review_answers_404() -> None:

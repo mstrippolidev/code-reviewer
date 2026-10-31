@@ -24,6 +24,7 @@ from api.indexing.producer import PublishError, RepoIndexProducer
 from api.review.review_progress_broadcaster import ReviewProgressBroadcaster
 from api.review.topics import REVIEW_REQUESTED
 from api.schemas.reviews import (
+    RepolessReviewSubmissionRequest,
     ReviewAgentProgressMessage,
     ReviewFileContentRead,
     ReviewJobRead,
@@ -56,6 +57,7 @@ async def submit_review(
         repo_id=repo.repo_id,
         requested_by_user_id=current_user.id,
         file_paths=request.file_paths,
+        agents=[agent.value for agent in request.agents] if request.agents else None,
         status=ReviewJobStatus.PENDING,
     )
     session.add(job)
@@ -89,6 +91,47 @@ async def _publish_review_requested(job: ReviewJob, repo: RegisteredRepo, kafka_
         owner_id=repo.owner_id,
         requested_by_user_id=job.requested_by_user_id,
         file_paths=job.file_paths,
+        agents=job.agents,
+    )
+    try:
+        await kafka_producer.publish(REVIEW_REQUESTED, message, str(job.review_id).encode())
+    except PublishError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not queue this review",
+        ) from error
+
+
+@router.post("/reviews", status_code=status.HTTP_202_ACCEPTED, dependencies=[Depends(limit_review_submissions)])
+async def submit_repoless_review(
+    request: RepolessReviewSubmissionRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    kafka_producer: RepoIndexProducer = Depends(get_kafka_producer),
+) -> ReviewJobRead:
+    job = ReviewJob(
+        review_id=uuid.uuid4(),
+        requested_by_user_id=current_user.id,
+        file_paths=[file.file_path for file in request.files],
+        agents=[agent.value for agent in request.agents] if request.agents else None,
+        status=ReviewJobStatus.PENDING,
+    )
+    session.add(job)
+    await session.flush()
+    for file in request.files:
+        session.add(GuestReviewFile(review_job_id=job.id, file_path=file.file_path, content=file.content))
+    await session.commit()
+    await session.refresh(job)
+    await _publish_repoless_review_requested(job, kafka_producer)
+    return ReviewJobRead.model_validate(job)
+
+
+async def _publish_repoless_review_requested(job: ReviewJob, kafka_producer: RepoIndexProducer) -> None:
+    message = ReviewRequestedMessage(
+        review_id=job.review_id,
+        requested_by_user_id=job.requested_by_user_id,
+        file_paths=job.file_paths,
+        agents=job.agents,
     )
     try:
         await kafka_producer.publish(REVIEW_REQUESTED, message, str(job.review_id).encode())
