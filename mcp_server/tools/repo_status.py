@@ -41,6 +41,13 @@ class RepoStatus(BaseModel):
     branch: str
 
 
+class RepoSnapshot(BaseModel):
+    """A repo's status together with the id api/ addresses it by, which is never shown to the calling LLM."""
+
+    repo_id: int
+    status: RepoStatus
+
+
 API_STATUS_TO_STATE = {
     "pending": RepoState.NOT_INDEXED,
     "indexing": RepoState.INDEXING,
@@ -63,6 +70,9 @@ class HttpRepoStatusSource:
         self._client = client
 
     async def fetch(self, repo: str) -> RepoStatus:
+        return (await self.fetch_snapshot(repo)).status
+
+    async def fetch_snapshot(self, repo: str) -> RepoSnapshot:
         params = {"full_name": repo, "with_files": True}
         try:
             response = await self._client.get(REPO_BY_NAME_PATH, params=params)
@@ -75,7 +85,8 @@ class HttpRepoStatusSource:
             ) from error
         except HTTPError as error:
             raise RepoStatusUnavailable("api/ is unreachable. Try again shortly.") from error
-        return self._to_repo_status(response.json())
+        payload = response.json()
+        return RepoSnapshot(repo_id=payload["repo"]["repo_id"], status=self._to_repo_status(payload))
 
     def _to_repo_status(self, payload: dict[str, Any]) -> RepoStatus:
         repo = payload["repo"]

@@ -82,9 +82,10 @@ async def test_guest_review_submissions_are_counted_per_guest_session_against_th
     [
         (repos_router, "/api/repos", limit_repo_registrations),
         (reviews_router, "/api/repos/{repo_id}/review", limit_review_submissions),
+        (reviews_router, "/api/reviews", limit_review_submissions),
         (guest_router, "/api/guest/review", limit_guest_review_submissions),
     ],
-    ids=["register", "review", "guest_review"],
+    ids=["register", "review", "repoless_review", "guest_review"],
 )
 def test_each_money_spending_route_carries_its_limit(router, path: str, limit) -> None:
     assert limit in _dependencies_of(router, path, "POST")

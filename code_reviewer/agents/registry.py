@@ -1,7 +1,7 @@
 """
     File that will registry and start all the agents.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from code_reviewer.agents.architecture import ArchitectureAgent
 from code_reviewer.agents.base import AgentBase, FileSizeAwareAgentBase
@@ -56,6 +56,14 @@ class AgentsContainer:
     coupling_agent_repoless: CouplingAgent | None = None
     architecture_agent: ArchitectureAgent | None = None
     architecture_agent_repoless: ArchitectureAgent | None = None
+    selected_keys: frozenset[CodeKey] | None = None
+
+    def is_selected(self, code_key: CodeKey) -> bool:
+        return self.selected_keys is None or code_key in self.selected_keys
+
+    def restricted_to(self, code_keys: frozenset[CodeKey] | None) -> "AgentsContainer":
+        """A copy that runs only `code_keys`; None runs every agent. Shares every built agent with this container."""
+        return replace(self, selected_keys=code_keys)
 
 
 def build_agent_roster(

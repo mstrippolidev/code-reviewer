@@ -78,11 +78,12 @@ def review_file(
     standalone = _is_standalone_test_review(prepared_file)
     file_agents = _file_agents_for(prepared_file, agents_container)
     entries = [] if standalone else _run_file_agents(prepared_file, file_agents)
-    chunk_agents = _scoped_chunk_agents(agents_container.chunk_agents, standalone)
+    chunk_agents = _scoped_chunk_agents(agents_container, standalone)
     entries += _run_chunk_agents(prepared_file, chunk_agents, splitter)
     _apply_cmplx_soft_limit_incident(entries, prepared_file)
-    entries.append(_run_tcase_agent(prepared_file, agents_container))
-    if not standalone:
+    if agents_container.is_selected(CodeKey.TCASE):
+        entries.append(_run_tcase_agent(prepared_file, agents_container))
+    if not standalone and agents_container.is_selected(CodeKey.DRY):
         entries.append(_run_dry(agents_container, prepared_file))
     return entries
 
@@ -101,13 +102,20 @@ def _file_agents_for(
     coupling = agents_container.coupling_agent if repo_aware else agents_container.coupling_agent_repoless
     architecture = agents_container.architecture_agent if repo_aware else agents_container.architecture_agent_repoless
     variants = [agent for agent in (coupling, architecture) if agent is not None]
-    return [*agents_container.file_agents, *variants]
+    return [
+        agent
+        for agent in (*agents_container.file_agents, *variants)
+        if agents_container.is_selected(agent.get_agent_key())
+    ]
 
 
-def _scoped_chunk_agents(chunk_agents: list[AgentBase], standalone: bool) -> list[AgentBase]:
+def _scoped_chunk_agents(agents_container: AgentsContainer, standalone: bool) -> list[AgentBase]:
+    selected = [
+        agent for agent in agents_container.chunk_agents if agents_container.is_selected(agent.get_agent_key())
+    ]
     if not standalone:
-        return chunk_agents
-    return [agent for agent in chunk_agents if agent.get_agent_key() in _TEST_FILE_HYGIENE_KEYS]
+        return selected
+    return [agent for agent in selected if agent.get_agent_key() in _TEST_FILE_HYGIENE_KEYS]
 
 
 def _tcase_content(prepared_file: PreparedFile, test_pairing_finder: CorrectiveTestPairingFinder | None) -> str:
@@ -328,7 +336,7 @@ async def review_file_runnable(
     splitter = splitter or PythonCodeSplit()
     standalone = _is_standalone_test_review(prepared_file)
     file_agents = [] if standalone else _file_agents_for(prepared_file, agents_container)
-    chunk_agents = _scoped_chunk_agents(agents_container.chunk_agents, standalone)
+    chunk_agents = _scoped_chunk_agents(agents_container, standalone)
     context = {
         "code": prepared_file.source_file.content,
         "file_path": prepared_file.source_file.file_path,
@@ -339,9 +347,10 @@ async def review_file_runnable(
     raw_branches = (
         {agent.get_agent_key().value: _file_agent_branch(agent) for agent in file_agents}
         | {agent.get_agent_key().value: _chunk_agent_branch(agent, splitter) for agent in chunk_agents}
-        | {"TCASE": _tcase_branch(agents_container, prepared_file)}
     )
-    if not standalone:
+    if agents_container.is_selected(CodeKey.TCASE):
+        raw_branches["TCASE"] = _tcase_branch(agents_container, prepared_file)
+    if not standalone and agents_container.is_selected(CodeKey.DRY):
         raw_branches["DRY"] = _dry_branch(agents_container, prepared_file)
     branches = {key: branch.with_config({"run_name": key}) for key, branch in raw_branches.items()}
     config = {"max_concurrency": get_settings().max_dispatch_concurrency}

@@ -20,6 +20,7 @@ from api.dependencies import (
     get_repo_access_checker,
     require_review_access,
 )
+from api.indexing.producer import PublishError
 from api.routers.reviews import router as reviews_router
 from api.schemas.reviews import ReviewRequestedMessage
 from api.security.rate_limit_dependencies import get_rate_limiter
@@ -76,6 +77,11 @@ class FakeAsyncSession:
 
     def add(self, row: object) -> None:
         self.added.append(row)
+
+    async def flush(self) -> None:
+        for row in self.added:
+            if isinstance(row, ReviewJob) and row.id is None:
+                row.id = 1
 
     async def commit(self) -> None:
         pass
@@ -169,6 +175,82 @@ def test_submit_review_queues_a_job_for_indexed_files() -> None:
     assert producer.published[0].repo_id == 10
 
 
+def _indexed_session() -> FakeAsyncSession:
+    return FakeAsyncSession(
+        registered_repo=_make_registered_repo(), indexed_files=[_make_indexed_file(file_path="a.py")]
+    )
+
+
+def test_submit_review_without_agents_stores_no_restriction_on_the_job() -> None:
+    session = _indexed_session()
+    client = TestClient(_build_app(session=session))
+
+    client.post("/api/repos/10/review", json={"file_paths": ["a.py"]})
+
+    assert session.added[0].agents is None
+
+
+def test_submit_review_without_agents_publishes_no_restriction() -> None:
+    producer = FakeReviewProducer()
+    client = TestClient(_build_app(session=_indexed_session(), kafka_producer=producer))
+
+    client.post("/api/repos/10/review", json={"file_paths": ["a.py"]})
+
+    assert producer.published[0].agents is None
+
+
+def test_submit_review_stores_the_requested_agents_on_the_job() -> None:
+    session = _indexed_session()
+    client = TestClient(_build_app(session=session))
+
+    client.post("/api/repos/10/review", json={"file_paths": ["a.py"], "agents": ["TEST", "TCASE"]})
+
+    assert session.added[0].agents == ["TEST", "TCASE"]
+
+
+def test_submit_review_publishes_the_requested_agents() -> None:
+    producer = FakeReviewProducer()
+    client = TestClient(_build_app(session=_indexed_session(), kafka_producer=producer))
+
+    client.post("/api/repos/10/review", json={"file_paths": ["a.py"], "agents": ["TEST", "TCASE"]})
+
+    assert [agent.value for agent in producer.published[0].agents] == ["TEST", "TCASE"]
+
+
+def test_submit_review_returns_the_requested_agents() -> None:
+    client = TestClient(_build_app(session=_indexed_session()))
+
+    response = client.post("/api/repos/10/review", json={"file_paths": ["a.py"], "agents": ["TEST"]})
+
+    assert response.json()["agents"] == ["TEST"]
+
+
+def test_submit_review_with_an_unknown_agent_is_rejected() -> None:
+    client = TestClient(_build_app(session=_indexed_session()))
+
+    response = client.post("/api/repos/10/review", json={"file_paths": ["a.py"], "agents": ["NOPE"]})
+
+    assert response.status_code == 422
+
+
+def test_submit_review_with_an_unknown_agent_stores_nothing() -> None:
+    session = _indexed_session()
+    client = TestClient(_build_app(session=session))
+
+    client.post("/api/repos/10/review", json={"file_paths": ["a.py"], "agents": ["NOPE"]})
+
+    assert session.added == []
+
+
+def test_get_review_returns_the_agents_the_review_was_restricted_to() -> None:
+    job = _make_review_job(agents=["TEST"])
+    client = TestClient(_build_app(session=FakeAsyncSession(review_job=job)))
+
+    response = client.get(f"/api/reviews/{job.review_id}")
+
+    assert response.json()["agents"] == ["TEST"]
+
+
 def test_submit_review_rejects_files_that_are_not_indexed() -> None:
     repo = _make_registered_repo()
     files = [_make_indexed_file(file_path="a.py")]
@@ -178,6 +260,141 @@ def test_submit_review_rejects_files_that_are_not_indexed() -> None:
     response = client.post("/api/repos/10/review", json={"file_paths": ["a.py", "missing.py"]})
 
     assert response.status_code == 400
+
+
+REPOLESS_FILES = [
+    {"file_path": "src/a.py", "content": "def a():\n    return 1\n"},
+    {"file_path": "tests/test_a.py", "content": "def test_a():\n    assert a() == 1\n"},
+]
+
+
+def _post_repoless(client: TestClient, **overrides):
+    return client.post("/api/reviews", json={"files": REPOLESS_FILES} | overrides)
+
+
+def test_submit_repoless_review_queues_a_pending_job() -> None:
+    client = TestClient(_build_app(session=FakeAsyncSession()))
+
+    response = _post_repoless(client)
+
+    assert (response.status_code, response.json()["status"]) == (202, "pending")
+
+
+def test_submit_repoless_review_stores_a_job_owned_by_the_user_with_no_repo() -> None:
+    session = FakeAsyncSession()
+    client = TestClient(_build_app(session=session))
+
+    _post_repoless(client)
+
+    job = session.added[0]
+    assert (job.requested_by_user_id, job.repo_id, job.guest_session_id) == (1, None, None)
+
+
+def test_submit_repoless_review_stores_each_files_content() -> None:
+    session = FakeAsyncSession()
+    client = TestClient(_build_app(session=session))
+
+    _post_repoless(client)
+
+    stored = [(row.file_path, row.content) for row in session.added if isinstance(row, GuestReviewFile)]
+    assert stored == [(file["file_path"], file["content"]) for file in REPOLESS_FILES]
+
+
+def test_submit_repoless_review_ties_the_stored_files_to_the_job() -> None:
+    session = FakeAsyncSession()
+    client = TestClient(_build_app(session=session))
+
+    _post_repoless(client)
+
+    job = session.added[0]
+    assert {row.review_job_id for row in session.added if isinstance(row, GuestReviewFile)} == {job.id}
+
+
+def test_submit_repoless_review_lists_the_file_paths_on_the_job() -> None:
+    session = FakeAsyncSession()
+    client = TestClient(_build_app(session=session))
+
+    _post_repoless(client)
+
+    assert session.added[0].file_paths == ["src/a.py", "tests/test_a.py"]
+
+
+def test_submit_repoless_review_publishes_a_message_without_the_file_content() -> None:
+    producer = FakeReviewProducer()
+    client = TestClient(_build_app(session=FakeAsyncSession(), kafka_producer=producer))
+
+    _post_repoless(client)
+
+    message = producer.published[0]
+    assert (message.requested_by_user_id, message.repo_id, message.file_paths) == (
+        1,
+        None,
+        ["src/a.py", "tests/test_a.py"],
+    )
+
+
+def test_submit_repoless_review_publishes_a_message_the_consumer_loads_stored_files_for() -> None:
+    producer = FakeReviewProducer()
+    client = TestClient(_build_app(session=FakeAsyncSession(), kafka_producer=producer))
+
+    _post_repoless(client)
+
+    assert producer.published[0].has_uploaded_files is True
+
+
+def test_submit_repoless_review_stores_and_publishes_the_requested_agents() -> None:
+    session = FakeAsyncSession()
+    producer = FakeReviewProducer()
+    client = TestClient(_build_app(session=session, kafka_producer=producer))
+
+    _post_repoless(client, agents=["TEST", "TCASE"])
+
+    assert (session.added[0].agents, [agent.value for agent in producer.published[0].agents]) == (
+        ["TEST", "TCASE"],
+        ["TEST", "TCASE"],
+    )
+
+
+def test_submit_repoless_review_returns_the_requested_agents() -> None:
+    client = TestClient(_build_app(session=FakeAsyncSession()))
+
+    response = _post_repoless(client, agents=["TEST"])
+
+    assert response.json()["agents"] == ["TEST"]
+
+
+def test_submit_repoless_review_asking_for_dry_is_rejected() -> None:
+    client = TestClient(_build_app(session=FakeAsyncSession()))
+
+    response = _post_repoless(client, agents=["DRY"])
+
+    assert response.status_code == 422
+
+
+def test_submit_repoless_review_asking_for_dry_stores_nothing() -> None:
+    session = FakeAsyncSession()
+    client = TestClient(_build_app(session=session))
+
+    _post_repoless(client, agents=["DRY"])
+
+    assert session.added == []
+
+
+def test_submit_repoless_review_with_no_files_is_rejected() -> None:
+    client = TestClient(_build_app(session=FakeAsyncSession()))
+
+    response = client.post("/api/reviews", json={"files": []})
+
+    assert response.status_code == 422
+
+
+def test_submit_repoless_review_when_the_queue_is_down_answers_502() -> None:
+    producer = FakeReviewProducer(publish_error=PublishError("broker unreachable"))
+    client = TestClient(_build_app(session=FakeAsyncSession(), kafka_producer=producer))
+
+    response = _post_repoless(client)
+
+    assert response.status_code == 502
 
 
 def test_submit_review_404s_for_an_unregistered_repo() -> None:

@@ -130,6 +130,7 @@ def api_payload(
 ) -> dict[str, Any]:
     return {
         "repo": {
+            "repo_id": 42,
             "status": status,
             "branch": "main",
             "commit_sha": "abc123",
@@ -293,3 +294,33 @@ async def test_http_source_fetch_when_api_is_unreachable_raises_status_unavailab
 
     with pytest.raises(RepoStatusUnavailable):
         await source.fetch(KNOWN_REPO)
+
+
+@pytest.mark.asyncio
+async def test_http_source_fetch_snapshot_carries_the_repo_id(make_source: SourceFactory) -> None:
+    """Verify that the id api/ addresses the repo by is available to callers that need to build a URL."""
+    source = make_source(respond_with(api_payload()))
+
+    snapshot = await source.fetch_snapshot(KNOWN_REPO)
+
+    assert snapshot.repo_id == 42
+
+
+@pytest.mark.asyncio
+async def test_http_source_fetch_snapshot_status_matches_fetch(make_source: SourceFactory) -> None:
+    """Verify that the snapshot and the plain status are derived from the same payload the same way."""
+    source = make_source(respond_with(api_payload("completed", ("indexed", "failed"))))
+
+    snapshot = await source.fetch_snapshot(KNOWN_REPO)
+
+    assert snapshot.status == await source.fetch(KNOWN_REPO)
+
+
+@pytest.mark.asyncio
+async def test_http_source_fetch_does_not_expose_the_repo_id(make_source: SourceFactory) -> None:
+    """Verify that the status returned to the calling LLM carries no numeric repo id."""
+    source = make_source(respond_with(api_payload()))
+
+    status = await source.fetch(KNOWN_REPO)
+
+    assert "repo_id" not in status.model_dump()

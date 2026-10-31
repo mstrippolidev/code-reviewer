@@ -1,7 +1,7 @@
 import uuid
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from api.db.models.review_job import ReviewJobStatus
 from code_reviewer.config.settings import get_settings
@@ -11,10 +11,46 @@ from code_reviewer.schemas.review import AgentReviewEntry, AggregatorOutput, Cod
 MAX_GUEST_FILES = 5
 
 
+def _lists_each_agent_once(agents: list[CodeKey]) -> list[CodeKey]:
+    if len(set(agents)) != len(agents):
+        raise ValueError("Each agent may be listed only once")
+    return agents
+
+
+AgentSelection = Annotated[list[CodeKey], Field(min_length=1), AfterValidator(_lists_each_agent_once)]
+
+
 class ReviewSubmissionRequest(BaseModel):
     """Files the client wants reviewed together, all already indexed for this repo."""
 
     file_paths: list[str] = Field(min_length=1, max_length=get_settings().max_files_per_submission)
+    agents: AgentSelection | None = None
+
+
+class FileData(BaseModel):
+    file_path: str
+    content: str
+
+
+class RepolessReviewSubmissionRequest(BaseModel):
+    """Raw files a logged-in user wants reviewed together with no repo, optionally by a subset of agents."""
+
+    files: list[FileData] = Field(min_length=1, max_length=get_settings().max_files_per_submission)
+    agents: AgentSelection | None = None
+
+    @field_validator("agents")
+    @classmethod
+    def _excludes_dry(cls, agents: list[CodeKey] | None) -> list[CodeKey] | None:
+        if agents is not None and CodeKey.DRY in agents:
+            raise ValueError("DRY compares against a registered repo's indexed history and cannot run with no repo")
+        return agents
+
+    @model_validator(mode="after")
+    def _has_unique_file_paths(self) -> "RepolessReviewSubmissionRequest":
+        file_paths = [file.file_path for file in self.files]
+        if len(file_paths) != len(set(file_paths)):
+            raise ValueError("Each submitted file must have a distinct file_path")
+        return self
 
 
 class GuestSubmittedFile(BaseModel):
@@ -52,6 +88,7 @@ class ReviewJobRead(BaseModel):
     status: ReviewJobStatus
     status_reason: str | None
     file_paths: list[str]
+    agents: list[CodeKey] | None
     result: AggregatorOutput | None
     agent_entries: dict[str, dict[str, AgentReviewEntry]] | None
 
@@ -115,12 +152,15 @@ class ReviewRequestedMessage(BaseModel):
     """Kafka message payload published to the review.requested topic.
 
     Exactly one shape per message: a repo review (repo_id, owner_id,
-    requested_by_user_id) whose content is loaded from IndexedFile rows, or a
-    guest review (guest_session_id) whose content is loaded from GuestReviewFile rows.
+    requested_by_user_id) whose content is loaded from IndexedFile rows, a
+    guest review (guest_session_id), or a user's repoless review
+    (requested_by_user_id alone); the last two load their content from
+    GuestReviewFile rows.
     """
 
     review_id: uuid.UUID
     file_paths: list[str]
+    agents: list[CodeKey] | None = None
     repo_id: int | None = None
     owner_id: int | None = None
     requested_by_user_id: int | None = None
@@ -130,10 +170,23 @@ class ReviewRequestedMessage(BaseModel):
     def _is_exactly_one_shape(self) -> "ReviewRequestedMessage":
         is_repo_review = None not in (self.repo_id, self.owner_id, self.requested_by_user_id)
         is_guest_review = self.guest_session_id is not None
-        if is_repo_review == is_guest_review:
-            raise ValueError("A review.requested message must be exactly one of a repo review or a guest review")
+        is_user_repoless_review = (
+            self.requested_by_user_id is not None
+            and self.repo_id is None
+            and self.owner_id is None
+            and self.guest_session_id is None
+        )
+        if [is_repo_review, is_guest_review, is_user_repoless_review].count(True) != 1:
+            raise ValueError(
+                "A review.requested message must be exactly one of a repo review, a guest review "
+                "or a user's repoless review"
+            )
         return self
 
     @property
     def is_guest_review(self) -> bool:
         return self.guest_session_id is not None
+
+    @property
+    def has_uploaded_files(self) -> bool:
+        return self.repo_id is None

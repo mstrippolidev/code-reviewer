@@ -138,18 +138,22 @@ class ReviewRequestConsumer(ConsumerInterface[ReviewRequestedMessage]):
         submitted_files, repo_data = await self._load_submission(review_msg, job, session)
         return await run_pipeline(
             submitted_files,
-            self._dependencies.agents_container,
+            self._agents_for(review_msg),
             repo_data,
             on_file_reviewed=self._build_progress_callback(review_msg, job, session),
             on_agent_reviewed=self._build_agent_progress_callback(review_msg),
         )
 
+    def _agents_for(self, review_msg: ReviewRequestedMessage) -> AgentsContainer:
+        selected_keys = frozenset(review_msg.agents) if review_msg.agents else None
+        return self._dependencies.agents_container.restricted_to(selected_keys)
+
     async def _load_submission(
         self, review_msg: ReviewRequestedMessage, job: ReviewJob, session: AsyncSession
     ) -> tuple[list[SubmittedFile], RepoData | None]:
-        if review_msg.is_guest_review:
-            guest_files = await self._load_guest_files(job, session)
-            return [SubmittedFile(file_path=f.file_path, content=f.content) for f in guest_files], None
+        if review_msg.has_uploaded_files:
+            uploaded_files = await self._load_uploaded_files(job, session)
+            return [SubmittedFile(file_path=f.file_path, content=f.content) for f in uploaded_files], None
         repo = await self._load_repo(review_msg.repo_id, session)
         files = await self._load_indexed_files(review_msg.repo_id, review_msg.file_paths, session)
         submitted_files = [SubmittedFile(file_path=f.file_path, content=f.content) for f in files]
@@ -224,13 +228,13 @@ class ReviewRequestConsumer(ConsumerInterface[ReviewRequestedMessage]):
             )
         return files
 
-    async def _load_guest_files(self, job: ReviewJob, session: AsyncSession) -> list[GuestReviewFile]:
+    async def _load_uploaded_files(self, job: ReviewJob, session: AsyncSession) -> list[GuestReviewFile]:
         result = await session.scalars(
             select(GuestReviewFile).where(GuestReviewFile.review_job_id == job.id).order_by(GuestReviewFile.id)
         )
         files = list(result.all())
         if not files:
-            raise ReviewFilesUnavailableError(f"No guest files stored for review_id={job.review_id}")
+            raise ReviewFilesUnavailableError(f"No submitted files stored for review_id={job.review_id}")
         return files
 
     async def _broadcast_status(self, review_msg: ReviewRequestedMessage, job: ReviewJob) -> None:
