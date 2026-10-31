@@ -6,11 +6,10 @@ from http import HTTPStatus
 from httpx import AsyncClient, HTTPError, HTTPStatusError, Response
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_server.tools.helper_api_error import detail_of, retry_after_hint
 from mcp_server.tools.repo_status import RepoNotFound, RepoStatus, RepoStatusSource, RepoStatusUnavailable
 
 REGISTER_REPO_PATH = "/api/repos"
-RETRY_AFTER_HEADER = "Retry-After"
-UNREADABLE_DETAIL = "api/ refused the request"
 
 
 class IndexRepoTool:
@@ -59,7 +58,7 @@ class IndexRepoTool:
 
     def _to_tool_error(self, repo_full_name: str, response: Response) -> ToolError:
         if response.status_code == HTTPStatus.BAD_REQUEST:
-            return ToolError(f"{self._detail_of(response)}. Correct the argument and call index_repo again.")
+            return ToolError(f"{detail_of(response)}. Correct the argument and call index_repo again.")
         if response.status_code == HTTPStatus.UNAUTHORIZED:
             return ToolError(
                 "Your GitHub authorization has expired. Ask the user to sign in again "
@@ -75,16 +74,7 @@ class IndexRepoTool:
         return ToolError(f"api/ answered {response.status_code}. Try again shortly.")
 
     def _too_many_requests_message(self, response: Response) -> str:
-        retry_after = response.headers.get(RETRY_AFTER_HEADER)
-        wait_hint = f" Retry after {retry_after} seconds." if retry_after else ""
         return (
-            f"{self._detail_of(response)}.{wait_hint} "
+            f"{detail_of(response)}.{retry_after_hint(response)} "
             "Call get_repo_status to see which repos are still indexing."
         )
-
-    def _detail_of(self, response: Response) -> str:
-        try:
-            detail = response.json()["detail"]
-        except (ValueError, KeyError, TypeError):
-            return UNREADABLE_DETAIL
-        return detail.rstrip(".") if isinstance(detail, str) else UNREADABLE_DETAIL
