@@ -342,6 +342,7 @@ class RepoIndexer:
         except Exception:
             # A lost notification, not a lost result — repo.status above is already committed.
             logger.exception("Failed to publish repo.status.progress for repo_id=%s", repo_id)
+        await self._dependencies.completion_finalizer.fail_pull_request_reviews(repo_id, session)
 
 
 def _extract_tarball_safely(tarball: bytes, extract_dir: str) -> None:

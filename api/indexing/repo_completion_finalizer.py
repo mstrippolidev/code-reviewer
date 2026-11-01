@@ -10,6 +10,7 @@ from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 from api.db.models.indexed_file import IndexedFile, IndexedFileStatus
 from api.indexing.producer import RepoIndexProducer
 from api.indexing.topics import REPO_STATUS_PROGRESS
+from api.review.pull_request_release import PendingPullRequestReleaser
 from api.schemas.repos import RepoStatusProgressMessage
 
 logger = logging.getLogger(__name__)
@@ -21,8 +22,9 @@ _TERMINAL_FILE_STATUSES = (IndexedFileStatus.INDEXED, IndexedFileStatus.SKIPPED,
 class RepoCompletionFinalizer:
     """Marks a repo COMPLETED or FAILED once every expected file reaches a terminal status; safe under concurrent callers."""
 
-    def __init__(self, producer: RepoIndexProducer) -> None:
+    def __init__(self, producer: RepoIndexProducer, pull_request_releaser: PendingPullRequestReleaser | None = None) -> None:
         self._producer = producer
+        self._pull_request_releaser = pull_request_releaser or PendingPullRequestReleaser(producer)
 
     async def finalize_if_complete(self, repo_id: int, session: AsyncSession) -> None:
         repo = await session.scalar(select(RegisteredRepo).where(RegisteredRepo.repo_id == repo_id))
@@ -42,6 +44,30 @@ class RepoCompletionFinalizer:
         if result.rowcount == 0:
             return  # another caller already finalized it — the WHERE just protected us from a double-fire
         await self._publish_final_status(repo_id, repo.total_files_expected, final_status, status_reason)
+        await self._settle_pull_request_reviews(repo, final_status, session)
+
+    async def fail_pull_request_reviews(self, repo_id: int, session: AsyncSession) -> None:
+        """Fails the pull request reviews waiting on a repo whose indexing failed outright; never raises, only logs."""
+        try:
+            await self._pull_request_releaser.fail(repo_id, session)
+        except Exception:
+            logger.exception("Failed to fail the pull request reviews waiting on repo_id=%s", repo_id)
+
+    async def _settle_pull_request_reviews(
+        self, repo: RegisteredRepo, final_status: RepoIndexStatus, session: AsyncSession
+    ) -> None:
+        """Starts the pull request reviews waiting on this repo if it completed, or fails them if it did not.
+
+        Never raises: the repo's status is already committed, and a problem settling reviews must not undo or
+        hide that.
+        """
+        try:
+            if final_status == RepoIndexStatus.COMPLETED:
+                await self._pull_request_releaser.release(repo, session)
+            else:
+                await self._pull_request_releaser.fail(repo.repo_id, session)
+        except Exception:
+            logger.exception("Failed to settle the pull request reviews waiting on repo_id=%s", repo.repo_id)
 
     async def _count_files_by_status(self, repo_id: int, session: AsyncSession) -> dict[IndexedFileStatus, int]:
         rows = await session.execute(

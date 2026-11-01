@@ -24,7 +24,10 @@ from api.indexing.repo_completion_finalizer import RepoCompletionFinalizer
 from api.indexing.repo_indexer import RepoIndexerDependencies
 from api.indexing.repo_progress_broadcaster import RepoProgressBroadcaster
 from api.integrations.github import GitHubOAuthClient, GitHubOAuthConfig
+from api.integrations.github_pull_requests import GitHubPullRequestClient
 from api.logging_config import configure_logging
+from api.review.pull_request_files import PullRequestFileFetcher
+from api.review.pull_request_loader import PullRequestSubmissionLoader
 from api.review.review_consumer import ReviewRequestConsumer, ReviewRequestConsumerDependencies
 from api.review.review_progress_broadcaster import ReviewProgressBroadcaster
 from api.review.review_progress_consumer import ReviewProgressConsumer
@@ -34,9 +37,12 @@ from api.routers.auth import router as auth_router
 from api.routers.guest import router as guest_router
 from api.routers.health import router as health_router
 from api.routers.oauth import router as oauth_router
+from api.routers.pull_requests import router as pull_requests_router
 from api.routers.repos import router as repos_router
 from api.routers.reviews import router as reviews_router
+from api.routers.similar_code import router as similar_code_router
 from api.security.origin_guard import CookieOriginGuard
+from api.similar_code.similar_code_consumer import SimilarCodeConsumerDependencies, SimilarCodeRequestConsumer
 from code_reviewer.agents.llm.factory import build_llm
 from code_reviewer.agents.registry import build_agent_roster
 from code_reviewer.rag.chunk_explainer import ChunkExplainer
@@ -78,6 +84,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         for key, dependencies in _build_consumer_specs(app, settings)
     ]
     app.state.consumer_tasks.append(asyncio.create_task(_build_review_consumer(app).consume()))
+    app.state.consumer_tasks.append(asyncio.create_task(_build_similar_code_consumer(app).consume()))
     app.state.consumer_tasks.append(
         asyncio.create_task(ReviewProgressConsumer(app.state.review_progress_broadcaster).consume())
     )
@@ -155,8 +162,23 @@ def _build_review_consumer(app: FastAPI) -> ReviewRequestConsumer:
         agents_container=app.state.agents_container,
         progress_publisher=KafkaReviewProgressPublisher(app.state.kafka_producer),
         dlq_producer=app.state.kafka_producer,
+        pull_request_loader=_build_pull_request_loader(app, get_api_settings()),
     )
     return ReviewRequestConsumer(dependencies)
+
+
+def _build_pull_request_loader(app: FastAPI, settings: ApiSettings) -> PullRequestSubmissionLoader:
+    fetcher = PullRequestFileFetcher(
+        GitHubPullRequestClient(app.state.http_client), settings.max_concurrent_file_dispatch
+    )
+    return PullRequestSubmissionLoader(fetcher, get_token_cipher())
+
+
+def _build_similar_code_consumer(app: FastAPI) -> SimilarCodeRequestConsumer:
+    dependencies = SimilarCodeConsumerDependencies(
+        database_engine=app.state.database_engine, agents_container=app.state.agents_container
+    )
+    return SimilarCodeRequestConsumer(dependencies)
 
 
 def _register_routers(app: FastAPI) -> None:
@@ -166,6 +188,8 @@ def _register_routers(app: FastAPI) -> None:
     app.include_router(oauth_router)
     app.include_router(repos_router)
     app.include_router(reviews_router)
+    app.include_router(pull_requests_router)
+    app.include_router(similar_code_router)
     app.include_router(guest_router)
 
 
