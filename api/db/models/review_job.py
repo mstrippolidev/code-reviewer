@@ -37,6 +37,8 @@ class ReviewJob(Base):
         ForeignKey("api.guest_sessions.id", ondelete="CASCADE"), index=True
     )
     file_paths: Mapped[list[str]] = mapped_column(JSON)
+    pr_number: Mapped[int | None]
+    head_sha: Mapped[str | None]
     agents: Mapped[list[str] | None] = mapped_column(JSON)
     status: Mapped[ReviewJobStatus] = mapped_column(
         SqlEnum(

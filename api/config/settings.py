@@ -45,7 +45,10 @@ class ApiSettings(BaseSettings):
     max_repo_registrations_per_minute: int = 5
     max_review_submissions_per_minute: int = 5
     max_guest_review_submissions_per_minute: int = 3
+    max_similar_code_searches_per_minute: int = 5
     max_unfinished_repo_indexings_per_user: int = 3
+    max_pull_request_files: int = 100
+    max_unfinished_reviews_per_user: int = 3
 
     @property
     def async_database_url(self) -> URL:

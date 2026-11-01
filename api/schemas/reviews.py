@@ -88,6 +88,8 @@ class ReviewJobRead(BaseModel):
     status: ReviewJobStatus
     status_reason: str | None
     file_paths: list[str]
+    pr_number: int | None
+    head_sha: str | None
     agents: list[CodeKey] | None
     result: AggregatorOutput | None
     agent_entries: dict[str, dict[str, AgentReviewEntry]] | None
@@ -153,9 +155,10 @@ class ReviewRequestedMessage(BaseModel):
 
     Exactly one shape per message: a repo review (repo_id, owner_id,
     requested_by_user_id) whose content is loaded from IndexedFile rows, a
-    guest review (guest_session_id), or a user's repoless review
-    (requested_by_user_id alone); the last two load their content from
-    GuestReviewFile rows.
+    pull request review (the same three plus pr_number) whose files are read
+    from GitHub by the worker, a guest review (guest_session_id), or a user's
+    repoless review (requested_by_user_id alone); the guest and repoless
+    reviews load their content from ReviewJobFile rows.
     """
 
     review_id: uuid.UUID
@@ -165,27 +168,36 @@ class ReviewRequestedMessage(BaseModel):
     owner_id: int | None = None
     requested_by_user_id: int | None = None
     guest_session_id: int | None = None
+    pr_number: int | None = None
 
     @model_validator(mode="after")
     def _is_exactly_one_shape(self) -> "ReviewRequestedMessage":
-        is_repo_review = None not in (self.repo_id, self.owner_id, self.requested_by_user_id)
-        is_guest_review = self.guest_session_id is not None
+        is_repo_scoped = None not in (self.repo_id, self.owner_id, self.requested_by_user_id)
+        is_repo_review = is_repo_scoped and self.pr_number is None
+        is_pull_request_review = is_repo_scoped and self.pr_number is not None
+        is_guest_review = self.guest_session_id is not None and self.pr_number is None
         is_user_repoless_review = (
             self.requested_by_user_id is not None
             and self.repo_id is None
             and self.owner_id is None
             and self.guest_session_id is None
+            and self.pr_number is None
         )
-        if [is_repo_review, is_guest_review, is_user_repoless_review].count(True) != 1:
+        shapes = [is_repo_review, is_pull_request_review, is_guest_review, is_user_repoless_review]
+        if shapes.count(True) != 1:
             raise ValueError(
-                "A review.requested message must be exactly one of a repo review, a guest review "
-                "or a user's repoless review"
+                "A review.requested message must be exactly one of a repo review, a pull request review, "
+                "a guest review or a user's repoless review"
             )
         return self
 
     @property
     def is_guest_review(self) -> bool:
         return self.guest_session_id is not None
+
+    @property
+    def is_pull_request_review(self) -> bool:
+        return self.pr_number is not None
 
     @property
     def has_uploaded_files(self) -> bool:
