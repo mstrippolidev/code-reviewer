@@ -14,3 +14,4 @@ resources:
   - topics/review-requested.yaml
   - topics/review-requested-dlq.yaml
   - topics/review-progress.yaml
+  - topics/similar-code-requested.yaml
