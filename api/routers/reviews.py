@@ -7,10 +7,10 @@ from fastapi.sse import ServerSentEvent
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.db.models.guest_review_file import GuestReviewFile
 from api.db.models.indexed_file import IndexedFile, IndexedFileStatus
 from api.db.models.registered_repo import RegisteredRepo
 from api.db.models.review_job import ReviewJob, ReviewJobStatus
+from api.db.models.review_job_file import ReviewJobFile
 from api.db.models.user import User
 from api.dependencies import (
     get_current_user,
@@ -21,6 +21,7 @@ from api.dependencies import (
     short_lived_db_session,
 )
 from api.indexing.producer import PublishError, RepoIndexProducer
+from api.review.review_capacity import ReviewSlotKeeper, get_review_slot_keeper, require_review_capacity
 from api.review.review_progress_broadcaster import ReviewProgressBroadcaster
 from api.review.topics import REVIEW_REQUESTED
 from api.schemas.reviews import (
@@ -42,7 +43,7 @@ _TERMINAL_JOB_STATUSES = frozenset({ReviewJobStatus.COMPLETED, ReviewJobStatus.F
 @router.post(
     "/repos/{repo_id}/review",
     status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(limit_review_submissions)],
+    dependencies=[Depends(limit_review_submissions), Depends(require_review_capacity)],
 )
 async def submit_review(
     request: ReviewSubmissionRequest,
@@ -50,8 +51,10 @@ async def submit_review(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
     kafka_producer: RepoIndexProducer = Depends(get_kafka_producer),
+    slot_keeper: ReviewSlotKeeper = Depends(get_review_slot_keeper),
 ) -> ReviewJobRead:
     await _require_files_are_indexed(repo.repo_id, request.file_paths, session)
+    await slot_keeper.reserve(current_user.id)
     job = ReviewJob(
         review_id=uuid.uuid4(),
         repo_id=repo.repo_id,
@@ -102,13 +105,19 @@ async def _publish_review_requested(job: ReviewJob, repo: RegisteredRepo, kafka_
         ) from error
 
 
-@router.post("/reviews", status_code=status.HTTP_202_ACCEPTED, dependencies=[Depends(limit_review_submissions)])
+@router.post(
+    "/reviews",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(limit_review_submissions), Depends(require_review_capacity)],
+)
 async def submit_repoless_review(
     request: RepolessReviewSubmissionRequest,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
     kafka_producer: RepoIndexProducer = Depends(get_kafka_producer),
+    slot_keeper: ReviewSlotKeeper = Depends(get_review_slot_keeper),
 ) -> ReviewJobRead:
+    await slot_keeper.reserve(current_user.id)
     job = ReviewJob(
         review_id=uuid.uuid4(),
         requested_by_user_id=current_user.id,
@@ -119,7 +128,7 @@ async def submit_repoless_review(
     session.add(job)
     await session.flush()
     for file in request.files:
-        session.add(GuestReviewFile(review_job_id=job.id, file_path=file.file_path, content=file.content))
+        session.add(ReviewJobFile(review_job_id=job.id, file_path=file.file_path, content=file.content))
     await session.commit()
     await session.refresh(job)
     await _publish_repoless_review_requested(job, kafka_producer)
@@ -154,16 +163,16 @@ async def get_review_file_content(
     session: AsyncSession = Depends(get_db_session),
     job: ReviewJob = Depends(require_review_access),
 ) -> ReviewFileContentRead:
-    """Serves a guest review's own submitted source; a repo review's source is served per repo instead."""
-    guest_file = await session.scalar(
-        select(GuestReviewFile).where(GuestReviewFile.review_job_id == job.id, GuestReviewFile.file_path == file_path)
+    """Serves the source a review job kept (a guest's, a user's repoless or a pull request's); a repo review's is served per repo."""
+    review_file = await session.scalar(
+        select(ReviewJobFile).where(ReviewJobFile.review_job_id == job.id, ReviewJobFile.file_path == file_path)
     )
-    if guest_file is None:
+    if review_file is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No submitted content for {file_path} in review {review_id}",
         )
-    return ReviewFileContentRead.model_validate(guest_file)
+    return ReviewFileContentRead.model_validate(review_file)
 
 
 async def _require_review_job(review_id: uuid.UUID, session: AsyncSession) -> ReviewJob:

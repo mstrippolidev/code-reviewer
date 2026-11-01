@@ -14,12 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config.settings import get_api_settings
 from api.db.engine import DatabaseEngine
-from api.db.models.guest_review_file import GuestReviewFile
 from api.db.models.indexed_file import IndexedFile, IndexedFileStatus
 from api.db.models.registered_repo import RegisteredRepo
 from api.db.models.review_job import ReviewJob, ReviewJobStatus
+from api.db.models.review_job_file import ReviewJobFile
 from api.indexing.consumers.interface import ConsumerInterface
 from api.indexing.producer import RepoIndexProducer
+from api.review.pull_request_loader import PullRequestReviewUnavailableError, PullRequestSubmissionLoader
 from api.review.review_progress_publisher import ReviewProgressPublisher
 from api.review.topics import REVIEW_REQUESTED, REVIEW_REQUESTED_DLQ
 from api.schemas.reviews import (
@@ -35,12 +36,13 @@ from code_reviewer.pipeline.orchestrator import (
     run_pipeline,
 )
 from code_reviewer.rag.repo_data import RepoData
-from code_reviewer.schemas.review import AgentReviewEntry, AggregatorOutput, CodeKey
+from code_reviewer.schemas.review import AgentReviewEntry, AggregatorOutput, CodeKey, SkippedFile
 from code_reviewer.schemas.submission import SubmittedFile
 
 logger = logging.getLogger(__name__)
 
 _GENERIC_FAILURE_REASON = "Review failed unexpectedly. Please try again."
+_FINAL_JOB_STATUSES = frozenset({ReviewJobStatus.COMPLETED, ReviewJobStatus.FAILED})
 
 settings = get_api_settings()
 
@@ -55,6 +57,10 @@ class ReviewRequestMessageParseError(Exception):
 
 class ReviewFilesUnavailableError(Exception):
     """Raised when a requested file is no longer an indexed row for this repo."""
+
+
+class ReviewAlreadyFinishedError(Exception):
+    """Raised when a review.requested message arrives for a job that already completed or failed."""
 
 
 class PipelineDegradedError(Exception):
@@ -73,6 +79,16 @@ class ReviewRequestConsumerDependencies:
     agents_container: AgentsContainer
     progress_publisher: ReviewProgressPublisher
     dlq_producer: RepoIndexProducer
+    pull_request_loader: PullRequestSubmissionLoader
+
+
+@dataclass(frozen=True)
+class _LoadedSubmission:
+    """What one review job hands to the pipeline: the files, the repo scoping, and files that could not be read."""
+
+    files: list[SubmittedFile]
+    repo_data: RepoData | None
+    unreadable_files: list[SkippedFile]
 
 
 class ReviewRequestConsumer(ConsumerInterface[ReviewRequestedMessage]):
@@ -98,6 +114,13 @@ class ReviewRequestConsumer(ConsumerInterface[ReviewRequestedMessage]):
     ) -> None:
         try:
             result = await self._run_review(review_msg)
+        except ReviewAlreadyFinishedError:
+            logger.info("Skipping review.requested for review_id=%s: the job already finished", review_msg.review_id)
+            return
+        except PullRequestReviewUnavailableError as error:
+            logger.warning("Pull request review %s cannot run: %s", review_msg.review_id, error.reason)
+            await self._mark_failed_best_effort(review_msg, error.reason)
+            return
         except Exception as error:
             logger.exception("Failed to process review.requested for review_id=%s", review_msg.review_id)
             await self._mark_failed_best_effort(review_msg)
@@ -127,6 +150,8 @@ class ReviewRequestConsumer(ConsumerInterface[ReviewRequestedMessage]):
 
     async def _start_job(self, review_msg: ReviewRequestedMessage, session: AsyncSession) -> ReviewJob:
         job = await self._load_job(review_msg.review_id, session)
+        if job.status in _FINAL_JOB_STATUSES:
+            raise ReviewAlreadyFinishedError(f"Review {review_msg.review_id} is already {job.status.value}")
         job.status = ReviewJobStatus.RUNNING
         await session.commit()
         await self._broadcast_status(review_msg, job)
@@ -135,14 +160,16 @@ class ReviewRequestConsumer(ConsumerInterface[ReviewRequestedMessage]):
     async def _execute_pipeline(
         self, review_msg: ReviewRequestedMessage, job: ReviewJob, session: AsyncSession
     ) -> AggregatorOutput:
-        submitted_files, repo_data = await self._load_submission(review_msg, job, session)
-        return await run_pipeline(
-            submitted_files,
+        submission = await self._load_submission(review_msg, job, session)
+        result = await run_pipeline(
+            submission.files,
             self._agents_for(review_msg),
-            repo_data,
+            submission.repo_data,
             on_file_reviewed=self._build_progress_callback(review_msg, job, session),
             on_agent_reviewed=self._build_agent_progress_callback(review_msg),
         )
+        result.meta.skipped_files.extend(submission.unreadable_files)
+        return result
 
     def _agents_for(self, review_msg: ReviewRequestedMessage) -> AgentsContainer:
         selected_keys = frozenset(review_msg.agents) if review_msg.agents else None
@@ -150,15 +177,27 @@ class ReviewRequestConsumer(ConsumerInterface[ReviewRequestedMessage]):
 
     async def _load_submission(
         self, review_msg: ReviewRequestedMessage, job: ReviewJob, session: AsyncSession
-    ) -> tuple[list[SubmittedFile], RepoData | None]:
+    ) -> _LoadedSubmission:
+        """Gathers the job's files and repo scoping from wherever this kind of review keeps them."""
+        if review_msg.is_pull_request_review:
+            return await self._load_pull_request(review_msg, job, session)
         if review_msg.has_uploaded_files:
             uploaded_files = await self._load_uploaded_files(job, session)
-            return [SubmittedFile(file_path=f.file_path, content=f.content) for f in uploaded_files], None
+            files = [SubmittedFile(file_path=f.file_path, content=f.content) for f in uploaded_files]
+            return _LoadedSubmission(files=files, repo_data=None, unreadable_files=[])
         repo = await self._load_repo(review_msg.repo_id, session)
-        files = await self._load_indexed_files(review_msg.repo_id, review_msg.file_paths, session)
-        submitted_files = [SubmittedFile(file_path=f.file_path, content=f.content) for f in files]
-        repo_data = RepoData(repo_id=str(repo.repo_id), owner_id=str(repo.owner_id), commit_sha=repo.commit_sha)
-        return submitted_files, repo_data
+        indexed_files = await self._load_indexed_files(review_msg.repo_id, review_msg.file_paths, session)
+        files = [SubmittedFile(file_path=f.file_path, content=f.content) for f in indexed_files]
+        return _LoadedSubmission(files=files, repo_data=_repo_data_of(repo), unreadable_files=[])
+
+    async def _load_pull_request(
+        self, review_msg: ReviewRequestedMessage, job: ReviewJob, session: AsyncSession
+    ) -> _LoadedSubmission:
+        """Reads the pull request's files from GitHub, then tells clients the job now has a file list."""
+        repo = await self._load_repo(review_msg.repo_id, session)
+        loaded = await self._dependencies.pull_request_loader.load(job, repo, session)
+        await self._broadcast_status(review_msg, job)
+        return _LoadedSubmission(files=loaded.files, repo_data=_repo_data_of(repo), unreadable_files=loaded.skipped)
 
     def _build_progress_callback(
         self, review_msg: ReviewRequestedMessage, job: ReviewJob, session: AsyncSession
@@ -228,9 +267,9 @@ class ReviewRequestConsumer(ConsumerInterface[ReviewRequestedMessage]):
             )
         return files
 
-    async def _load_uploaded_files(self, job: ReviewJob, session: AsyncSession) -> list[GuestReviewFile]:
+    async def _load_uploaded_files(self, job: ReviewJob, session: AsyncSession) -> list[ReviewJobFile]:
         result = await session.scalars(
-            select(GuestReviewFile).where(GuestReviewFile.review_job_id == job.id).order_by(GuestReviewFile.id)
+            select(ReviewJobFile).where(ReviewJobFile.review_job_id == job.id).order_by(ReviewJobFile.id)
         )
         files = list(result.all())
         if not files:
@@ -244,20 +283,21 @@ class ReviewRequestConsumer(ConsumerInterface[ReviewRequestedMessage]):
             repo_id=review_msg.repo_id,
             status=job.status,
             status_reason=job.status_reason,
-            file_paths=review_msg.file_paths,
+            file_paths=job.file_paths,
             result=result,
             agent_entries=job.agent_entries,
         )
         await self._dependencies.progress_publisher.publish(review_msg.review_id, event)
 
-    async def _mark_failed_best_effort(self, review_msg: ReviewRequestedMessage) -> None:
+    async def _mark_failed_best_effort(self, review_msg: ReviewRequestedMessage, reason: str = _GENERIC_FAILURE_REASON) -> None:
+        """Tries to set the job to `failed` with a reason the user can read; never raises, only logs if it cannot."""
         try:
             async with self._dependencies.database_engine.new_session() as session:
                 job = await session.scalar(select(ReviewJob).where(ReviewJob.review_id == review_msg.review_id))
                 if job is None:
                     return
                 job.status = ReviewJobStatus.FAILED
-                job.status_reason = _GENERIC_FAILURE_REASON
+                job.status_reason = reason
                 await session.commit()
                 await self._broadcast_status(review_msg, job)
         except Exception:
@@ -265,6 +305,11 @@ class ReviewRequestConsumer(ConsumerInterface[ReviewRequestedMessage]):
 
 
 _UNEXPECTED_SKIP_REASONS = frozenset({AGENT_EXECUTION_FAILED_REASON, GUARD_EXECUTION_FAILED_REASON})
+
+
+def _repo_data_of(repo: RegisteredRepo) -> RepoData:
+    """The scoping the pipeline searches within: this repo, its owner, and the commit its index reflects."""
+    return RepoData(repo_id=str(repo.repo_id), owner_id=str(repo.owner_id), commit_sha=repo.commit_sha)
 
 
 def _has_pipeline_failures(result: AggregatorOutput) -> bool:
