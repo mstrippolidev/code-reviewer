@@ -7,6 +7,7 @@ from mcp_server.resources.agents import AGENTS_URI, AgentsResource
 from mcp_server.tools.index_repo import IndexRepoTool
 from mcp_server.tools.repo_status import HttpRepoStatusSource, RepoStatusTools
 from mcp_server.tools.review import ReviewTools
+from mcp_server.tools.similar_code import SimilarCodeTools
 
 
 def ping(message: str) -> str:
@@ -42,6 +43,19 @@ mcp.add_tool(
 mcp.add_tool(
     review_tools.review_code,
     annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False),
+)
+mcp.add_tool(
+    review_tools.review_pr,
+    annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False),
+)
+similar_code_tools = SimilarCodeTools(api_client, status_source)
+mcp.add_tool(
+    similar_code_tools.find_similar_code,
+    annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False),
+)
+mcp.add_tool(
+    similar_code_tools.get_similar_code_result,
+    annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
 )
 mcp.resource(
     AGENTS_URI,

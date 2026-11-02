@@ -18,6 +18,16 @@ from api.repos.errors import (
     RepoPurgeError,
     TooManyIndexJobsError,
 )
+from api.review.errors import ReviewSlotBusyError, TooManyUnfinishedReviewsError
+from api.review.pull_request_errors import (
+    PullRequestBaseBranchError,
+    PullRequestNotFoundError,
+    PullRequestNotOpenError,
+    PullRequestQueueError,
+    PullRequestRepoNotReadyError,
+    PullRequestTooLargeError,
+    PullRequestUnavailableError,
+)
 from api.security.rate_limit import RateLimitExceededError
 
 logger = logging.getLogger(__name__)
@@ -35,6 +45,17 @@ REPO_ERROR_STATUS_CODES: dict[type[Exception], int] = {
     RepoEventPublishError: status.HTTP_502_BAD_GATEWAY,
     RepoPurgeError: status.HTTP_502_BAD_GATEWAY,
     TooManyIndexJobsError: status.HTTP_429_TOO_MANY_REQUESTS,
+}
+
+
+PULL_REQUEST_ERROR_STATUS_CODES: dict[type[Exception], int] = {
+    PullRequestNotFoundError: status.HTTP_404_NOT_FOUND,
+    PullRequestNotOpenError: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    PullRequestTooLargeError: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    PullRequestBaseBranchError: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    PullRequestRepoNotReadyError: status.HTTP_409_CONFLICT,
+    PullRequestUnavailableError: status.HTTP_502_BAD_GATEWAY,
+    PullRequestQueueError: status.HTTP_502_BAD_GATEWAY,
 }
 
 
@@ -66,8 +87,18 @@ def register_repo_exception_handlers(app: FastAPI) -> None:
         app.add_exception_handler(error_type, ErrorMessageHandler(status_code))
 
 
+def register_pull_request_exception_handlers(app: FastAPI) -> None:
+    for error_type, status_code in PULL_REQUEST_ERROR_STATUS_CODES.items():
+        app.add_exception_handler(error_type, ErrorMessageHandler(status_code))
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(RateLimitExceededError, handle_rate_limit_exceeded)
+    app.add_exception_handler(
+        TooManyUnfinishedReviewsError, ErrorMessageHandler(status.HTTP_429_TOO_MANY_REQUESTS)
+    )
+    app.add_exception_handler(ReviewSlotBusyError, ErrorMessageHandler(status.HTTP_503_SERVICE_UNAVAILABLE))
     register_repo_exception_handlers(app)
+    register_pull_request_exception_handlers(app)
     register_oauth_exception_handlers(app)
     app.add_exception_handler(Exception, handle_unexpected_error)

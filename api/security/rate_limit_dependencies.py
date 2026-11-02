@@ -10,6 +10,7 @@ from api.security.rate_limit import RateLimiter
 REPO_REGISTRATION_SCOPE = "repo_registration"
 REVIEW_SUBMISSION_SCOPE = "review_submission"
 GUEST_REVIEW_SUBMISSION_SCOPE = "guest_review_submission"
+SIMILAR_CODE_SEARCH_SCOPE = "similar_code_search"
 
 
 def get_rate_limiter(redis: Redis = Depends(get_redis)) -> RateLimiter:
@@ -28,6 +29,13 @@ async def limit_review_submissions(
     limiter: RateLimiter = Depends(get_rate_limiter),
 ) -> None:
     await limiter.hit(REVIEW_SUBMISSION_SCOPE, user.id, get_api_settings().max_review_submissions_per_minute)
+
+
+async def limit_similar_code_searches(
+    user: User = Depends(get_current_user),
+    limiter: RateLimiter = Depends(get_rate_limiter),
+) -> None:
+    await limiter.hit(SIMILAR_CODE_SEARCH_SCOPE, user.id, get_api_settings().max_similar_code_searches_per_minute)
 
 
 async def limit_guest_review_submissions(

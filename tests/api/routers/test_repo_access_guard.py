@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 from api.db.models.user import User
 from api.dependencies import (
+    get_agents_container,
     get_current_user,
     get_db_session,
     get_kafka_producer,
@@ -21,10 +22,13 @@ from api.dependencies import (
 )
 from api.exception_handlers import register_repo_exception_handlers
 from api.repos.errors import GitHubAuthorizationExpiredError, GitHubVerificationUnavailableError
+from api.review.review_capacity import get_review_slot_keeper
 from api.routers.repos import router as repos_router
 from api.routers.reviews import router as reviews_router
+from api.routers.similar_code import router as similar_code_router
 from api.security.rate_limit_dependencies import get_rate_limiter
 from tests.api.fake_rate_limit import AllowAllRateLimiter
+from tests.api.fake_review_slots import FakeSlotKeeper
 from tests.api.fake_repo_access import FakeRepoAccessChecker
 
 USER_ID = 7
@@ -41,6 +45,7 @@ REPO_ROUTES = [
     ("delete", f"/api/repos/{REPO_ID}", None),
     ("post", f"/api/repos/{REPO_ID}/branch", {"branch": "develop"}),
     ("post", f"/api/repos/{REPO_ID}/review", {"file_paths": ["a.py"]}),
+    ("post", f"/api/repos/{REPO_ID}/similar-code", {"code": "x = 1\n"}),
 ]
 MUTATING_ROUTES = [route for route in REPO_ROUTES if route[0] in {"post", "delete"}]
 
@@ -108,6 +113,7 @@ def _build_client(
     app = FastAPI()
     app.include_router(repos_router)
     app.include_router(reviews_router)
+    app.include_router(similar_code_router)
     register_repo_exception_handlers(app)
 
     async def _fake_db_session():
@@ -119,6 +125,8 @@ def _build_client(
     app.dependency_overrides[get_repo_lifecycle_service] = lambda: service or RecordingLifecycleService()
     app.dependency_overrides[get_kafka_producer] = lambda: producer or RecordingProducer()
     app.dependency_overrides[get_rate_limiter] = lambda: AllowAllRateLimiter()
+    app.dependency_overrides[get_agents_container] = lambda: object()
+    app.dependency_overrides[get_review_slot_keeper] = lambda: FakeSlotKeeper()
     return TestClient(app)
 
 

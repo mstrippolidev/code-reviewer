@@ -8,10 +8,10 @@ from datetime import datetime
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from api.db.models.guest_review_file import GuestReviewFile
 from api.db.models.indexed_file import IndexedFile, IndexedFileStatus
 from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 from api.db.models.review_job import ReviewJob, ReviewJobStatus
+from api.db.models.review_job_file import ReviewJobFile
 from api.db.models.user import User
 from api.dependencies import (
     get_current_user,
@@ -21,10 +21,14 @@ from api.dependencies import (
     require_review_access,
 )
 from api.indexing.producer import PublishError
+from api.exception_handlers import ErrorMessageHandler
+from api.review.errors import TooManyUnfinishedReviewsError
+from api.review.review_capacity import get_review_slot_keeper
 from api.routers.reviews import router as reviews_router
 from api.schemas.reviews import ReviewRequestedMessage
 from api.security.rate_limit_dependencies import get_rate_limiter
 from tests.api.fake_rate_limit import AllowAllRateLimiter
+from tests.api.fake_review_slots import FakeSlotKeeper
 from tests.api.fake_repo_access import FakeRepoAccessChecker
 
 
@@ -56,7 +60,7 @@ class FakeAsyncSession:
         registered_repo: RegisteredRepo | None = None,
         indexed_files: list[IndexedFile] | None = None,
         review_job: ReviewJob | None = None,
-        guest_file: GuestReviewFile | None = None,
+        guest_file: ReviewJobFile | None = None,
     ) -> None:
         self.registered_repo = registered_repo
         self.indexed_files = indexed_files or []
@@ -68,7 +72,7 @@ class FakeAsyncSession:
         entity = statement.column_descriptions[0]["entity"]
         if entity is ReviewJob:
             return self.review_job
-        if entity is GuestReviewFile:
+        if entity is ReviewJobFile:
             return self.guest_file
         return self.registered_repo
 
@@ -143,7 +147,12 @@ def _make_user() -> User:
     return User(id=1, github_id=1, github_username="octocat")
 
 
-def _build_app(*, session: FakeAsyncSession, kafka_producer: FakeReviewProducer | None = None) -> FastAPI:
+def _build_app(
+    *,
+    session: FakeAsyncSession,
+    kafka_producer: FakeReviewProducer | None = None,
+    slot_keeper: FakeSlotKeeper | None = None,
+) -> FastAPI:
     app = FastAPI()
     app.include_router(reviews_router)
 
@@ -156,6 +165,8 @@ def _build_app(*, session: FakeAsyncSession, kafka_producer: FakeReviewProducer 
     app.dependency_overrides[require_review_access] = lambda: session.review_job
     app.dependency_overrides[get_repo_access_checker] = lambda: FakeRepoAccessChecker()
     app.dependency_overrides[get_rate_limiter] = lambda: AllowAllRateLimiter()
+    app.dependency_overrides[get_review_slot_keeper] = lambda: slot_keeper or FakeSlotKeeper()
+    app.add_exception_handler(TooManyUnfinishedReviewsError, ErrorMessageHandler(429))
     return app
 
 
@@ -179,6 +190,58 @@ def _indexed_session() -> FakeAsyncSession:
     return FakeAsyncSession(
         registered_repo=_make_registered_repo(), indexed_files=[_make_indexed_file(file_path="a.py")]
     )
+
+
+def test_submit_review_reserves_the_callers_review_slot() -> None:
+    slot_keeper = FakeSlotKeeper()
+    client = TestClient(_build_app(session=_indexed_session(), slot_keeper=slot_keeper))
+
+    client.post("/api/repos/10/review", json={"file_paths": ["a.py"]})
+
+    assert slot_keeper.reserved == [1]
+
+
+def test_submit_review_that_loses_the_race_for_the_last_slot_answers_429() -> None:
+    """Verify the request refused at the reservation, after the early check passed, is a 429 too."""
+    slot_keeper = FakeSlotKeeper(refusing_reservation_only=True)
+    client = TestClient(_build_app(session=_indexed_session(), slot_keeper=slot_keeper))
+
+    response = client.post("/api/repos/10/review", json={"file_paths": ["a.py"]})
+
+    assert response.status_code == 429
+
+
+def test_submit_review_that_loses_the_race_for_the_last_slot_stores_and_queues_nothing() -> None:
+    """Verify the reservation happens before the insert, so a refused request leaves no job to run."""
+    session = _indexed_session()
+    producer = FakeReviewProducer()
+    slot_keeper = FakeSlotKeeper(refusing_reservation_only=True)
+    client = TestClient(_build_app(session=session, kafka_producer=producer, slot_keeper=slot_keeper))
+
+    client.post("/api/repos/10/review", json={"file_paths": ["a.py"]})
+
+    assert (session.added, producer.published) == ([], [])
+
+
+def test_submit_repoless_review_reserves_the_callers_review_slot() -> None:
+    slot_keeper = FakeSlotKeeper()
+    client = TestClient(_build_app(session=FakeAsyncSession(), slot_keeper=slot_keeper))
+
+    client.post("/api/reviews", json={"files": [{"file_path": "a.py", "content": "x = 1\n"}]})
+
+    assert slot_keeper.reserved == [1]
+
+
+def test_submit_repoless_review_that_loses_the_race_for_the_last_slot_stores_and_queues_nothing() -> None:
+    """Verify the repoless route also reserves before it stores the job or its files."""
+    session = FakeAsyncSession()
+    producer = FakeReviewProducer()
+    slot_keeper = FakeSlotKeeper(refusing_reservation_only=True)
+    client = TestClient(_build_app(session=session, kafka_producer=producer, slot_keeper=slot_keeper))
+
+    response = client.post("/api/reviews", json={"files": [{"file_path": "a.py", "content": "x = 1\n"}]})
+
+    assert (response.status_code, session.added, producer.published) == (429, [], [])
 
 
 def test_submit_review_without_agents_stores_no_restriction_on_the_job() -> None:
@@ -296,7 +359,7 @@ def test_submit_repoless_review_stores_each_files_content() -> None:
 
     _post_repoless(client)
 
-    stored = [(row.file_path, row.content) for row in session.added if isinstance(row, GuestReviewFile)]
+    stored = [(row.file_path, row.content) for row in session.added if isinstance(row, ReviewJobFile)]
     assert stored == [(file["file_path"], file["content"]) for file in REPOLESS_FILES]
 
 
@@ -307,7 +370,7 @@ def test_submit_repoless_review_ties_the_stored_files_to_the_job() -> None:
     _post_repoless(client)
 
     job = session.added[0]
-    assert {row.review_job_id for row in session.added if isinstance(row, GuestReviewFile)} == {job.id}
+    assert {row.review_job_id for row in session.added if isinstance(row, ReviewJobFile)} == {job.id}
 
 
 def test_submit_repoless_review_lists_the_file_paths_on_the_job() -> None:
@@ -420,7 +483,7 @@ def test_get_review_returns_the_job() -> None:
 
 def test_get_review_file_content_returns_a_guest_files_stored_source() -> None:
     job = _make_review_job(repo_id=None, requested_by_user_id=None, guest_session_id=7, file_paths=["example.py"])
-    guest_file = GuestReviewFile(id=1, review_job_id=job.id, file_path="example.py", content="def f(): ...\n")
+    guest_file = ReviewJobFile(id=1, review_job_id=job.id, file_path="example.py", content="def f(): ...\n")
     client = TestClient(_build_app(session=FakeAsyncSession(review_job=job, guest_file=guest_file)))
 
     response = client.get(f"/api/reviews/{job.review_id}/files/content", params={"file_path": "example.py"})

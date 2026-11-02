@@ -6,11 +6,13 @@ import uuid
 import pytest
 from pydantic import ValidationError
 
+from api.db.models.review_job import ReviewJob, ReviewJobStatus
 from api.schemas.reviews import (
     FileData,
     GuestReviewSubmissionRequest,
     GuestSubmittedFile,
     RepolessReviewSubmissionRequest,
+    ReviewJobRead,
     ReviewRequestedMessage,
     ReviewSubmissionRequest,
 )
@@ -217,3 +219,85 @@ def test_review_message_carries_the_requested_agents() -> None:
     )
 
     assert ReviewRequestedMessage.model_validate_json(message.model_dump_json()).agents == [CodeKey.VAR]
+
+
+def _pull_request_message(**overrides) -> ReviewRequestedMessage:
+    fields = {
+        "review_id": uuid.uuid4(),
+        "file_paths": [],
+        "repo_id": 10,
+        "owner_id": 99,
+        "requested_by_user_id": 1,
+        "pr_number": 7,
+    }
+    return ReviewRequestedMessage(**(fields | overrides))
+
+
+def test_pull_request_review_message_is_accepted_with_no_file_paths_yet() -> None:
+    """Verify the submit route can publish before the worker has read the pull request's files."""
+    message = _pull_request_message()
+
+    assert message.is_pull_request_review is True
+
+
+def test_pull_request_review_message_is_not_loaded_from_uploaded_files() -> None:
+    """Verify the consumer is not sent to the stored-files path, which has no repo to compare against."""
+    message = _pull_request_message()
+
+    assert message.has_uploaded_files is False
+
+
+def test_repo_review_message_is_not_a_pull_request_review() -> None:
+    """Verify an ordinary repo review keeps loading its files from the index."""
+    message = ReviewRequestedMessage(
+        review_id=uuid.uuid4(), file_paths=["a.py"], repo_id=10, owner_id=99, requested_by_user_id=1
+    )
+
+    assert message.is_pull_request_review is False
+
+
+def test_pull_request_review_message_without_a_repo_is_rejected() -> None:
+    """Verify a pull request number alone cannot be read as a repoless review."""
+    with pytest.raises(ValidationError):
+        ReviewRequestedMessage(review_id=uuid.uuid4(), file_paths=[], requested_by_user_id=1, pr_number=7)
+
+
+def test_pull_request_review_message_without_a_requesting_user_is_rejected() -> None:
+    """Verify the worker always knows whose GitHub token to read the files with."""
+    with pytest.raises(ValidationError):
+        ReviewRequestedMessage(review_id=uuid.uuid4(), file_paths=[], repo_id=10, owner_id=99, pr_number=7)
+
+
+def test_guest_review_message_with_a_pull_request_number_is_rejected() -> None:
+    """Verify a guest, who has no GitHub token, cannot be mixed with a pull request review."""
+    with pytest.raises(ValidationError):
+        ReviewRequestedMessage(review_id=uuid.uuid4(), file_paths=[], guest_session_id=7, pr_number=7)
+
+
+def test_pull_request_review_message_round_trips_through_json() -> None:
+    """Verify the Kafka message keeps the pull request number the worker needs."""
+    message = _pull_request_message()
+
+    assert ReviewRequestedMessage.model_validate_json(message.model_dump_json()).pr_number == 7
+
+
+def test_review_job_read_exposes_the_pull_request_number_and_head_commit() -> None:
+    """Verify a client can see which pull request, at which commit, a review covers."""
+    job = ReviewJob(
+        id=1,
+        review_id=uuid.uuid4(),
+        repo_id=10,
+        requested_by_user_id=1,
+        file_paths=[],
+        pr_number=7,
+        head_sha="abc123",
+        status=ReviewJobStatus.PENDING,
+        status_reason=None,
+        result=None,
+        agent_entries=None,
+        agents=None,
+    )
+
+    read = ReviewJobRead.model_validate(job)
+
+    assert (read.pr_number, read.head_sha) == (7, "abc123")

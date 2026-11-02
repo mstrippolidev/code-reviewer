@@ -4,9 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config.settings import get_api_settings
-from api.db.models.guest_review_file import GuestReviewFile
 from api.db.models.guest_session import GuestSession
 from api.db.models.review_job import ReviewJob, ReviewJobStatus
+from api.db.models.review_job_file import ReviewJobFile
 from api.dependencies import (
     GUEST_SESSION_COOKIE,
     get_db_session,
@@ -60,7 +60,7 @@ async def submit_guest_review(
     session.add(job)
     await session.flush()
     for file in request.files:
-        session.add(GuestReviewFile(review_job_id=job.id, file_path=file.file_path, content=file.content))
+        session.add(ReviewJobFile(review_job_id=job.id, file_path=file.file_path, content=file.content))
     await session.commit()
     await session.refresh(job)
     await _publish_guest_review_requested(job, kafka_producer)

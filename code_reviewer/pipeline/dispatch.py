@@ -10,16 +10,13 @@ from langchain_core.runnables import RunnableLambda, RunnableParallel
 
 from code_reviewer.agents.base import AgentBase, FileReviewMeta, FileSizeAwareAgentBase
 from code_reviewer.agents.llm.middleware import rating_from_incidents
-from code_reviewer.agents.llm.timeout import call_with_hard_timeout
 from code_reviewer.agents.registry import AgentsContainer
 from code_reviewer.config.settings import get_settings
 from code_reviewer.pipeline.code_splitter.interface import CodeChunk, CodeSplitterInterface
 from code_reviewer.pipeline.code_splitter.python import PythonCodeSplit
+from code_reviewer.pipeline.dry_check import run_dry
 from code_reviewer.pipeline.line_offset import offset_incidents
 from code_reviewer.prompts.agents.line_numbering import number_lines
-from code_reviewer.rag.dry_evidence import extract_snippet
-from code_reviewer.rag.dry_matching import ChunkHistoryMatch, CrossHistoryDuplicateFinder, DuplicateEvidenceSources
-from code_reviewer.rag.dry_review import build_dry_review_entry
 from code_reviewer.rag.errors import (
     ChunkExplanationError,
     PairingJudgeInvocationError,
@@ -43,10 +40,6 @@ logger = logging.getLogger(__name__)
 
 _TEST_FILE_HYGIENE_KEYS = frozenset({CodeKey.VAR, CodeKey.ERR, CodeKey.CMT})
 _TCASE_HEADER_LINE_COUNT = 1
-DRY_REQUIRES_REPO_REASON = (
-    "Duplication checks compare against a registered repository's indexed history, "
-    "so DRY is only available for GitHub-connected reviews."
-)
 _PAIRING_LOOKUP_ERRORS = (
     VectorStoreQueryError,
     ChunkExplanationError,
@@ -84,7 +77,7 @@ def review_file(
     if agents_container.is_selected(CodeKey.TCASE):
         entries.append(_run_tcase_agent(prepared_file, agents_container))
     if not standalone and agents_container.is_selected(CodeKey.DRY):
-        entries.append(_run_dry(agents_container, prepared_file))
+        entries.append(run_dry(agents_container, prepared_file))
     return entries
 
 
@@ -222,64 +215,6 @@ def _tcase_test_files(
             exc_info=True,
         )
         return []
-
-
-def _run_dry(agents_container: AgentsContainer, prepared_file: PreparedFile) -> AgentReviewEntry:
-    """Exact structural-hash matches need no LLM judgment — the hash
-    already proves the duplicate — so only the fuzzy, re-ranked candidates
-    reach the DRY judge; a file with no evidence of either kind short-
-    circuits to a clean result with no LLM call at all."""
-    file_path = prepared_file.source_file.file_path
-    if prepared_file.repo_data is None:
-        return AgentReviewEntry(
-            file_path=file_path,
-            code_key=CodeKey.DRY,
-            incidents=[],
-            skipped=True,
-            skip_reason=DRY_REQUIRES_REPO_REASON,
-        )
-    intra_pr_groups = prepared_file.intra_pr_duplicates
-    history_matches = _gather_dry_history_matches(agents_container, prepared_file)
-    if not intra_pr_groups and not history_matches:
-        return AgentReviewEntry(file_path=file_path, code_key=CodeKey.DRY, incidents=[])
-    return call_with_hard_timeout(
-        lambda: build_dry_review_entry(
-            file_path,
-            prepared_file.source_file.content,
-            intra_pr_groups,
-            history_matches,
-            agents_container.dry_judge,
-        ),
-        timeout=get_settings().dry_agent_timeout_seconds,
-    )
-
-
-def _gather_dry_history_matches(agents_container: AgentsContainer, prepared_file: PreparedFile) -> list[ChunkHistoryMatch]:
-    """Looks up what this file duplicates in the repo's indexed history —
-    skipped entirely for a standalone review with no repo context, Every match's
-    similarity buckets are then re-ranked by relevance to the chunk's own
-    code, so DRY's evidence carries the over-fetched buckets' survivors,
-    not their raw recall."""
-    if prepared_file.repo_data is None:
-        return []
-    evidence_sources = DuplicateEvidenceSources(
-        structural_hash_store=agents_container.structural_hash_store,
-        embedding_index=agents_container.rag_manager,
-        code_similarity_index=agents_container.code_similarity_index,
-    )
-    finder = CrossHistoryDuplicateFinder(evidence_sources, prepared_file.repo_data)
-    content = prepared_file.source_file.content
-    matches = finder.find(prepared_file.source_file.file_path, content)
-    reranker = agents_container.history_match_reranker
-    reranked = [reranker.rerank(extract_snippet(content, match.chunk), match) for match in matches]
-    return [match for match in reranked if _has_evidence(match)]
-
-
-def _has_evidence(match: ChunkHistoryMatch) -> bool:
-    """A chunk whose every bucket the re-ranker emptied out carries nothing
-    for DRY to say, the same standard CrossHistoryDuplicateFinder itself
-    already applies before re-ranking ever runs."""
-    return bool(match.structural_matches or match.semantic_matches or match.code_matches or match.lexical_matches)
 
 
 def _apply_cmplx_soft_limit_incident(entries: list[AgentReviewEntry], prepared_file: PreparedFile) -> None:
@@ -472,7 +407,7 @@ def _dry_branch(agents_container: AgentsContainer, prepared_file: PreparedFile) 
     isolated so its own failure can't take down the other branches."""
     file_path = prepared_file.source_file.file_path
     return RunnableLambda(
-        lambda ctx: _isolate_agent_failure(CodeKey.DRY, file_path, lambda: _run_dry(agents_container, prepared_file))
+        lambda ctx: _isolate_agent_failure(CodeKey.DRY, file_path, lambda: run_dry(agents_container, prepared_file))
     )
 
 

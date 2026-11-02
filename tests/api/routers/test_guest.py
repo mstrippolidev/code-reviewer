@@ -8,9 +8,9 @@ import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
-from api.db.models.guest_review_file import GuestReviewFile
 from api.db.models.guest_session import GuestSession
 from api.db.models.review_job import ReviewJob
+from api.db.models.review_job_file import ReviewJobFile
 from api.dependencies import (
     GUEST_SESSION_COOKIE,
     get_db_session,
@@ -133,7 +133,7 @@ def test_submit_guest_review_stores_each_files_content_against_the_job(
     """Verify the submitted source is persisted, since the consumer and annotated view read it back later."""
     client.post("/api/guest/review", json=_files(count=2), cookies=_guest_cookie(jwt_service))
 
-    stored = [(row.review_job_id, row.file_path, row.content) for row in session.added if isinstance(row, GuestReviewFile)]
+    stored = [(row.review_job_id, row.file_path, row.content) for row in session.added if isinstance(row, ReviewJobFile)]
     assert stored == [(1, "f0.py", "x = 1\n"), (1, "f1.py", "x = 1\n")]
 
 

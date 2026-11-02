@@ -205,6 +205,10 @@ class FakeCompletionFinalizer:
 
     def __init__(self) -> None:
         self.finalize_calls: list[int] = []
+        self.failed_pull_request_review_calls: list[int] = []
+
+    async def fail_pull_request_reviews(self, repo_id: int, session: FakeAsyncSession) -> None:
+        self.failed_pull_request_review_calls.append(repo_id)
 
     async def finalize_if_complete(self, repo_id: int, session: FakeAsyncSession) -> None:
         self.finalize_calls.append(repo_id)
@@ -485,6 +489,20 @@ async def test_mark_repo_failed_publishes_repo_status_progress() -> None:
     assert message.repo_id == 10
     assert message.status == RepoIndexStatus.FAILED
     assert "github unreachable" in message.status_reason
+
+
+@pytest.mark.asyncio
+async def test_mark_repo_failed_fails_the_pull_request_reviews_waiting_on_the_repo() -> None:
+    """Verify a repo that fails before any file is processed does not leave its waiting reviews pending forever."""
+    session = FakeAsyncSession(users={1: _make_user()}, registered_repo=RegisteredRepo(repo_id=10, status=RepoIndexStatus.PENDING))
+    github_client = FakeGitHubClient(commit_error=RuntimeError("github unreachable"))
+    finalizer = FakeCompletionFinalizer()
+    indexer, _ = _make_indexer(session=session, github_client=github_client, completion_finalizer=finalizer)
+
+    with pytest.raises(RuntimeError):
+        await indexer.index_repo(_make_repo_msg())
+
+    assert finalizer.failed_pull_request_review_calls == [10]
 
 
 @pytest.mark.asyncio

@@ -9,10 +9,10 @@ from datetime import datetime
 
 import pytest
 
-from api.db.models.guest_review_file import GuestReviewFile
 from api.db.models.indexed_file import IndexedFile, IndexedFileStatus
 from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 from api.db.models.review_job import ReviewJob, ReviewJobStatus
+from api.db.models.review_job_file import ReviewJobFile
 from api.review import review_consumer
 from api.review.review_consumer import ReviewRequestConsumer, ReviewRequestConsumerDependencies
 from api.review.review_progress_publisher import ReviewProgressPublisher
@@ -68,7 +68,7 @@ class FakeAsyncSession:
         registered_repo: RegisteredRepo | None = None,
         review_job: ReviewJob | None = None,
         indexed_files: list[IndexedFile] | None = None,
-        guest_files: list[GuestReviewFile] | None = None,
+        guest_files: list[ReviewJobFile] | None = None,
     ) -> None:
         self.registered_repo = registered_repo
         self.review_job = review_job
@@ -89,7 +89,7 @@ class FakeAsyncSession:
         return self.registered_repo
 
     async def scalars(self, statement) -> _ScalarsResult:
-        if statement.column_descriptions[0]["entity"] is GuestReviewFile:
+        if statement.column_descriptions[0]["entity"] is ReviewJobFile:
             return _ScalarsResult(self.guest_files)
         return _ScalarsResult(self.indexed_files)
 
@@ -210,14 +210,26 @@ def _make_agent_entry(*, file_path: str, agents_failed: list[CodeKey]) -> Aggreg
     )
 
 
+class FakePullRequestLoader:
+    """Stands in for PullRequestSubmissionLoader; the ordinary review tests never reach a pull request branch."""
+
+    async def load(self, job, repo, session):
+        raise AssertionError("a non pull request review must not read a pull request")
+
+
 def _make_consumer(
-    *, session: FakeAsyncSession, broadcaster: FakeProgressPublisher, dlq_producer: FakeDlqProducer | None = None
+    *,
+    session: FakeAsyncSession,
+    broadcaster: FakeProgressPublisher,
+    dlq_producer: FakeDlqProducer | None = None,
+    pull_request_loader: object | None = None,
 ) -> ReviewRequestConsumer:
     dependencies = ReviewRequestConsumerDependencies(
         database_engine=FakeDatabaseEngine(session),
         agents_container=FakeAgentsContainer(),
         progress_publisher=broadcaster,
         dlq_producer=dlq_producer or FakeDlqProducer(),
+        pull_request_loader=pull_request_loader or FakePullRequestLoader(),
     )
     return ReviewRequestConsumer(dependencies)
 
@@ -509,7 +521,7 @@ def _arrange_guest_review(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[_PipelineCallRecorder, ReviewRequestConsumer, ReviewRequestedMessage]:
     review_msg = _make_guest_message()
-    guest_file = GuestReviewFile(id=1, review_job_id=1, file_path="example.py", content="def f():\n    return 1\n")
+    guest_file = ReviewJobFile(id=1, review_job_id=1, file_path="example.py", content="def f():\n    return 1\n")
     session = FakeAsyncSession(review_job=_make_job(review_msg), guest_files=[guest_file])
     consumer = _make_consumer(session=session, broadcaster=FakeProgressPublisher())
     recorder = _PipelineCallRecorder()
@@ -594,7 +606,7 @@ def _arrange_user_repoless_review(
     review_msg = ReviewRequestedMessage(
         review_id=uuid.uuid4(), file_paths=["src/a.py"], requested_by_user_id=1, **message_overrides
     )
-    stored_file = GuestReviewFile(id=1, review_job_id=1, file_path="src/a.py", content="def a():\n    return 1\n")
+    stored_file = ReviewJobFile(id=1, review_job_id=1, file_path="src/a.py", content="def a():\n    return 1\n")
     session = FakeAsyncSession(review_job=_make_job(review_msg), guest_files=[stored_file])
     consumer = _make_consumer(session=session, broadcaster=FakeProgressPublisher())
     recorder = _PipelineCallRecorder()

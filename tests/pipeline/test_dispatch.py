@@ -15,7 +15,8 @@ from sqlalchemy.pool import StaticPool
 from code_reviewer.agents.base import FileReviewMeta
 from code_reviewer.agents.registry import AgentsContainer
 from code_reviewer.pipeline.call_depth.depth_follower import DepthReport
-from code_reviewer.pipeline.dispatch import DRY_REQUIRES_REPO_REASON, review_file, review_file_runnable
+from code_reviewer.pipeline.dispatch import review_file, review_file_runnable
+from code_reviewer.pipeline.dry_check import DRY_REQUIRES_REPO_REASON
 from code_reviewer.rag.code_similarity_index import CodeMatch, LexicalMatch
 from code_reviewer.rag.dry_judge import JudgeCandidate
 from code_reviewer.rag.indexer import SimilarChunk
