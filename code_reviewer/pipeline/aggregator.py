@@ -8,7 +8,7 @@ from code_reviewer.schemas.review import (
     AgentReviewEntry,
     AggregatedReviewEntry,
     AggregatorOutput,
-    Incident,
+    AttributedIncident,
     Meta,
     PrRecommendation,
     Priority,
@@ -76,9 +76,9 @@ class Aggregator:
         wrongly read as the deterministic hard-limit case to every caller below."""
         return [entry for entry in entries if not entry.failed and not entry.skipped]
 
-    def _merge_incidents(self, entries: list[AgentReviewEntry]) -> list[Incident]:
+    def _merge_incidents(self, entries: list[AgentReviewEntry]) -> list[AttributedIncident]:
         return [
-            incident.model_copy(update={"code_key": entry.code_key})
+            AttributedIncident(**incident.model_dump(), code_key=entry.code_key)
             for entry in entries
             for incident in entry.incidents
         ]
