@@ -17,6 +17,8 @@ class FakeConsumerRecord:
         self.value = value
         self.key = key
         self.offset = offset
+        self.topic = "repo.file.retry"
+        self.headers: list[tuple[str, bytes]] = []
 
 
 class FakeKafkaConsumer:

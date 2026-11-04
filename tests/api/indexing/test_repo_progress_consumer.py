@@ -20,6 +20,7 @@ class FakeConsumerRecord:
         self.value = value
         self.topic = topic
         self.offset = offset
+        self.headers: list[tuple[str, bytes]] = []
 
 
 class FakeKafkaConsumer:

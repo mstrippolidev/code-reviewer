@@ -6,8 +6,18 @@ from abc import ABCMeta, abstractmethod
 from typing import Generic, TypeVar
 
 from aiokafka import AIOKafkaConsumer, ConsumerRecord
+from opentelemetry import propagate, trace
+from opentelemetry.context import Context
 
 ParsedMessage = TypeVar("ParsedMessage")
+
+tracer = trace.get_tracer(__name__)
+
+
+def _context_from_headers(msg: ConsumerRecord) -> Context:
+    """Rebuilds the trace context the producer wrote into the message headers."""
+    carrier = {key: value.decode() for key, value in msg.headers if value is not None}
+    return propagate.extract(carrier)
 
 
 class ConsumerInterface(Generic[ParsedMessage], metaclass=ABCMeta):
@@ -53,6 +63,12 @@ class ConsumerInterface(Generic[ParsedMessage], metaclass=ABCMeta):
             self._logger.info("Stopped consumer group_id=%s topic=%s", self.group_id, self.topic)
 
     async def _process_message(self, msg: ConsumerRecord, consumer: AIOKafkaConsumer) -> None:
+        with tracer.start_as_current_span(
+            f"{msg.topic} process", context=_context_from_headers(msg), kind=trace.SpanKind.CONSUMER
+        ):
+            await self._handle_message(msg, consumer)
+
+    async def _handle_message(self, msg: ConsumerRecord, consumer: AIOKafkaConsumer) -> None:
         try:
             parsed = self._parse_msg(msg)
         except Exception as error:

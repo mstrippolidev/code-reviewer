@@ -32,6 +32,8 @@ class FakeConsumerRecord:
     def __init__(self, value: bytes) -> None:
         self.value = value
         self.offset = 0
+        self.topic = "review.progress"
+        self.headers: list[tuple[str, bytes]] = []
 
 
 class FakeKafkaConsumer:
