@@ -63,13 +63,10 @@ class Incident(BaseModel):
     advice: str = Field(
         description="A concrete, actionable fix — what to rename, split, or extract."
     )
-    code_key: CodeKey | None = Field(
-        default=None,
-        description=(
-            "Which agent raised this incident. Omitted on a single agent's own "
-            "output; set by the aggregator when merging multiple agents' results."
-        ),
-    )
+
+
+class AttributedIncident(Incident):
+    code_key: CodeKey
 
 
 class AgentReviewEntry(BaseModel):
@@ -173,7 +170,7 @@ class AggregatedReviewEntry(BaseModel):
     skip_reason: str | None = Field(
         description="Why agents were skipped for this file, or null if none were."
     )
-    incidents: list[Incident] = Field(
+    incidents: list[AttributedIncident] = Field(
         description="All incidents found for this file across every agent that reviewed it."
     )
 

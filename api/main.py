@@ -26,6 +26,7 @@ from api.indexing.repo_progress_broadcaster import RepoProgressBroadcaster
 from api.integrations.github import GitHubOAuthClient, GitHubOAuthConfig
 from api.integrations.github_pull_requests import GitHubPullRequestClient
 from api.logging_config import configure_logging
+from api.observability.telemetry import configure_telemetry, instrument_fastapi
 from api.review.pull_request_files import PullRequestFileFetcher
 from api.review.pull_request_loader import PullRequestSubmissionLoader
 from api.review.review_consumer import ReviewRequestConsumer, ReviewRequestConsumerDependencies
@@ -58,6 +59,8 @@ ConsumerSpec = tuple[str, ConsumerDependencies]
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_api_settings()
+    if settings.otel_enable:
+        app.state.tracer_provider = configure_telemetry(settings)
     app.state.database_engine = DatabaseEngine(settings.async_database_url)
     app.state.http_client = httpx.AsyncClient(http2=True)
     app.state.redis = Redis.from_url(settings.redis_url)
@@ -97,6 +100,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         with contextlib.suppress(asyncio.CancelledError):
             await task
     await app.state.kafka_producer.stop()
+    if settings.otel_enable:
+        app.state.tracer_provider.shutdown()
     await app.state.http_client.aclose()
     await app.state.redis.aclose()
     await app.state.database_engine.dispose()
@@ -209,12 +214,15 @@ def _register_origin_guard(app: FastAPI) -> None:
 
 
 def create_app() -> FastAPI:
-    configure_logging(get_api_settings())
+    settings = get_api_settings()
+    configure_logging(settings)
     app = FastAPI(title="My FastAPI Application", version="1.0.0", lifespan=lifespan)
     _register_routers(app)
     _register_origin_guard(app)
     _register_cors(app)
     register_exception_handlers(app)
+    if settings.otel_enable:
+        instrument_fastapi(app)
     return app
 
 

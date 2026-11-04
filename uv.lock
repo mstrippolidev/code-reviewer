@@ -7,8 +7,10 @@ resolution-markers = [
     "python_full_version == '3.13.*' and sys_platform != 'darwin'",
     "python_full_version == '3.13.*' and sys_platform == 'darwin'",
     "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "(python_full_version < '3.12' and sys_platform == 'emscripten') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'emscripten')",
-    "python_full_version < '3.13' and sys_platform == 'darwin'",
+    "(python_full_version >= '3.11' and python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'emscripten') or (python_full_version == '3.11.*' and sys_platform == 'emscripten')",
+    "python_full_version < '3.11' and sys_platform != 'darwin'",
+    "python_full_version >= '3.11' and python_full_version < '3.13' and sys_platform == 'darwin'",
+    "python_full_version < '3.11' and sys_platform == 'darwin'",
 ]
 
 [[package]]
@@ -280,6 +282,40 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b9/33/032cdc44182491aa708d06a68b62434140d8c50820a087fac7af37703357/arrow-1.4.0.tar.gz", hash = "sha256:ed0cc050e98001b8779e84d461b0098c4ac597e88704a655582b21d116e526d7", size = 152931, upload-time = "2025-10-18T17:46:46.761Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ed/c9/d7977eaacb9df673210491da99e6a247e93df98c715fc43fd136ce1d3d33/arrow-1.4.0-py3-none-any.whl", hash = "sha256:749f0769958ebdc79c173ff0b0670d59051a535fa26e8eba02953dc19eb43205", size = 68797, upload-time = "2025-10-18T17:46:45.663Z" },
+]
+
+[[package]]
+name = "asgiref"
+version = "3.12.1"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version < '3.11' and sys_platform != 'darwin'",
+    "python_full_version < '3.11' and sys_platform == 'darwin'",
+]
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e6/26/3b59f2bdae5f640389becb1f673cded775287f5fc4f816309d9ca9a3f93d/asgiref-3.12.1.tar.gz", hash = "sha256:59dcb51c272ad209d59bed5708a64a333083e86017d7fcdd67498eeab7784340", size = 42378, upload-time = "2026-07-14T09:56:18.087Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c0/1b/54f4ad77cd8a584fa70746c47df988e002cf1ee1eba43364d46f87803647/asgiref-3.12.1-py3-none-any.whl", hash = "sha256:fe386d1c2bff7259ea95929266d12a8cf9a8b5a1c2598402967d8792e7a7c094", size = 25478, upload-time = "2026-07-14T09:56:16.926Z" },
+]
+
+[[package]]
+name = "asgiref"
+version = "3.13.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.14' and sys_platform != 'darwin'",
+    "python_full_version >= '3.14' and sys_platform == 'darwin'",
+    "python_full_version == '3.13.*' and sys_platform != 'darwin'",
+    "python_full_version == '3.13.*' and sys_platform == 'darwin'",
+    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
+    "(python_full_version >= '3.11' and python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'emscripten') or (python_full_version == '3.11.*' and sys_platform == 'emscripten')",
+    "python_full_version >= '3.11' and python_full_version < '3.13' and sys_platform == 'darwin'",
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6b/90/f5fce14e95fccf53b58e8e2c47cd84d40d105d64073ae1ac75166db150e0/asgiref-3.13.0.tar.gz", hash = "sha256:034cc8cbf72d00553b4be256703ac545120b4e50af13b49dec99da899aeeecb4", size = 52941, upload-time = "2026-10-23T08:13:14.715Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2e/b0/ec211e1f7966247cb6469158d856bac9aa4c2fe13621bd6a352e4f850453/asgiref-3.13.0-py3-none-any.whl", hash = "sha256:f9596a2434512686473d50f96ff6207fbba49ae1a785dfac614df4aeb085674d", size = 27593, upload-time = "2026-10-23T08:13:13.394Z" },
 ]
 
 [[package]]
@@ -671,6 +707,14 @@ dependencies = [
     { name = "llama-index-retrievers-bm25" },
     { name = "llama-index-vector-stores-postgres" },
     { name = "mcp", extra = ["cli"] },
+    { name = "openinference-instrumentation-langchain" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-instrumentation-aiokafka" },
+    { name = "opentelemetry-instrumentation-fastapi" },
+    { name = "opentelemetry-instrumentation-httpx" },
+    { name = "opentelemetry-instrumentation-logging" },
+    { name = "opentelemetry-sdk" },
     { name = "psycopg2-binary" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -717,6 +761,14 @@ requires-dist = [
     { name = "llama-index-retrievers-bm25", specifier = ">=0.6.0,<0.7.0" },
     { name = "llama-index-vector-stores-postgres", specifier = ">=0.8.1,<0.9.0" },
     { name = "mcp", extras = ["cli"], specifier = ">=2.3.0" },
+    { name = "openinference-instrumentation-langchain", specifier = ">=0.1.81" },
+    { name = "opentelemetry-api", specifier = ">=1.43.0" },
+    { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.43.0" },
+    { name = "opentelemetry-instrumentation-aiokafka", specifier = ">=0.64b0" },
+    { name = "opentelemetry-instrumentation-fastapi", specifier = ">=0.64b0" },
+    { name = "opentelemetry-instrumentation-httpx", specifier = ">=0.64b0" },
+    { name = "opentelemetry-instrumentation-logging", specifier = ">=0.64b0" },
+    { name = "opentelemetry-sdk", specifier = ">=1.43.0" },
     { name = "psycopg2-binary", specifier = ">=2.9.12,<3.0.0" },
     { name = "pydantic", specifier = ">=2.13.4,<3.0.0" },
     { name = "pydantic-settings", specifier = ">=2.14.2,<3.0.0" },
@@ -1605,8 +1657,10 @@ resolution-markers = [
     "python_full_version == '3.13.*' and sys_platform != 'darwin'",
     "python_full_version == '3.13.*' and sys_platform == 'darwin'",
     "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "(python_full_version < '3.12' and sys_platform == 'emscripten') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'emscripten')",
-    "python_full_version < '3.13' and sys_platform == 'darwin'",
+    "(python_full_version >= '3.11' and python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'emscripten') or (python_full_version == '3.11.*' and sys_platform == 'emscripten')",
+    "python_full_version < '3.11' and sys_platform != 'darwin'",
+    "python_full_version >= '3.11' and python_full_version < '3.13' and sys_platform == 'darwin'",
+    "python_full_version < '3.11' and sys_platform == 'darwin'",
 ]
 dependencies = [
     { name = "zipp" },
@@ -2091,8 +2145,10 @@ resolution-markers = [
     "python_full_version == '3.13.*' and sys_platform != 'darwin'",
     "python_full_version == '3.13.*' and sys_platform == 'darwin'",
     "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "(python_full_version < '3.12' and sys_platform == 'emscripten') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'emscripten')",
-    "python_full_version < '3.13' and sys_platform == 'darwin'",
+    "(python_full_version >= '3.11' and python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'emscripten') or (python_full_version == '3.11.*' and sys_platform == 'emscripten')",
+    "python_full_version < '3.11' and sys_platform != 'darwin'",
+    "python_full_version >= '3.11' and python_full_version < '3.13' and sys_platform == 'darwin'",
+    "python_full_version < '3.11' and sys_platform == 'darwin'",
 ]
 dependencies = [
     { name = "aiohttp" },
@@ -2711,8 +2767,10 @@ version = "3.4.2"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "(python_full_version < '3.12' and sys_platform == 'emscripten') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'emscripten')",
-    "python_full_version < '3.13' and sys_platform == 'darwin'",
+    "(python_full_version >= '3.11' and python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'emscripten') or (python_full_version == '3.11.*' and sys_platform == 'emscripten')",
+    "python_full_version < '3.11' and sys_platform != 'darwin'",
+    "python_full_version >= '3.11' and python_full_version < '3.13' and sys_platform == 'darwin'",
+    "python_full_version < '3.11' and sys_platform == 'darwin'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/fd/1d/06475e1cd5264c0b870ea2cc6fdb3e37177c1e565c43f56ff17a10e3937f/networkx-3.4.2.tar.gz", hash = "sha256:307c3669428c5362aab27c8a1260aa8f47c4e91d3891f48be0141738d8d053e1", size = 2151368, upload-time = "2024-10-21T12:39:38.695Z" }
 wheels = [
@@ -2767,8 +2825,10 @@ version = "2.2.6"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "(python_full_version < '3.12' and sys_platform == 'emscripten') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'emscripten')",
-    "python_full_version < '3.13' and sys_platform == 'darwin'",
+    "(python_full_version >= '3.11' and python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'emscripten') or (python_full_version == '3.11.*' and sys_platform == 'emscripten')",
+    "python_full_version < '3.11' and sys_platform != 'darwin'",
+    "python_full_version >= '3.11' and python_full_version < '3.13' and sys_platform == 'darwin'",
+    "python_full_version < '3.11' and sys_platform == 'darwin'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/76/21/7d2a95e4bba9dc13d043ee156a356c0a8f0c6309dff6b21b4d71a073b8a8/numpy-2.2.6.tar.gz", hash = "sha256:e29554e2bef54a90aa5cc07da6ce955accb83f21ab5de01a62c8478897b264fd", size = 20276440, upload-time = "2025-05-17T22:38:04.611Z" }
 wheels = [
@@ -2940,6 +3000,47 @@ wheels = [
 ]
 
 [[package]]
+name = "openinference-instrumentation"
+version = "0.1.75"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "openinference-semantic-conventions" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-sdk" },
+    { name = "wrapt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ce/e0/6e3b7158b37772957b2eee4ba6814bb731e85b1b0422b48029378912641b/openinference_instrumentation-0.1.75.tar.gz", hash = "sha256:a857e46ee739936529ce2ef3be0dd12417eb174825877f00cf4415c54bfbe92a", size = 47484, upload-time = "2026-10-31T04:07:23.687Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/16/b4/fec2f589101696a4bef7014c95dc1dc23818b82135410d4959ebeea0afb1/openinference_instrumentation-0.1.75-py3-none-any.whl", hash = "sha256:1c0e32802772d9137b35a80101769b066b8f5f620487c5f3c589470a463cfe5e", size = 55003, upload-time = "2026-10-31T04:07:22.412Z" },
+]
+
+[[package]]
+name = "openinference-instrumentation-langchain"
+version = "0.1.81"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "openinference-instrumentation" },
+    { name = "openinference-semantic-conventions" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
+    { name = "wrapt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/44/9a/a7c8902a7f63f49b5f19bb77b486eab756d3e68ee29ffa53ea08e3958332/openinference_instrumentation_langchain-0.1.81.tar.gz", hash = "sha256:345cd6a23267eb920668229141e5ad48c1a1a923d9d748b375e26af5407f849e", size = 80348, upload-time = "2026-10-29T22:03:39.088Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/71/b5/8654523d690546ff986e838634fe7f37d88cf52425bf7741252bff7a49f1/openinference_instrumentation_langchain-0.1.81-py3-none-any.whl", hash = "sha256:2482237677c32bcd7b34b81cd476ddf7652e2cb7ac13abe138e2d1cebb5388f9", size = 25428, upload-time = "2026-10-29T22:03:37.821Z" },
+]
+
+[[package]]
+name = "openinference-semantic-conventions"
+version = "0.1.43"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/7e/dc/b3def81b3e243571ac4a96d41f44945f3c2c999c2a9c822b272ed4667e47/openinference_semantic_conventions-0.1.43.tar.gz", hash = "sha256:c12b213e8cbaa74c8fbf021d2959e244aceb39b5cefeb2c2cd8316235f2a905b", size = 16212, upload-time = "2026-10-29T22:13:22.01Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9f/11/02848572db2e9986f271853175cba2026d8ae46359d69d90deb19027f49f/openinference_semantic_conventions-0.1.43-py3-none-any.whl", hash = "sha256:058cf01935df390775605a87df07840dbd80ac1a92800a329c169b0d633f64ce", size = 12974, upload-time = "2026-10-29T22:13:20.246Z" },
+]
+
+[[package]]
 name = "openrouter"
 version = "0.10.8"
 source = { registry = "https://pypi.org/simple" }
@@ -3015,6 +3116,99 @@ wheels = [
 ]
 
 [[package]]
+name = "opentelemetry-instrumentation"
+version = "0.64b0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-semantic-conventions" },
+    { name = "packaging" },
+    { name = "wrapt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7e/97/02fe6e1c8b1ffac42d0b429c18080edb24e0e0d18c86612edf72b5752382/opentelemetry_instrumentation-0.64b0.tar.gz", hash = "sha256:b47d528dead6271d7743114417eb67fc915bd9258111c48dbf9a4951d2efa88d", size = 41935, upload-time = "2026-06-24T15:19:12.951Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d2/0c/cb9fe342de5299c7af24582eb7d788661cc53a1c4b904da92309caaa9417/opentelemetry_instrumentation-0.64b0-py3-none-any.whl", hash = "sha256:133ab7ffca796557aec059bf6be3190a34b6dea987f25be3d9409e230cbdad8b", size = 35880, upload-time = "2026-06-24T15:18:17.277Z" },
+]
+
+[[package]]
+name = "opentelemetry-instrumentation-aiokafka"
+version = "0.64b0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3c/dd/a0d7fbbef2991e0d93331604265d180b0962c650de2d75f3fc4db83aa8c1/opentelemetry_instrumentation_aiokafka-0.64b0.tar.gz", hash = "sha256:a5ca0218208f69b8c0604036e4b406cc4925e0af5f0ff4f0bfcc8bf3b23b9948", size = 14329, upload-time = "2026-06-24T15:19:15.905Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/23/f4/23e8d711d8684747332258d70d63ddc9511e31429eb23a39965e5134212c/opentelemetry_instrumentation_aiokafka-0.64b0-py3-none-any.whl", hash = "sha256:e2b8154055bd7911248f495e77ce1860ca248cd117bd61080143718a5f023bf0", size = 12747, upload-time = "2026-06-24T15:18:21.377Z" },
+]
+
+[[package]]
+name = "opentelemetry-instrumentation-asgi"
+version = "0.64b0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "asgiref", version = "3.12.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "asgiref", version = "3.13.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
+    { name = "opentelemetry-util-http" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/85/0c/71c696fccb86d37af383ea1604af4729fabad0af2fabaf203e4c79c1e859/opentelemetry_instrumentation_asgi-0.64b0.tar.gz", hash = "sha256:4dd3eee566a4303f8e6b9b84f2a0a7abc57a6640df768926c68a3868bf5b2090", size = 26136, upload-time = "2026-06-24T15:19:17.003Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/51/20/218b65a63d847a7ed28d1bea84c39234689160b74480b8702272e37f4240/opentelemetry_instrumentation_asgi-0.64b0-py3-none-any.whl", hash = "sha256:e0840b66e15303a9254b0540946010bd008aa0504f4d89b8e1b7fb63490a36f0", size = 15906, upload-time = "2026-06-24T15:18:23.107Z" },
+]
+
+[[package]]
+name = "opentelemetry-instrumentation-fastapi"
+version = "0.64b0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-instrumentation-asgi" },
+    { name = "opentelemetry-semantic-conventions" },
+    { name = "opentelemetry-util-http" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/db/a1/52282e2cc5c08f4df13b087896d9907258fe2ff4f34035d3b21aa92684c3/opentelemetry_instrumentation_fastapi-0.64b0.tar.gz", hash = "sha256:05f75149929e433c1630de381688e650bf651c1e1cce7f9a7b649a807dac8a98", size = 26236, upload-time = "2026-06-24T15:19:27.219Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/72/2d/4f48dc2d6f289f2febc5b871940dbea9f3b04ab9186d23342581b49cb984/opentelemetry_instrumentation_fastapi-0.64b0-py3-none-any.whl", hash = "sha256:43cbbfb2d3079dc81104478a2950ae93ac6d0e90a5020fa3987a236f8f2bdef1", size = 13263, upload-time = "2026-06-24T15:18:38.553Z" },
+]
+
+[[package]]
+name = "opentelemetry-instrumentation-httpx"
+version = "0.64b0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
+    { name = "opentelemetry-util-http" },
+    { name = "wrapt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0d/2a/2893a8781b93894f1e8014904c0342da7e4302de6597c2d5c0cb6c1a552e/opentelemetry_instrumentation_httpx-0.64b0.tar.gz", hash = "sha256:c2cfcd03d3665762860ebd0c28038c6e47fbb48d7942dec31dd75fc634d25c92", size = 23555, upload-time = "2026-06-24T15:19:29.107Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/06/29/a20309bd3f5a8051b61ca475e78623410c3b077e3deccae19aa4f8b5b9a2/opentelemetry_instrumentation_httpx-0.64b0-py3-none-any.whl", hash = "sha256:04829e5723941b5ceb0c88b44d63983e226b5c75b2b2e34a57739fdd0e060608", size = 16336, upload-time = "2026-06-24T15:18:41.412Z" },
+]
+
+[[package]]
+name = "opentelemetry-instrumentation-logging"
+version = "0.64b0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/88/8e/3b7191ba5817f139867612e960fbe06a69fe0d522d3b2c5e9c8e89b3ef8c/opentelemetry_instrumentation_logging-0.64b0.tar.gz", hash = "sha256:6435b4d215bf8183e15f7e3416a10ebe1c411810d3411fbfc62667daae3abacb", size = 20000, upload-time = "2026-06-24T15:19:30.946Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8d/07/9f97b0ccbb38363d12c7a2bfe44912ae7440c97aae250e2eedb32739f662/opentelemetry_instrumentation_logging-0.64b0-py3-none-any.whl", hash = "sha256:9b56f19648798ddb331c206b74d36c5f2a71e5c6b771e96298f167b2b590e40d", size = 16062, upload-time = "2026-06-24T15:18:44.019Z" },
+]
+
+[[package]]
 name = "opentelemetry-proto"
 version = "1.43.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3051,6 +3245,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5a/30/5f26df29509eccd86b99b481ac9ffa39da49ba9577cc69071c552ae30447/opentelemetry_semantic_conventions-0.64b0.tar.gz", hash = "sha256:72f76fb2d1582d9d033dd1fcd84532e961e6ff3d90d24ba6fabc72975a83864c", size = 148340, upload-time = "2026-06-24T15:20:09.267Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f2/ca/23ba87a221b574a7c5a99d48849d80bfe8b047624681357e2b002e566187/opentelemetry_semantic_conventions-0.64b0-py3-none-any.whl", hash = "sha256:ea77e85e354b8f604ddbe5f3d9135216f982fa4d77e5859ac30f6d8a50505aa6", size = 203713, upload-time = "2026-06-24T15:19:53.339Z" },
+]
+
+[[package]]
+name = "opentelemetry-util-http"
+version = "0.64b0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c3/1b/1029a805fd7242f7dfce91633b244c3b14a94d703232878f71e01ce862b1/opentelemetry_util_http-0.64b0.tar.gz", hash = "sha256:8a86a220dbfc56d736f47f1e5c4e7932a21fcf69052312e1bcf166444dc79322", size = 11102, upload-time = "2026-06-24T15:19:48.974Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1c/c7/5f8ec5b30546f2dc22cd5fc5759bce2ab5be6e89a2e710a405ac9ef64ed3/opentelemetry_util_http-0.64b0-py3-none-any.whl", hash = "sha256:c1e5350d25507c1afcd6076cf9ac062485a0a4f79cd9971366996fd3056bacdb", size = 8204, upload-time = "2026-06-24T15:19:09.02Z" },
 ]
 
 [[package]]
@@ -4174,8 +4377,10 @@ version = "0.30.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "(python_full_version < '3.12' and sys_platform == 'emscripten') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'emscripten')",
-    "python_full_version < '3.13' and sys_platform == 'darwin'",
+    "(python_full_version >= '3.11' and python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'emscripten') or (python_full_version == '3.11.*' and sys_platform == 'emscripten')",
+    "python_full_version < '3.11' and sys_platform != 'darwin'",
+    "python_full_version >= '3.11' and python_full_version < '3.13' and sys_platform == 'darwin'",
+    "python_full_version < '3.11' and sys_platform == 'darwin'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/20/af/3f2f423103f1113b36230496629986e0ef7e199d2aa8392452b484b38ced/rpds_py-0.30.0.tar.gz", hash = "sha256:dd8ff7cf90014af0c0f787eea34794ebf6415242ee1d6fa91eaba725cc441e84", size = 69469, upload-time = "2025-11-30T20:24:38.837Z" }
 wheels = [
@@ -4475,8 +4680,10 @@ version = "1.7.2"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "(python_full_version < '3.12' and sys_platform == 'emscripten') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'emscripten')",
-    "python_full_version < '3.13' and sys_platform == 'darwin'",
+    "(python_full_version >= '3.11' and python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'emscripten') or (python_full_version == '3.11.*' and sys_platform == 'emscripten')",
+    "python_full_version < '3.11' and sys_platform != 'darwin'",
+    "python_full_version >= '3.11' and python_full_version < '3.13' and sys_platform == 'darwin'",
+    "python_full_version < '3.11' and sys_platform == 'darwin'",
 ]
 dependencies = [
     { name = "joblib" },
@@ -4575,8 +4782,10 @@ version = "1.15.3"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "(python_full_version < '3.12' and sys_platform == 'emscripten') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'emscripten')",
-    "python_full_version < '3.13' and sys_platform == 'darwin'",
+    "(python_full_version >= '3.11' and python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'emscripten') or (python_full_version == '3.11.*' and sys_platform == 'emscripten')",
+    "python_full_version < '3.11' and sys_platform != 'darwin'",
+    "python_full_version >= '3.11' and python_full_version < '3.13' and sys_platform == 'darwin'",
+    "python_full_version < '3.11' and sys_platform == 'darwin'",
 ]
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" } },
@@ -5044,7 +5253,8 @@ source = { registry = "https://download.pytorch.org/whl/cpu" }
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'darwin'",
     "python_full_version == '3.13.*' and sys_platform == 'darwin'",
-    "python_full_version < '3.13' and sys_platform == 'darwin'",
+    "python_full_version >= '3.11' and python_full_version < '3.13' and sys_platform == 'darwin'",
+    "python_full_version < '3.11' and sys_platform == 'darwin'",
 ]
 dependencies = [
     { name = "filelock" },
@@ -5076,7 +5286,8 @@ resolution-markers = [
     "python_full_version >= '3.14' and sys_platform != 'darwin'",
     "python_full_version == '3.13.*' and sys_platform != 'darwin'",
     "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "(python_full_version < '3.12' and sys_platform == 'emscripten') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'emscripten')",
+    "(python_full_version >= '3.11' and python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'emscripten') or (python_full_version == '3.11.*' and sys_platform == 'emscripten')",
+    "python_full_version < '3.11' and sys_platform != 'darwin'",
 ]
 dependencies = [
     { name = "filelock" },

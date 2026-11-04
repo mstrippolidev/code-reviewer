@@ -4,6 +4,7 @@ from pydantic import ValidationError
 from code_reviewer.schemas.review import (
     AgentOutput,
     AgentReviewEntry,
+    AttributedIncident,
     CodeKey,
     Incident,
     Priority,
@@ -25,7 +26,22 @@ def test_incident_accepts_valid_fields() -> None:
     incident = Incident(**_incident())
 
     assert incident.priority == Priority.HIGH
-    assert incident.code_key is None
+
+
+def test_incident_does_not_carry_a_code_key() -> None:
+    assert "code_key" not in Incident.model_fields
+
+
+def test_attributed_incident_requires_a_code_key() -> None:
+    with pytest.raises(ValidationError):
+        AttributedIncident(**_incident())
+
+
+def test_attributed_incident_keeps_the_incident_fields_and_its_code_key() -> None:
+    incident = AttributedIncident(**_incident(), code_key=CodeKey.VAR)
+
+    assert incident.priority == Priority.HIGH
+    assert incident.code_key == CodeKey.VAR
 
 
 def test_incident_rejects_invalid_priority() -> None:

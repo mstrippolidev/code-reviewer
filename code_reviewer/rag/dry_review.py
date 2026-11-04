@@ -3,6 +3,7 @@
     exact structural-hash match directly, and asks the DRY judge to
     confirm the fuzzy, re-ranked candidates a search only guessed at.
 """
+import contextvars
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
@@ -85,8 +86,10 @@ def _judged_incidents(file_content: str, history_matches: list[ChunkHistoryMatch
     if not tasks:
         return []
     with ThreadPoolExecutor(max_workers=get_settings().max_batch_concurrency) as executor:
-        results = executor.map(lambda task: _run_judge_task(dry_judge, task), tasks)
-    return [incident for incidents in results for incident in incidents]
+        futures = [
+            executor.submit(contextvars.copy_context().run, _run_judge_task, dry_judge, task) for task in tasks
+        ]
+    return [incident for future in futures for incident in future.result()]
 
 
 def _build_judge_tasks(file_content: str, history_matches: list[ChunkHistoryMatch]) -> list[_JudgeTask]:
