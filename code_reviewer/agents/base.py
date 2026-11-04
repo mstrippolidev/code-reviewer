@@ -3,12 +3,15 @@
 """
 
 import logging
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.structured_output import ResponseFormat, ToolStrategy
 from langchain_core.tools import BaseTool
+from opentelemetry import trace
+from opentelemetry.trace import Span
 
 from code_reviewer.agents.llm.base import LLMInterface
 from code_reviewer.agents.llm.middleware import (
@@ -35,6 +38,7 @@ from code_reviewer.schemas.review import (
 )
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
 _AFTER_MODEL_HOOKS = (calculate_rating, discard_model_reported_failure)
 _STRUCTURED_OUTPUT_CORRECTION_TURNS = 1
@@ -189,10 +193,16 @@ class AgentBase:
             AgentInvocationError: If any call fails or its output cannot
                 be validated against AgentOutput.
         """
-        results = self._invoke_batch(chunks)
+        with self._execute_agent_span():
+            results = self._invoke_batch(chunks)
         for result in results:
             self._set_file_path_and_code_key(result, file_path)
         return results
+
+    def _execute_agent_span(self) -> AbstractContextManager[Span]:
+        return tracer.start_as_current_span(
+            "execute_agent", attributes={"code_reviewer.code_key": self._code_agent.value}
+        )
 
     def _invoke_batch(self, chunks: list[str]) -> list[AgentOutput]:
         """Run this agent's prompt against each chunk, one call per chunk,
@@ -240,7 +250,8 @@ class AgentBase:
             AgentInvocationError: If the LLM call fails or its output
                 cannot be validated against AgentOutput.
         """
-        result = self._invoke(code, repo_data)
+        with self._execute_agent_span():
+            result = self._invoke(code, repo_data)
         self._set_file_path_and_code_key(result, file_path)
         return result
 

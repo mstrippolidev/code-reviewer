@@ -4,10 +4,14 @@
     call the agents for each.
 """
 import asyncio
+import contextvars
 import logging
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
 
 from code_reviewer.agents.llm.base import LLMInterface
 from code_reviewer.agents.registry import AgentsContainer
@@ -39,6 +43,7 @@ from code_reviewer.schemas.review import (
 from code_reviewer.schemas.submission import PreparedFile, SubmittedFile
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
 _SKIP_REASONS = {
     SubmissionTooLargeError: "raw_character_limit_exceeded",
@@ -57,6 +62,7 @@ class _PrepContext:
     intake_llm: LLMInterface | None
 
 
+@tracer.start_as_current_span("run_review_pipeline")
 async def run_pipeline(
     files: list[SubmittedFile],
     agents_container: AgentsContainer,
@@ -91,24 +97,31 @@ async def run_pipeline(
         every retry exhausted) is treated like any other skip — reported in
         meta.skipped_files rather than failing every other file's review.
     """
+    trace.get_current_span().set_attribute("code_reviewer.files_count", len(files))
     prepared_files, skipped_files = await asyncio.to_thread(
         prepare_files_for_pipeline, files, repo_data, agents_container.intake_llm
     )
-    prepared_files = await asyncio.to_thread(CallDepthReportBuilder(agents_container.rag_manager).build, prepared_files)
+    with tracer.start_as_current_span("build_call_depth_reports"):
+        prepared_files = await asyncio.to_thread(
+            CallDepthReportBuilder(agents_container.rag_manager).build, prepared_files
+        )
     entries = []
     reviewed_files = []
     for prepared_file in prepared_files:
         file_path = prepared_file.source_file.file_path
-        try:
-            file_entries = await review_file_runnable(
-                prepared_file, agents_container, on_agent_reviewed=on_agent_reviewed
-            )
-        except Exception:
-            logger.exception("Agent dispatch failed for file_path=%s; skipping it and continuing", file_path)
-            skipped_files.append(SkippedFile(file_path=file_path, reason=AGENT_EXECUTION_FAILED_REASON))
-            if on_file_reviewed is not None:
-                await on_file_reviewed(file_path, True, [])
-            continue
+        with tracer.start_as_current_span("review_file", attributes={"code_reviewer.file_path": file_path}) as span:
+            try:
+                file_entries = await review_file_runnable(
+                    prepared_file, agents_container, on_agent_reviewed=on_agent_reviewed
+                )
+            except Exception as error:
+                span.record_exception(error)
+                span.set_status(Status(StatusCode.ERROR))
+                logger.exception("Agent dispatch failed for file_path=%s; skipping it and continuing", file_path)
+                skipped_files.append(SkippedFile(file_path=file_path, reason=AGENT_EXECUTION_FAILED_REASON))
+                if on_file_reviewed is not None:
+                    await on_file_reviewed(file_path, True, [])
+                continue
         entries.extend(file_entries)
         reviewed_files.append(prepared_file)
         if on_file_reviewed is not None:
@@ -116,6 +129,7 @@ async def run_pipeline(
     return Aggregator().build_output(entries, reviewed_files, skipped_files)
 
 
+@tracer.start_as_current_span("select_pair_and_screen_files")
 def prepare_files_for_pipeline(
     files: list[SubmittedFile], repo_data: RepoData | None = None, intake_llm: LLMInterface | None = None
 ) -> tuple[list[PreparedFile], list[SkippedFile]]:
@@ -142,9 +156,11 @@ def prepare_files_for_pipeline(
     pairings = pair_source_files_with_tests(selected_files, test_files)
 
     with ThreadPoolExecutor(max_workers=get_settings().max_intake_screen_concurrency) as executor:
-        results = list(executor.map(
-            lambda pairing: _prepare_pairing(pairing, intra_pr_groups, context), pairings
-        ))
+        futures = [
+            executor.submit(contextvars.copy_context().run, _prepare_pairing, pairing, intra_pr_groups, context)
+            for pairing in pairings
+        ]
+        results = [future.result() for future in futures]
 
     prepared_files = []
     for prepared_file, rejected_files in results:

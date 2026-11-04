@@ -7,6 +7,7 @@ import time
 from collections.abc import Awaitable, Callable
 
 from langchain_core.runnables import RunnableLambda, RunnableParallel
+from opentelemetry import trace
 
 from code_reviewer.agents.base import AgentBase, FileReviewMeta, FileSizeAwareAgentBase
 from code_reviewer.agents.llm.middleware import rating_from_incidents
@@ -37,6 +38,7 @@ from code_reviewer.schemas.review import (
 from code_reviewer.schemas.submission import PreparedFile, SubmittedFile
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
 _TEST_FILE_HYGIENE_KEYS = frozenset({CodeKey.VAR, CodeKey.ERR, CodeKey.CMT})
 _TCASE_HEADER_LINE_COUNT = 1
@@ -197,6 +199,7 @@ def _run_tcase_agent(prepared_file: PreparedFile, agents_container: AgentsContai
     return entry
 
 
+@tracer.start_as_current_span("find_test_files_for_source_file")
 def _tcase_test_files(
     prepared_file: PreparedFile, test_pairing_finder: CorrectiveTestPairingFinder | None
 ) -> list[SubmittedFile]:

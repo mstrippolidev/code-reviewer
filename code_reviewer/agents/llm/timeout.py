@@ -3,6 +3,7 @@
     always trustworthy to honor its own timeout kwarg. Shared by every
     caller that invokes a model directly, in or outside of AgentBase.
 """
+import contextvars
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from typing import Callable, TypeVar
 
@@ -14,7 +15,7 @@ _LLM_CALL_EXECUTOR = ThreadPoolExecutor(thread_name_prefix="llm-call")
 
 
 def call_with_hard_timeout(call: Callable[[], _R], timeout: float | None = None) -> _R:
-    future: Future[_R] = _LLM_CALL_EXECUTOR.submit(call)
+    future: Future[_R] = _LLM_CALL_EXECUTOR.submit(contextvars.copy_context().run, call)
     timeout = timeout if timeout is not None else get_settings().llm_call_timeout_seconds
     try:
         return future.result(timeout=timeout)

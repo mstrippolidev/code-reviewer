@@ -2,6 +2,8 @@
     DRY's per-file workflow, shared by the review pipeline and by callers that
     only want to know whether a piece of code already exists in a repo's history.
 """
+from opentelemetry import trace
+
 from code_reviewer.agents.llm.timeout import call_with_hard_timeout
 from code_reviewer.agents.registry import AgentsContainer
 from code_reviewer.config.settings import get_settings
@@ -14,6 +16,8 @@ from code_reviewer.rag.dry_review import build_dry_review_entry
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.schemas.review import AgentReviewEntry, CodeKey, SizeStatus
 from code_reviewer.schemas.submission import PreparedFile, SubmittedFile
+
+tracer = trace.get_tracer(__name__)
 
 SNIPPET_FILE_PATH = "<submitted snippet>"
 DRY_REQUIRES_REPO_REASON = (
@@ -44,6 +48,7 @@ def check_snippet_for_duplicates(
     return run_dry(agents_container, prepared_file)
 
 
+@tracer.start_as_current_span("execute_agent", attributes={"code_reviewer.code_key": CodeKey.DRY.value})
 def run_dry(agents_container: AgentsContainer, prepared_file: PreparedFile) -> AgentReviewEntry:
     """Exact structural-hash matches need no LLM judgment, so only the fuzzy,
     re-ranked candidates reach the DRY judge; a file with no evidence of either
@@ -61,18 +66,20 @@ def run_dry(agents_container: AgentsContainer, prepared_file: PreparedFile) -> A
     history_matches = _gather_history_matches(agents_container, prepared_file.source_file, prepared_file.repo_data)
     if not intra_pr_groups and not history_matches:
         return AgentReviewEntry(file_path=file_path, code_key=CodeKey.DRY, incidents=[])
-    return call_with_hard_timeout(
-        lambda: build_dry_review_entry(
-            file_path,
-            prepared_file.source_file.content,
-            intra_pr_groups,
-            history_matches,
-            agents_container.dry_judge,
-        ),
-        timeout=get_settings().dry_agent_timeout_seconds,
-    )
+    with tracer.start_as_current_span("judge_duplicate_candidates"):
+        return call_with_hard_timeout(
+            lambda: build_dry_review_entry(
+                file_path,
+                prepared_file.source_file.content,
+                intra_pr_groups,
+                history_matches,
+                agents_container.dry_judge,
+            ),
+            timeout=get_settings().dry_agent_timeout_seconds,
+        )
 
 
+@tracer.start_as_current_span("find_duplicate_candidates")
 def _gather_history_matches(
     agents_container: AgentsContainer, source_file: SubmittedFile, repo_data: RepoData
 ) -> list[ChunkHistoryMatch]:
