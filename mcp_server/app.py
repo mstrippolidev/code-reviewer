@@ -7,8 +7,11 @@ from mcp.server.auth.settings import AuthSettings
 from mcp_server.api_client import build_api_client
 from mcp_server.config import get_mcp_settings
 from mcp_server.custom_token_verification import ApiTokenVerifier
+from mcp_server.observability import configure_telemetry
 
 _settings = get_mcp_settings()
+if _settings.otel_enable:
+    configure_telemetry(_settings)
 
 mcp = MCPServer(
     "Code-Review",

@@ -12,6 +12,9 @@ class McpSettings(BaseSettings):
     mcp_authorization_server_url: str = "http://localhost:8000"
     mcp_public_base_url: str = "http://localhost:8001"
 
+    otel_enable: bool = False
+    otel_exporter_otlp_traces_endpoint: str = "http://localhost:6006/v1/traces"
+
 
 @lru_cache
 def get_mcp_settings() -> McpSettings:
