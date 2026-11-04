@@ -33,6 +33,9 @@ class ApiSettings(BaseSettings):
     github_oauth_client_secret: str
     github_oauth_redirect_uri: str
 
+    otel_exporter_otlp_traces_endpoint: str = "http://localhost:6006/v1/traces"
+    otel_enable: bool = False
+    otel_capture_payloads: bool = False
     frontend_base_url: str = "http://localhost:5173"
     api_public_base_url: str = "http://localhost:8000"
 
