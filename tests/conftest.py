@@ -2,11 +2,17 @@
     Shared fixtures for the test suite.
 """
 import pytest
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
+from api.observability.kafka_metrics import KafkaMetrics
+from api.observability.metrics import ApiMetrics
 from code_reviewer.agents.llm.base import LLMInterface
 from code_reviewer.agents.llm.ollama import OllamaLLM
 from code_reviewer.agents.llm.openrouter import OpenRouter
 from code_reviewer.config.settings import get_settings
+from code_reviewer.telemetry.metrics import PipelineMetrics
+from code_reviewer.telemetry.rag_metrics import RagMetrics
 
 SMALL_TEST_MODEL = "qwen2.5-coder:7b"
 
@@ -66,3 +72,37 @@ def small_llm(request: pytest.FixtureRequest) -> LLMInterface:
     if provider == "openrouter":
         return OpenRouter()
     return SmallOllamaLLM()
+
+
+@pytest.fixture
+def metric_reader() -> InMemoryMetricReader:
+    """A reader the test can ask for whatever its private instruments recorded."""
+    return InMemoryMetricReader()
+
+
+@pytest.fixture
+def isolated_pipeline_metrics(metric_reader: InMemoryMetricReader) -> PipelineMetrics:
+    """PipelineMetrics bound to a private provider, so no global metric state is shared between tests."""
+    provider = MeterProvider(metric_readers=[metric_reader])
+    return PipelineMetrics(provider.get_meter("test"))
+
+
+@pytest.fixture
+def isolated_rag_metrics(metric_reader: InMemoryMetricReader) -> RagMetrics:
+    """RagMetrics bound to a private provider, so no global metric state is shared between tests."""
+    provider = MeterProvider(metric_readers=[metric_reader])
+    return RagMetrics(provider.get_meter("test"))
+
+
+@pytest.fixture
+def isolated_api_metrics(metric_reader: InMemoryMetricReader) -> ApiMetrics:
+    """ApiMetrics bound to a private provider, so no global metric state is shared between tests."""
+    provider = MeterProvider(metric_readers=[metric_reader])
+    return ApiMetrics(provider.get_meter("test"))
+
+
+@pytest.fixture
+def isolated_kafka_metrics(metric_reader: InMemoryMetricReader) -> KafkaMetrics:
+    """KafkaMetrics bound to a private provider, so no global metric state is shared between tests."""
+    provider = MeterProvider(metric_readers=[metric_reader])
+    return KafkaMetrics(provider.get_meter("test"))
