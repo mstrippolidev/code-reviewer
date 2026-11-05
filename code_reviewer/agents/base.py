@@ -3,17 +3,20 @@
 """
 
 import logging
+from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.structured_output import ResponseFormat, ToolStrategy
+from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool
 from opentelemetry import trace
 from opentelemetry.trace import Span
 
 from code_reviewer.agents.llm.base import LLMInterface
+from code_reviewer.agents.llm.call_observer import build_model_call_observer
 from code_reviewer.agents.llm.middleware import (
     dedupe_tool_calls,
     discard_model_reported_failure,
@@ -36,6 +39,8 @@ from code_reviewer.schemas.review import (
     Priority,
     SizeStatus,
 )
+from code_reviewer.telemetry.metrics import pipeline_metrics
+from code_reviewer.telemetry.run_summary import summarize_run
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -102,6 +107,7 @@ class AgentBase:
         self._code_agent = code_agent
         self._system_prompt = system_prompt
         llm_factory = llm if llm is not None else OllamaLLM()
+        self._model_name = llm_factory.model_name
         tools = self._build_tools()
         self._agent = create_agent(
             model=llm_factory.create_raw_model(),
@@ -111,6 +117,7 @@ class AgentBase:
                 *self._retry_middleware(tools),
                 *self._tool_loop_guard(tools),
                 *self._extra_middleware(),
+                build_model_call_observer(code_agent.value, self._model_name),
                 *_AFTER_MODEL_HOOKS,
             ],
             response_format=self._response_format(llm_factory, tools),
@@ -193,7 +200,7 @@ class AgentBase:
             AgentInvocationError: If any call fails or its output cannot
                 be validated against AgentOutput.
         """
-        with self._execute_agent_span():
+        with self._execute_agent_span(), pipeline_metrics.track_agent_run(self._code_agent.value):
             results = self._invoke_batch(chunks)
         for result in results:
             self._set_file_path_and_code_key(result, file_path)
@@ -222,6 +229,8 @@ class AgentBase:
         config = {"max_concurrency": get_settings().max_batch_concurrency}
         try:
             results = call_with_hard_timeout(lambda: self._agent.batch(payloads, config=config))
+            for result in results:
+                self._record_run_summary(result.get("messages", []))
             return [result["structured_response"] for result in results]
         except Exception as error:
             logger.error("Agent %s failed to review the given code.", self._code_agent, exc_info=True)
@@ -250,7 +259,7 @@ class AgentBase:
             AgentInvocationError: If the LLM call fails or its output
                 cannot be validated against AgentOutput.
         """
-        with self._execute_agent_span():
+        with self._execute_agent_span(), pipeline_metrics.track_agent_run(self._code_agent.value):
             result = self._invoke(code, repo_data)
         self._set_file_path_and_code_key(result, file_path)
         return result
@@ -282,12 +291,17 @@ class AgentBase:
             invoke_kwargs["context"] = ReviewContext(repo_id=repo_data.repo_id, owner_id=repo_data.owner_id)
         try:
             result = call_with_hard_timeout(lambda: self._agent.invoke(messages, **invoke_kwargs))
+            self._record_run_summary(result.get("messages", []))
             return result["structured_response"]
         except Exception as error:
             logger.error("Agent %s failed to review the given code.", self._code_agent, exc_info=True)
             raise AgentInvocationError(
                 f"Agent {self._code_agent} failed to review the given code."
             ) from error
+
+    def _record_run_summary(self, messages: Sequence[BaseMessage]) -> None:
+        """Reports the tokens, model turns and tool calls of one finished agent run."""
+        pipeline_metrics.record_run_summary(self._code_agent.value, self._model_name, summarize_run(messages))
 
     def _set_file_path_and_code_key(self, result: AgentOutput, file_path: str | None) -> None:
         """Stamps result with the caller-known file_path and this agent's own CodeKey."""
@@ -364,6 +378,7 @@ class FileSizeAwareAgentBase(AgentBase):
         """
         review_meta = review_meta or FileReviewMeta()
         if review_meta.size_status == SizeStatus.HARD_LIMIT_EXCEEDED:
+            pipeline_metrics.record_agent_skip(self._code_agent.value, "file_exceeds_hard_limit")
             return self._hard_limit_result(code, file_path)
         return super().execute_agent(code, file_path, review_meta.repo_data)
 

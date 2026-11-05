@@ -16,6 +16,7 @@ from code_reviewer.rag.dry_judge import DryJudge, JudgeCandidate, format_locatio
 from code_reviewer.rag.dry_matching import ChunkHistoryMatch
 from code_reviewer.rag.structural_hash_store import LocatedChunk, StructuralMatch
 from code_reviewer.schemas.review import AgentReviewEntry, CodeKey, Incident, Priority
+from code_reviewer.telemetry.rag_metrics import DuplicateOrigin, rag_metrics
 
 _EXTRACT_ADVICE = "Extract the shared logic into one function or method and have every location call it."
 
@@ -32,7 +33,10 @@ def build_dry_review_entry(
     dry_judge: DryJudge,
 ) -> AgentReviewEntry:
     incidents = _templated_intra_pr_incidents(file_path, intra_pr_groups)
-    incidents += _templated_history_structural_incidents(history_matches)
+    rag_metrics.record_dry_exact_matches(DuplicateOrigin.INTRA_PR, len(incidents))
+    history_exact_incidents = _templated_history_structural_incidents(history_matches)
+    rag_metrics.record_dry_exact_matches(DuplicateOrigin.HISTORY, len(history_exact_incidents))
+    incidents += history_exact_incidents
     incidents += _judged_incidents(file_content, history_matches, dry_judge)
     return AgentReviewEntry(
         file_path=file_path, code_key=CodeKey.DRY, incidents=incidents, rating=rating_from_incidents(incidents)

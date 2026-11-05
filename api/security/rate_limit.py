@@ -3,6 +3,8 @@ from collections.abc import Callable
 
 from redis.asyncio import Redis
 
+from api.observability.metrics import api_metrics
+
 WINDOW_SECONDS = 60
 
 
@@ -34,4 +36,5 @@ class RateLimiter:
         if count == 1:
             await self._redis.expire(key, WINDOW_SECONDS)
         if count > limit:
+            api_metrics.record_rate_limit_refusal(scope)
             raise RateLimitExceededError(retry_after_seconds=WINDOW_SECONDS - int(now % WINDOW_SECONDS))

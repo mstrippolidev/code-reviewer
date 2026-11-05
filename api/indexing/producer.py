@@ -7,6 +7,8 @@ from aiokafka import AIOKafkaProducer
 from aiokafka.errors import KafkaError
 from pydantic import BaseModel
 
+from api.observability.kafka_metrics import PublishOutcome, kafka_metrics
+
 logger = logging.getLogger(__name__)
 
 _REQUEST_TIMEOUT_MS = 10_000
@@ -38,7 +40,9 @@ class RepoIndexProducer:
         try:
             metadata = await self._producer.send_and_wait(topic, value=message.model_dump_json().encode(), key=key)
         except KafkaError as error:
+            kafka_metrics.record_publish(topic, PublishOutcome.FAILED)
             raise PublishError(f"Could not publish {type(message).__name__} to topic={topic}") from error
+        kafka_metrics.record_publish(topic, PublishOutcome.PUBLISHED)
         logger.info(
             "Published %s to topic=%s partition=%s offset=%s",
             type(message).__name__,
@@ -52,6 +56,8 @@ class RepoIndexProducer:
         try:
             metadata = await self._producer.send_and_wait(dlq_topic, value=payload, key=key, headers=headers)
         except KafkaError as dlq_error:
+            kafka_metrics.record_dlq_publish(dlq_topic, type(error).__name__, PublishOutcome.FAILED)
             logger.error("Failed to publish to DLQ topic=%s", dlq_topic, exc_info=dlq_error)
             raise DlqPublishError(f"Could not publish to DLQ topic={dlq_topic}") from dlq_error
+        kafka_metrics.record_dlq_publish(dlq_topic, type(error).__name__, PublishOutcome.PUBLISHED)
         logger.info("Published to DLQ topic=%s partition=%s offset=%s", dlq_topic, metadata.partition, metadata.offset)

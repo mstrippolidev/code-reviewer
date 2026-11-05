@@ -2,10 +2,10 @@
     Code-specific embedding used for ollama
 """
 from llama_index.core.base.embeddings.base import BaseEmbedding
-from llama_index.embeddings.ollama import OllamaEmbedding
 
 from code_reviewer.config.settings import get_settings
 from code_reviewer.rag.embedding.base import EmbeddingInterface
+from code_reviewer.rag.embedding.ollama import TimedOllamaEmbedding
 
 settings = get_settings()
 
@@ -19,7 +19,7 @@ class OllamaCodeEmbeddingProvider(EmbeddingInterface):
         """Ollama truncates an over-long input silently rather than raising,
         so num_ctx must exceed the largest text embedded on either side of a
         comparison."""
-        return OllamaEmbedding(
+        return TimedOllamaEmbedding(
             model_name=settings.ollama_code_embed_model,
             base_url=settings.ollama_base_url,
             ollama_additional_kwargs={"num_ctx": settings.ollama_embed_num_ctx},

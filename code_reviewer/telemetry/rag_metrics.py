@@ -1,0 +1,209 @@
+"""
+    Metric instruments for the RAG layer, recorded through the OpenTelemetry API only.
+"""
+import time
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
+from enum import StrEnum
+
+from opentelemetry import metrics
+from opentelemetry.metrics import Histogram, Meter
+
+from code_reviewer.telemetry.metrics import AgentOutcome, outcome_of_failure
+
+LATENCY_BUCKETS_SECONDS = [0.05, 0.25, 1, 2, 5, 10, 30, 60, 180]
+CANDIDATE_BUCKETS = [0, 1, 2, 3, 5, 10, 20, 30]
+SCORE_BUCKETS = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+
+SOURCE = "code_reviewer.source"
+CORPUS = "code_reviewer.corpus"
+KIND = "code_reviewer.kind"
+OUTCOME = "code_reviewer.outcome"
+CODE_KEY = "code_reviewer.code_key"
+VERDICT = "code_reviewer.verdict"
+ORIGIN = "code_reviewer.origin"
+
+
+class RetrievalSource(StrEnum):
+    STRUCTURAL = "structural"
+    SEMANTIC = "semantic"
+    CODE = "code"
+    LEXICAL = "lexical"
+    EXEMPLAR = "exemplar"
+
+
+class Corpus(StrEnum):
+    REPO = "repo"
+    SHARED = "shared"
+
+
+class EmbeddingKind(StrEnum):
+    QUERY = "query"
+    DOCUMENT = "document"
+
+
+class ExemplarOutcome(StrEnum):
+    INJECTED = "injected"
+    BELOW_FLOOR = "below_floor"
+    NO_CANDIDATES = "no_candidates"
+    FAILED = "failed"
+
+
+class DuplicateOrigin(StrEnum):
+    HISTORY = "history"
+    INTRA_PR = "intra_pr"
+
+
+class RagMetrics:
+    """Holds the RAG layer's instruments so callers record events, not raw numbers and labels."""
+
+    def __init__(self, meter: Meter) -> None:
+        self._create_retrieval_instruments(meter)
+        self._create_exemplar_instruments(meter)
+        self._create_dry_instruments(meter)
+
+    def track_retrieval(self, source: RetrievalSource) -> AbstractContextManager[None]:
+        """Times the enclosed search and records how it ended, re-raising any failure."""
+        return self._timed(self._retrieval_duration, {SOURCE: source.value})
+
+    def track_explain(self) -> AbstractContextManager[None]:
+        """Times the enclosed chunk-explanation LLM call."""
+        return self._timed(self._explain_duration, {})
+
+    def track_embedding(self, kind: EmbeddingKind) -> AbstractContextManager[None]:
+        """Times the enclosed embedding of one query or one batch of documents."""
+        return self._timed(self._embedding_duration, {KIND: kind.value})
+
+    def track_rerank(self) -> AbstractContextManager[None]:
+        """Times the enclosed cross-encoder pass."""
+        return self._timed(self._rerank_duration, {})
+
+    def track_judge(self) -> AbstractContextManager[None]:
+        """Times the enclosed DRY judge call."""
+        return self._timed(self._judge_duration, {})
+
+    def record_rerank_candidates(self, candidates_in: int, candidates_kept: int) -> None:
+        """Reports how many candidates a re-rank pass received and how many it kept."""
+        self._rerank_candidates_in.record(candidates_in)
+        self._rerank_candidates_kept.record(candidates_kept)
+
+    def record_exemplar_lookup(self, corpus: Corpus, code_key: str, outcome: ExemplarOutcome) -> None:
+        """Counts one exemplar lookup by the corpus it hit, the agent that asked and how it ended."""
+        self._exemplar_lookups.add(1, {CORPUS: corpus.value, CODE_KEY: code_key, OUTCOME: outcome.value})
+
+    def record_exemplar_best_score(self, corpus: Corpus, score: float) -> None:
+        """Reports the best score a lookup found, before the relevance floor was applied."""
+        self._exemplar_best_score.record(score, {CORPUS: corpus.value})
+
+    def record_dry_chunk_with_candidates(self) -> None:
+        """Counts one chunk whose repo history held something worth comparing it against."""
+        self._dry_chunks.add(1, {OUTCOME: "candidates"})
+
+    def record_dry_chunk_without_candidates(self) -> None:
+        """Counts one chunk with nothing similar in the repo's history."""
+        self._dry_chunks.add(1, {OUTCOME: "no_candidates"})
+
+    def record_dry_candidates(self, source: RetrievalSource, count: int) -> None:
+        """Counts the candidates of one kind that survived re-ranking for a chunk."""
+        self._dry_candidates.add(count, {SOURCE: source.value})
+
+    def record_dry_exact_matches(self, origin: DuplicateOrigin, count: int) -> None:
+        """Counts exact structural duplicates written up without an LLM, by where they were found."""
+        self._dry_exact_matches.add(count, {ORIGIN: origin.value})
+
+    def record_judge_call(self, candidate_count: int) -> None:
+        """Reports how many candidates one judge call was asked about."""
+        self._judge_candidates.record(candidate_count)
+
+    def record_judge_verdicts(self, duplicates: int, rejected: int) -> None:
+        """Counts the judge's verdicts, so the share it confirms as duplicates is visible."""
+        self._judge_verdicts.add(duplicates, {VERDICT: "duplicate"})
+        self._judge_verdicts.add(rejected, {VERDICT: "not_duplicate"})
+
+    @contextmanager
+    def _timed(self, histogram: Histogram, labels: dict[str, str]) -> Iterator[None]:
+        started = time.perf_counter()
+        outcome = AgentOutcome.COMPLETED
+        try:
+            yield
+        except BaseException as error:
+            outcome = outcome_of_failure(error)
+            raise
+        finally:
+            histogram.record(time.perf_counter() - started, {**labels, OUTCOME: outcome.value})
+
+    def _create_retrieval_instruments(self, meter: Meter) -> None:
+        """Creates the instruments that time searching, explaining, embedding and re-ranking."""
+        self._retrieval_duration = _latency_histogram(
+            meter, "code_reviewer.rag.retrieval.duration", "Wall time of one search, by source and how it ended"
+        )
+        self._explain_duration = _latency_histogram(
+            meter, "code_reviewer.rag.explain.duration", "Wall time of one chunk-explanation LLM call"
+        )
+        self._embedding_duration = _latency_histogram(
+            meter, "code_reviewer.rag.embedding.duration", "Wall time to embed one query or one batch of documents"
+        )
+        self._rerank_duration = _latency_histogram(
+            meter, "code_reviewer.rag.rerank.duration", "Wall time of one cross-encoder pass"
+        )
+        self._rerank_candidates_in = meter.create_histogram(
+            "code_reviewer.rag.rerank.candidates_in",
+            unit="{candidate}",
+            description="Candidates one re-rank pass received",
+            explicit_bucket_boundaries_advisory=CANDIDATE_BUCKETS,
+        )
+        self._rerank_candidates_kept = meter.create_histogram(
+            "code_reviewer.rag.rerank.candidates_kept",
+            unit="{candidate}",
+            description="Candidates one re-rank pass kept",
+            explicit_bucket_boundaries_advisory=CANDIDATE_BUCKETS,
+        )
+
+    def _create_exemplar_instruments(self, meter: Meter) -> None:
+        """Creates the instruments that describe exemplar lookups against the relevance floor."""
+        self._exemplar_lookups = meter.create_counter(
+            "code_reviewer.rag.exemplar.lookups", unit="{lookup}", description="Exemplar lookups, by how they ended"
+        )
+        self._exemplar_best_score = meter.create_histogram(
+            "code_reviewer.rag.exemplar.best_score",
+            unit="{score}",
+            description="Best score an exemplar lookup found, before the relevance floor",
+            explicit_bucket_boundaries_advisory=SCORE_BUCKETS,
+        )
+
+    def _create_dry_instruments(self, meter: Meter) -> None:
+        """Creates the instruments that describe DRY's candidates, exact matches and judge."""
+        self._dry_chunks = meter.create_counter(
+            "code_reviewer.rag.dry.chunks", unit="{chunk}", description="Chunks checked for duplicates, by result"
+        )
+        self._dry_candidates = meter.create_counter(
+            "code_reviewer.rag.dry.candidates",
+            unit="{candidate}",
+            description="Candidates that survived re-ranking, by the search that found them",
+        )
+        self._dry_exact_matches = meter.create_counter(
+            "code_reviewer.rag.dry.exact_matches",
+            unit="{match}",
+            description="Exact structural duplicates written up without an LLM",
+        )
+        self._judge_duration = _latency_histogram(
+            meter, "code_reviewer.rag.dry.judge.duration", "Wall time of one DRY judge call"
+        )
+        self._judge_candidates = meter.create_histogram(
+            "code_reviewer.rag.dry.judge.candidates",
+            unit="{candidate}",
+            description="Candidates one judge call was asked about",
+            explicit_bucket_boundaries_advisory=CANDIDATE_BUCKETS,
+        )
+        self._judge_verdicts = meter.create_counter(
+            "code_reviewer.rag.dry.judge.verdicts", unit="{verdict}", description="Judge verdicts, by whether it confirmed"
+        )
+
+
+def _latency_histogram(meter: Meter, name: str, description: str) -> Histogram:
+    return meter.create_histogram(
+        name, unit="s", description=description, explicit_bucket_boundaries_advisory=LATENCY_BUCKETS_SECONDS
+    )
+
+
+rag_metrics = RagMetrics(metrics.get_meter("code_reviewer"))

@@ -24,6 +24,7 @@ from api.indexing.producer import RepoIndexProducer
 from api.indexing.repo_completion_finalizer import RepoCompletionFinalizer
 from api.indexing.topics import REPO_FILE_INDEX, REPO_FILE_PROGRESS, REPO_STATUS_PROGRESS
 from api.integrations.github import GitHubOAuthClient
+from api.observability.metrics import api_metrics
 from api.schemas.indexing import RepoFileIndexMessage, RepoRegisteredMessage
 from api.schemas.repos import RepoFileProgressMessage, RepoStatusProgressMessage
 from api.security.token_cipher import TokenCipher
@@ -333,6 +334,7 @@ class RepoIndexer:
         repo.status = RepoIndexStatus.FAILED
         repo.status_reason = reason
         await session.commit()
+        api_metrics.record_repo_finished(RepoIndexStatus.FAILED, {})
         try:
             await self._dependencies.repo_producer.publish(
                 REPO_STATUS_PROGRESS,

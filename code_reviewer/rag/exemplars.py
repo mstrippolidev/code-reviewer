@@ -26,6 +26,7 @@ from code_reviewer.rag.errors import (
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.rag.vector_store import create_vector_store_instance
 from code_reviewer.schemas.review import CodeKey
+from code_reviewer.telemetry.rag_metrics import Corpus, ExemplarOutcome, RetrievalSource, rag_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,8 @@ class ExemplarStoreBase:
     """Shared embedding and retrieval machinery for a corpus of known-good
     code. Each subclass owns its own table and its own scoping filters, so
     no query can reach a corpus other than the one it was built for."""
+
+    CORPUS: Corpus
 
     def __init__(
         self,
@@ -92,12 +95,21 @@ class ExemplarStoreBase:
         """
         retriever = self._get_index().as_retriever(similarity_top_k=top_k, filters=filters)
         try:
-            nodes = retriever.retrieve(query.code)
+            with rag_metrics.track_retrieval(RetrievalSource.EXEMPLAR):
+                nodes = retriever.retrieve(query.code)
         except Exception as error:
             logger.exception("Exemplar search failed")
             raise VectorStoreQueryError("Exemplar search failed") from error
         found = [self._as_exemplar(node) for node in nodes]
-        return [exemplar for exemplar in found if exemplar.score >= query.relevance_floor]
+        kept = [exemplar for exemplar in found if exemplar.score >= query.relevance_floor]
+        self._record_lookup(query.code_key, found, kept)
+        return kept
+
+    def _record_lookup(self, code_key: CodeKey, found: list[Exemplar], kept: list[Exemplar]) -> None:
+        """Reports how the lookup ended and the best score it saw, before the relevance floor was applied."""
+        if found:
+            rag_metrics.record_exemplar_best_score(self.CORPUS, max(exemplar.score for exemplar in found))
+        rag_metrics.record_exemplar_lookup(self.CORPUS, code_key.value, _lookup_outcome(found, kept))
 
     def _get_index(self) -> VectorStoreIndex:
         if self._index is None:
@@ -120,8 +132,18 @@ class ExemplarStoreBase:
         return MetadataFilter(key="code_key", value=code_key.value)
 
 
+def _lookup_outcome(found: list[Exemplar], kept: list[Exemplar]) -> ExemplarOutcome:
+    if not found:
+        return ExemplarOutcome.NO_CANDIDATES
+    if not kept:
+        return ExemplarOutcome.BELOW_FLOOR
+    return ExemplarOutcome.INJECTED
+
+
 class ExemplarStore(ExemplarStoreBase):
     """Keeps one repo's corpus of known-good code, retrievable per principle."""
+
+    CORPUS = Corpus.REPO
 
     def add_exemplar(self, repo_data: RepoData, code_key: CodeKey, source: "ExemplarSource") -> None:
         """Add one piece of known-good code to the corpus.

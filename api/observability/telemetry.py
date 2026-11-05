@@ -4,12 +4,15 @@
 from fastapi import FastAPI
 from openinference.instrumentation import TraceConfig
 from openinference.instrumentation.langchain import LangChainInstrumentor
-from opentelemetry import trace
+from opentelemetry import metrics, trace
+from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.aiokafka import AIOKafkaInstrumentor
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.instrumentation.logging import LoggingInstrumentor
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -21,7 +24,7 @@ SERVICE_NAME = "code-reviewer-api"
 
 def configure_telemetry(settings: ApiSettings) -> TracerProvider:
     """Registers the global tracer provider and starts the instrumentors that need no app object."""
-    provider = TracerProvider(resource=Resource.create({"service.name": SERVICE_NAME}))
+    provider = TracerProvider(resource=_build_resource())
     exporter = OTLPSpanExporter(endpoint=settings.otel_exporter_otlp_traces_endpoint)
     provider.add_span_processor(BatchSpanProcessor(exporter))
     trace.set_tracer_provider(provider)
@@ -36,6 +39,22 @@ def configure_telemetry(settings: ApiSettings) -> TracerProvider:
     return provider
 
 
+def configure_metrics(settings: ApiSettings) -> MeterProvider:
+    """Registers the global meter provider that pushes metrics to the Collector."""
+    exporter = OTLPMetricExporter(endpoint=settings.otel_exporter_otlp_metrics_endpoint)
+    reader = PeriodicExportingMetricReader(
+        exporter, export_interval_millis=settings.otel_metric_export_interval_ms
+    )
+    provider = MeterProvider(resource=_build_resource(), metric_readers=[reader])
+    metrics.set_meter_provider(provider)
+    return provider
+
+
 def instrument_fastapi(app: FastAPI) -> None:
     """Adds one span per request to the app, skipping the health check."""
     FastAPIInstrumentor.instrument_app(app, excluded_urls="health", exclude_spans=["receive", "send"])
+
+
+def _build_resource() -> Resource:
+    """Names this process on every span and metric it exports."""
+    return Resource.create({"service.name": SERVICE_NAME})

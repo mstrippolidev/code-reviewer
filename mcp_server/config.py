@@ -14,6 +14,8 @@ class McpSettings(BaseSettings):
 
     otel_enable: bool = False
     otel_exporter_otlp_traces_endpoint: str = "http://localhost:6006/v1/traces"
+    otel_exporter_otlp_metrics_endpoint: str = "http://localhost:4318/v1/metrics"
+    otel_metric_export_interval_ms: int = 15000
 
 
 @lru_cache

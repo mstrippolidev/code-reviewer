@@ -11,6 +11,7 @@ from code_reviewer.agents.llm.timeout import call_with_hard_timeout
 from code_reviewer.prompts.chunk_explanation import CHUNK_EXPLANATION_SYSTEM_PROMPT
 from code_reviewer.rag.errors import ChunkExplanationError
 from code_reviewer.schemas.chunk_explanation import ChunkExplanation
+from code_reviewer.telemetry.rag_metrics import rag_metrics
 
 
 class ChunkExplainer:
@@ -33,7 +34,8 @@ class ChunkExplainer:
         """
         try:
             messages = {"messages": [{"role": "user", "content": code}]}
-            result = call_with_hard_timeout(lambda: self._agent.invoke(messages))
+            with rag_metrics.track_explain():
+                result = call_with_hard_timeout(lambda: self._agent.invoke(messages))
             output: ChunkExplanation = result["structured_response"]
         except Exception as error:
             raise ChunkExplanationError("Failed to generate a chunk explanation.") from error

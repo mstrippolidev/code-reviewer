@@ -9,6 +9,9 @@ from aiokafka import AIOKafkaConsumer, ConsumerRecord
 from opentelemetry import propagate, trace
 from opentelemetry.context import Context
 
+from api.observability.kafka_lag import ConsumerLagSampler
+from api.observability.kafka_metrics import MessageOutcome, kafka_metrics
+
 ParsedMessage = TypeVar("ParsedMessage")
 
 tracer = trace.get_tracer(__name__)
@@ -30,6 +33,7 @@ class ConsumerInterface(Generic[ParsedMessage], metaclass=ABCMeta):
         self.auto_offset_reset = kwargs.get("auto_offset_reset", "earliest")
         self.enable_auto_commit = kwargs.get("enable_auto_commit", True)
         self.group_id = group_id
+        self._consumer_name = type(self).__name__
         self._logger = logging.getLogger(type(self).__module__)
 
     def _build(self) -> AIOKafkaConsumer:
@@ -51,32 +55,38 @@ class ConsumerInterface(Generic[ParsedMessage], metaclass=ABCMeta):
         """
         consumer = self._build()
         await consumer.start()
+        lag_sampler = ConsumerLagSampler(self._consumer_name, consumer)
+        lag_sampler.start()
         self._logger.info("Started consumer group_id=%s topic=%s", self.group_id, self.topic)
         try:
             async for msg in consumer:
                 await self._process_message(msg, consumer)
         except Exception:
+            kafka_metrics.record_consumer_crash(self._consumer_name)
             self._logger.exception("Consumer group_id=%s topic=%s crashed", self.group_id, self.topic)
             raise
         finally:
+            await lag_sampler.stop()
             await consumer.stop()
             self._logger.info("Stopped consumer group_id=%s topic=%s", self.group_id, self.topic)
 
     async def _process_message(self, msg: ConsumerRecord, consumer: AIOKafkaConsumer) -> None:
         with tracer.start_as_current_span(
             f"{msg.topic} process", context=_context_from_headers(msg), kind=trace.SpanKind.CONSUMER
-        ):
+        ), kafka_metrics.track_message_handling(self._consumer_name, msg.topic):
             await self._handle_message(msg, consumer)
 
     async def _handle_message(self, msg: ConsumerRecord, consumer: AIOKafkaConsumer) -> None:
         try:
             parsed = self._parse_msg(msg)
         except Exception as error:
+            kafka_metrics.record_message_consumed(self._consumer_name, msg.topic, MessageOutcome.PARSE_ERROR)
             await self._handle_parse_error(msg, error)
             await consumer.commit()
             return
         await self._handle_parsed_message(parsed, msg, consumer)
         await consumer.commit()
+        kafka_metrics.record_message_consumed(self._consumer_name, msg.topic, MessageOutcome.PROCESSED)
 
     @abstractmethod
     def _parse_msg(self, msg: ConsumerRecord) -> ParsedMessage:

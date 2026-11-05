@@ -11,6 +11,7 @@ from api.config.settings import get_api_settings
 from api.db.models.review_job import ReviewJob, ReviewJobStatus
 from api.db.models.user import User
 from api.dependencies import get_current_user, get_db_session
+from api.observability.metrics import CapGuard, api_metrics
 from api.review.errors import ReviewSlotBusyError, TooManyUnfinishedReviewsError
 
 UNFINISHED_STATUSES = (ReviewJobStatus.PENDING, ReviewJobStatus.RUNNING)
@@ -45,7 +46,9 @@ class ReviewSlotKeeper:
             TooManyUnfinishedReviewsError: If the user is at or over the limit.
         """
         unfinished = await self._session.scalar(unfinished_reviews_count_statement(user_id))
+        api_metrics.record_unfinished_reviews(unfinished)
         if unfinished >= self._limit:
+            api_metrics.record_cap_refusal(CapGuard.UNFINISHED_REVIEWS)
             raise TooManyUnfinishedReviewsError(self._limit)
 
     async def reserve(self, user_id: int) -> None:
@@ -68,6 +71,7 @@ class ReviewSlotKeeper:
             await self._session.execute(select(func.pg_advisory_xact_lock(REVIEW_SLOT_LOCK_NAMESPACE, user_id)))
         except DBAPIError as error:
             if _is_lock_timeout(error):
+                api_metrics.record_cap_refusal(CapGuard.REVIEW_SLOT_BUSY)
                 raise ReviewSlotBusyError() from error
             raise
         await self.ensure_capacity(user_id)

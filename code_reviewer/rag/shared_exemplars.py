@@ -17,6 +17,7 @@ from llama_index.core.vector_stores import (
 from code_reviewer.rag.errors import VectorStoreQueryError
 from code_reviewer.rag.exemplars import Exemplar, ExemplarSource, ExemplarStoreBase
 from code_reviewer.schemas.review import CodeKey
+from code_reviewer.telemetry.rag_metrics import Corpus
 
 SHARED_EXEMPLAR_TABLE_NAME = "shared_exemplar_embeddings"
 
@@ -34,6 +35,8 @@ class SharedExemplarQuery:
 
 class SharedExemplarStore(ExemplarStoreBase):
     """Keeps the repo-less corpus of curated good code, retrievable per principle."""
+
+    CORPUS = Corpus.SHARED
 
     def __init__(self, vector_store: Any = None, embedding: Any = None) -> None:
         super().__init__(vector_store, embedding, SHARED_EXEMPLAR_TABLE_NAME)

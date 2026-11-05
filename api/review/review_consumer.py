@@ -3,6 +3,7 @@
     against a set of already-indexed files and reports the finished report back.
 """
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -20,6 +21,9 @@ from api.db.models.review_job import ReviewJob, ReviewJobStatus
 from api.db.models.review_job_file import ReviewJobFile
 from api.indexing.consumers.interface import ConsumerInterface
 from api.indexing.producer import RepoIndexProducer
+from api.observability.clock import seconds_since
+from api.observability.metrics import ReviewResult, api_metrics
+from api.observability.review_outcome import UNEXPECTED_SKIP_REASONS, review_kind_of, summarize_review
 from api.review.pull_request_loader import PullRequestReviewUnavailableError, PullRequestSubmissionLoader
 from api.review.review_progress_publisher import ReviewProgressPublisher
 from api.review.topics import REVIEW_REQUESTED, REVIEW_REQUESTED_DLQ
@@ -30,11 +34,7 @@ from api.schemas.reviews import (
     ReviewStatusMessage,
 )
 from code_reviewer.agents.registry import AgentsContainer
-from code_reviewer.pipeline.orchestrator import (
-    AGENT_EXECUTION_FAILED_REASON,
-    GUARD_EXECUTION_FAILED_REASON,
-    run_pipeline,
-)
+from code_reviewer.pipeline.orchestrator import run_pipeline
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.schemas.review import AgentReviewEntry, AggregatorOutput, CodeKey, SkippedFile
 from code_reviewer.schemas.submission import SubmittedFile
@@ -154,6 +154,7 @@ class ReviewRequestConsumer(ConsumerInterface[ReviewRequestedMessage]):
             raise ReviewAlreadyFinishedError(f"Review {review_msg.review_id} is already {job.status.value}")
         job.status = ReviewJobStatus.RUNNING
         await session.commit()
+        api_metrics.record_review_started(review_kind_of(review_msg), seconds_since(job.created_at))
         await self._broadcast_status(review_msg, job)
         return job
 
@@ -161,15 +162,26 @@ class ReviewRequestConsumer(ConsumerInterface[ReviewRequestedMessage]):
         self, review_msg: ReviewRequestedMessage, job: ReviewJob, session: AsyncSession
     ) -> AggregatorOutput:
         submission = await self._load_submission(review_msg, job, session)
-        result = await run_pipeline(
-            submission.files,
-            self._agents_for(review_msg),
-            submission.repo_data,
-            on_file_reviewed=self._build_progress_callback(review_msg, job, session),
-            on_agent_reviewed=self._build_agent_progress_callback(review_msg),
-        )
+        started = time.perf_counter()
+        try:
+            result = await run_pipeline(
+                submission.files,
+                self._agents_for(review_msg),
+                submission.repo_data,
+                on_file_reviewed=self._build_progress_callback(review_msg, job, session),
+                on_agent_reviewed=self._build_agent_progress_callback(review_msg),
+            )
+        except Exception:
+            self._record_run(review_msg, ReviewResult.FAILED, started)
+            raise
+        self._record_run(review_msg, _result_of(result), started)
+        api_metrics.record_review_outcome(review_kind_of(review_msg), summarize_review(result))
         result.meta.skipped_files.extend(submission.unreadable_files)
         return result
+
+    def _record_run(self, review_msg: ReviewRequestedMessage, result: ReviewResult, started: float) -> None:
+        """Reports how this review's pipeline run ended and how long it took."""
+        api_metrics.record_review_finished(review_kind_of(review_msg), result, time.perf_counter() - started)
 
     def _agents_for(self, review_msg: ReviewRequestedMessage) -> AgentsContainer:
         selected_keys = frozenset(review_msg.agents) if review_msg.agents else None
@@ -304,7 +316,9 @@ class ReviewRequestConsumer(ConsumerInterface[ReviewRequestedMessage]):
             logger.exception("Could not mark review_id=%s FAILED after an earlier failure", review_msg.review_id)
 
 
-_UNEXPECTED_SKIP_REASONS = frozenset({AGENT_EXECUTION_FAILED_REASON, GUARD_EXECUTION_FAILED_REASON})
+def _result_of(report: AggregatorOutput) -> ReviewResult:
+    """Degraded when the report finished but an agent or file failed inside it."""
+    return ReviewResult.DEGRADED if _has_pipeline_failures(report) else ReviewResult.COMPLETED
 
 
 def _repo_data_of(repo: RegisteredRepo) -> RepoData:
@@ -319,7 +333,7 @@ def _has_pipeline_failures(result: AggregatorOutput) -> bool:
     tell anyone to go check the trace."""
     if any(entry.agents_failed for entry in result.review):
         return True
-    return any(skipped.reason in _UNEXPECTED_SKIP_REASONS for skipped in result.meta.skipped_files)
+    return any(skipped.reason in UNEXPECTED_SKIP_REASONS for skipped in result.meta.skipped_files)
 
 
 def _degraded_reason(result: AggregatorOutput) -> str:
@@ -329,6 +343,6 @@ def _degraded_reason(result: AggregatorOutput) -> str:
         if entry.agents_failed
     }
     failed_whole_files = [
-        skipped.file_path for skipped in result.meta.skipped_files if skipped.reason in _UNEXPECTED_SKIP_REASONS
+        skipped.file_path for skipped in result.meta.skipped_files if skipped.reason in UNEXPECTED_SKIP_REASONS
     ]
     return f"agents_failed={failed_agents_by_file}; files_skipped_on_failure={failed_whole_files}"
