@@ -10,6 +10,7 @@ from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 from api.db.models.indexed_file import IndexedFile, IndexedFileStatus
 from api.indexing.producer import RepoIndexProducer
 from api.indexing.topics import REPO_STATUS_PROGRESS
+from api.observability.metrics import api_metrics
 from api.review.pull_request_release import PendingPullRequestReleaser
 from api.schemas.repos import RepoStatusProgressMessage
 
@@ -43,6 +44,7 @@ class RepoCompletionFinalizer:
         await session.commit()
         if result.rowcount == 0:
             return  # another caller already finalized it — the WHERE just protected us from a double-fire
+        api_metrics.record_repo_finished(final_status, status_counts)
         await self._publish_final_status(repo_id, repo.total_files_expected, final_status, status_reason)
         await self._settle_pull_request_reviews(repo, final_status, session)
 

@@ -4,6 +4,7 @@
 """
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
@@ -18,6 +19,8 @@ from api.db.engine import DatabaseEngine
 from api.db.models.registered_repo import RegisteredRepo
 from api.db.models.similar_code_search import SimilarCodeSearch, SimilarCodeSearchStatus
 from api.indexing.consumers.interface import ConsumerInterface
+from api.observability.clock import seconds_since
+from api.observability.metrics import api_metrics
 from api.schemas.similar_code import SimilarCodeRequestedMessage
 from api.similar_code.topics import SIMILAR_CODE_REQUESTED
 from code_reviewer.agents.registry import AgentsContainer
@@ -116,8 +119,11 @@ class SimilarCodeRequestConsumer(ConsumerInterface[SimilarCodeRequestedMessage])
                 return
             search.status = SimilarCodeSearchStatus.RUNNING
             await session.commit()
+            api_metrics.record_search_started(seconds_since(search.created_at))
             repo_data = await self._load_repo_data(message.repo_id, session)
+            started = time.perf_counter()
             outcome = await self._check(repo_data, search.code)
+            api_metrics.record_search_checked(outcome.status, time.perf_counter() - started)
             await self._finish(search, outcome, session)
 
     async def _check(self, repo_data: RepoData, code: str) -> _Outcome:
@@ -142,6 +148,7 @@ class SimilarCodeRequestConsumer(ConsumerInterface[SimilarCodeRequestedMessage])
         search.code = None
         search.completed_at = datetime.now(UTC).replace(tzinfo=None)
         await session.commit()
+        api_metrics.record_search_finished(outcome.status)
 
     async def _load_search(self, search_id: UUID, session: AsyncSession) -> SimilarCodeSearch:
         """Reads the search row, or raises if it does not exist."""

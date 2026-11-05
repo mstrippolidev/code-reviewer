@@ -18,6 +18,7 @@ from api.indexing.consumers.interface import ConsumerInterface
 from api.indexing.producer import RepoIndexProducer
 from api.indexing.repo_completion_finalizer import RepoCompletionFinalizer
 from api.indexing.topics import REPO_FILE_INDEX, REPO_FILE_INDEX_DLQ, REPO_FILE_PROGRESS
+from api.observability.metrics import api_metrics
 from api.schemas.indexing import RepoFileIndexMessage
 from api.schemas.repos import RepoFileProgressMessage
 from code_reviewer.rag.indexer import LlamaIndexRagManager
@@ -124,9 +125,10 @@ class RepoFileIndexConsumer(ConsumerInterface[RepoFileIndexMessage]):
         try:
             async with self._semaphore:
                 logger.info("Embedding started file_path=%s repo_id=%s", file_msg.file_path, file_msg.repo_id)
-                await asyncio.to_thread(
-                    self.dependencies.rag_manager.index_file, repo_data, file_msg.file_path, file_msg.content
-                )
+                with api_metrics.track_file_indexing():
+                    await asyncio.to_thread(
+                        self.dependencies.rag_manager.index_file, repo_data, file_msg.file_path, file_msg.content
+                    )
         except Exception as error:
             logger.error("Failed to index %s for repo_id=%s", file_msg.file_path, file_msg.repo_id, exc_info=error)
             indexed_file.status = IndexedFileStatus.FAILED
