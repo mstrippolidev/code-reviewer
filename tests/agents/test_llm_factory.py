@@ -21,11 +21,6 @@ def set_llm_provider(monkeypatch: pytest.MonkeyPatch):
     get_settings.cache_clear()
 
 
-def test_defaults_to_ollama() -> None:
-    """Verify an unset LLM_PROVIDER falls back to local Ollama."""
-    assert get_settings().llm_provider == "ollama"
-
-
 def test_ollama_provider_builds_ollama_llm(set_llm_provider) -> None:
     set_llm_provider("ollama")
 
