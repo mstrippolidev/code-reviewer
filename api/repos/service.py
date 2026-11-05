@@ -13,6 +13,7 @@ from api.integrations.github import (
     GitHubRepo,
     GitHubRepoFetchError,
 )
+from api.observability.metrics import CapGuard, api_metrics
 from api.repos.errors import (
     BranchNotFoundError,
     GitHubVerificationUnavailableError,
@@ -136,7 +137,9 @@ class RepoLifecycleService:
 
     async def _require_index_capacity(self, repo_id: int, user: User) -> None:
         unfinished = await self._repository.count_active_indexing(user.id, repo_id)
+        api_metrics.record_unfinished_indexings(unfinished)
         if unfinished >= self._max_unfinished_indexings:
+            api_metrics.record_cap_refusal(CapGuard.UNFINISHED_INDEXINGS)
             raise TooManyIndexJobsError(self._max_unfinished_indexings)
 
     def _require_owner(self, repo: RegisteredRepo, user: User) -> None:
