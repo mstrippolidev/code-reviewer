@@ -36,6 +36,11 @@ class LLMInterface(ABC, Generic[T]):
         """The provider's cheap, fast model for short judgment calls; this same instance when it has none."""
         return self
 
+    @property
+    def model_name(self) -> str:
+        """Name of the model this provider instance runs, used to label metrics."""
+        return self._get_model_name()
+
     def create_model(
         self, output_schema: type[T], include_raw: bool = False
     ) -> Runnable[LanguageModelInput, T | dict[str, Any]]:

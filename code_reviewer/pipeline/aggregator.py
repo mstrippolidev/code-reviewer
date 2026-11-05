@@ -15,6 +15,8 @@ from code_reviewer.schemas.review import (
     SkippedFile,
 )
 from code_reviewer.schemas.submission import PreparedFile
+from code_reviewer.telemetry.metrics import pipeline_metrics
+from code_reviewer.telemetry.output_quality import assess_entry
 
 _APPROVED_RATING_THRESHOLD = 85
 _REJECTED_RATING_THRESHOLD = 60
@@ -46,7 +48,20 @@ class Aggregator:
             self._build_file_entry(prepared_file, entries_by_file[prepared_file.source_file.file_path])
             for prepared_file in prepared_files
         ]
-        return AggregatorOutput(meta=self._build_meta(entries, review, skipped_files), review=review)
+        for prepared_file, file_entry in zip(prepared_files, review):
+            self._record_output_quality(prepared_file, file_entry, entries_by_file[file_entry.file_path])
+        output = AggregatorOutput(meta=self._build_meta(entries, review, skipped_files), review=review)
+        pipeline_metrics.record_review_rating(output.meta.overall_rating)
+        return output
+
+    def _record_output_quality(
+        self, prepared_file: PreparedFile, file_entry: AggregatedReviewEntry, entries: list[AgentReviewEntry]
+    ) -> None:
+        """Reports each agent's real judgment of one file; failed, skipped and hard-limit entries carry none."""
+        file_line_count = len(prepared_file.source_file.content.splitlines())
+        for entry in self._exclude_unrated(entries):
+            if entry.code_key not in file_entry.agents_skipped:
+                pipeline_metrics.record_output_quality(entry.code_key.value, assess_entry(entry, file_line_count))
 
     def _group_entries_by_file(self, entries: list[AgentReviewEntry]) -> dict[str, list[AgentReviewEntry]]:
         grouped: dict[str, list[AgentReviewEntry]] = defaultdict(list)
