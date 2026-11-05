@@ -14,6 +14,7 @@ from code_reviewer.rag.exemplars import Exemplar, ExemplarQuery, ExemplarStore
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.rag.shared_exemplars import SharedExemplarQuery, SharedExemplarStore
 from code_reviewer.schemas.review import CodeKey
+from code_reviewer.telemetry.rag_metrics import Corpus, ExemplarOutcome, rag_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ class ExemplarInjection(AgentMiddleware):
             code=code,
             relevance_floor=get_settings().exemplar_relevance_floor,
         )
-        return self._safely(lambda: self._corpora.repo.find_exemplars(query, top_k=top_k))
+        return self._safely(lambda: self._corpora.repo.find_exemplars(query, top_k=top_k), Corpus.REPO)
 
     def _from_shared(self, code: str, top_k: int) -> list[Exemplar]:
         if self._corpora.shared is None:
@@ -89,15 +90,16 @@ class ExemplarInjection(AgentMiddleware):
             code=code,
             relevance_floor=get_settings().exemplar_relevance_floor,
         )
-        return self._safely(lambda: self._corpora.shared.find_exemplars(query, top_k=top_k))
+        return self._safely(lambda: self._corpora.shared.find_exemplars(query, top_k=top_k), Corpus.SHARED)
 
-    def _safely(self, lookup: Callable[[], list[Exemplar]]) -> list[Exemplar]:
+    def _safely(self, lookup: Callable[[], list[Exemplar]], corpus: Corpus) -> list[Exemplar]:
         """Retrieval never fails a review: a missing corpus or a store outage
         means no exemplars, not no review."""
         try:
             return lookup()
         except Exception:
             logger.warning("Exemplar retrieval failed for %s; reviewing without it.", self._code_key)
+            rag_metrics.record_exemplar_lookup(corpus, self._code_key.value, ExemplarOutcome.FAILED)
             return []
 
 

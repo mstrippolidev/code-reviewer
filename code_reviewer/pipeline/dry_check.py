@@ -16,6 +16,8 @@ from code_reviewer.rag.dry_review import build_dry_review_entry
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.schemas.review import AgentReviewEntry, CodeKey, SizeStatus
 from code_reviewer.schemas.submission import PreparedFile, SubmittedFile
+from code_reviewer.telemetry.metrics import pipeline_metrics
+from code_reviewer.telemetry.rag_metrics import RetrievalSource, rag_metrics
 
 tracer = trace.get_tracer(__name__)
 
@@ -50,20 +52,29 @@ def check_snippet_for_duplicates(
 
 @tracer.start_as_current_span("execute_agent", attributes={"code_reviewer.code_key": CodeKey.DRY.value})
 def run_dry(agents_container: AgentsContainer, prepared_file: PreparedFile) -> AgentReviewEntry:
-    """Exact structural-hash matches need no LLM judgment, so only the fuzzy,
-    re-ranked candidates reach the DRY judge; a file with no evidence of either
-    kind returns a clean entry without an LLM call."""
-    file_path = prepared_file.source_file.file_path
+    """Runs DRY on one file and times the run; a file with no repo is skipped, not run."""
     if prepared_file.repo_data is None:
+        pipeline_metrics.record_agent_skip(CodeKey.DRY.value, "repo_required")
         return AgentReviewEntry(
-            file_path=file_path,
+            file_path=prepared_file.source_file.file_path,
             code_key=CodeKey.DRY,
             incidents=[],
             skipped=True,
             skip_reason=DRY_REQUIRES_REPO_REASON,
         )
+    with pipeline_metrics.track_agent_run(CodeKey.DRY.value):
+        return _review_against_history(agents_container, prepared_file, prepared_file.repo_data)
+
+
+def _review_against_history(
+    agents_container: AgentsContainer, prepared_file: PreparedFile, repo_data: RepoData
+) -> AgentReviewEntry:
+    """Exact structural-hash matches need no LLM judgment, so only the fuzzy,
+    re-ranked candidates reach the DRY judge; a file with no evidence of either
+    kind returns a clean entry without an LLM call."""
+    file_path = prepared_file.source_file.file_path
     intra_pr_groups = prepared_file.intra_pr_duplicates
-    history_matches = _gather_history_matches(agents_container, prepared_file.source_file, prepared_file.repo_data)
+    history_matches = _gather_history_matches(agents_container, prepared_file.source_file, repo_data)
     if not intra_pr_groups and not history_matches:
         return AgentReviewEntry(file_path=file_path, code_key=CodeKey.DRY, incidents=[])
     with tracer.start_as_current_span("judge_duplicate_candidates"):
@@ -92,7 +103,18 @@ def _gather_history_matches(
     matches = finder.find(source_file.file_path, source_file.content)
     reranker = agents_container.history_match_reranker
     reranked = [reranker.rerank(extract_snippet(source_file.content, match.chunk), match) for match in matches]
-    return [match for match in reranked if _has_evidence(match)]
+    kept = [match for match in reranked if _has_evidence(match)]
+    for match in kept:
+        _record_candidates(match)
+    return kept
+
+
+def _record_candidates(match: ChunkHistoryMatch) -> None:
+    """Counts the candidates of each kind that survived re-ranking for one chunk."""
+    rag_metrics.record_dry_candidates(RetrievalSource.STRUCTURAL, len(match.structural_matches))
+    rag_metrics.record_dry_candidates(RetrievalSource.SEMANTIC, len(match.semantic_matches))
+    rag_metrics.record_dry_candidates(RetrievalSource.CODE, len(match.code_matches))
+    rag_metrics.record_dry_candidates(RetrievalSource.LEXICAL, len(match.lexical_matches))
 
 
 def _has_evidence(match: ChunkHistoryMatch) -> bool:

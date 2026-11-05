@@ -29,6 +29,7 @@ from llama_index.core.postprocessor import SentenceTransformerRerank
 from llama_index.core.schema import NodeWithScore, QueryBundle, TextNode
 
 from code_reviewer.rag.dry_matching import ChunkHistoryMatch
+from code_reviewer.telemetry.rag_metrics import rag_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -74,11 +75,14 @@ class HistoryMatchReranker:
         if not nodes:
             return {field: [] for field in buckets}
         try:
-            scored_nodes = self._postprocessor.postprocess_nodes(nodes, query_bundle=query)
+            with rag_metrics.track_rerank():
+                scored_nodes = self._postprocessor.postprocess_nodes(nodes, query_bundle=query)
         except Exception:
             logger.warning("Cross-encoder re-rank failed; keeping every bucket's candidates unranked.")
             return buckets
-        return self._grouped_survivors(scored_nodes, buckets)
+        survivors = self._grouped_survivors(scored_nodes, buckets)
+        rag_metrics.record_rerank_candidates(len(nodes), sum(len(kept) for kept in survivors.values()))
+        return survivors
 
     def _as_nodes(self, buckets: dict[str, list[_ScoredCode]]) -> list[NodeWithScore]:
         nodes = []

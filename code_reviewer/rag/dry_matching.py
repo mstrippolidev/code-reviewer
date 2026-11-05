@@ -28,6 +28,7 @@ from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.rag.structural_hash import compute_structural_hash
 from code_reviewer.rag.structural_hash_store import StructuralHashStore, StructuralMatch
 from code_reviewer.schemas.submission import SubmittedFile
+from code_reviewer.telemetry.rag_metrics import RetrievalSource, rag_metrics
 
 SEMANTIC_MATCH_TOP_K = 10
 CODE_MATCH_TOP_K = 10
@@ -125,7 +126,9 @@ class CrossHistoryDuplicateFinder:
         code_matches = self._code_matches(chunk_location, chunk)
         lexical_matches = self._lexical_matches(chunk_location, chunk)
         if not any([structural_matches, semantic_matches, code_matches, lexical_matches]):
+            rag_metrics.record_dry_chunk_without_candidates()
             return None
+        rag_metrics.record_dry_chunk_with_candidates()
         return ChunkHistoryMatch(
             chunk=chunk_location,
             structural_matches=structural_matches,
@@ -136,23 +139,32 @@ class CrossHistoryDuplicateFinder:
 
     def _structural_matches(self, chunk_location: StructuralMatch, chunk: CodeChunk) -> list[StructuralMatch]:
         structural_hash = compute_structural_hash(chunk.code)
-        matches = self._sources.structural_hash_store.find_by_hash(
-            self._repo_data.repo_id, self._repo_data.owner_id, structural_hash
-        )
+        with rag_metrics.track_retrieval(RetrievalSource.STRUCTURAL):
+            matches = self._sources.structural_hash_store.find_by_hash(
+                self._repo_data.repo_id, self._repo_data.owner_id, structural_hash
+            )
         return _exclude_self_match(matches, chunk_location)
 
     def _semantic_matches(self, chunk_location: StructuralMatch, chunk: CodeChunk) -> list[SimilarChunk]:
-        matches = self._sources.embedding_index.find_similar(self._repo_data, chunk.code, top_k=SEMANTIC_MATCH_TOP_K)
+        """Timed together with the chunk-explanation LLM call that find_similar makes first."""
+        with rag_metrics.track_retrieval(RetrievalSource.SEMANTIC):
+            matches = self._sources.embedding_index.find_similar(
+                self._repo_data, chunk.code, top_k=SEMANTIC_MATCH_TOP_K
+            )
         return _exclude_self_match(matches, chunk_location)
 
     def _code_matches(self, chunk_location: StructuralMatch, chunk: CodeChunk) -> list[CodeMatch]:
-        matches = self._sources.code_similarity_index.find_similar(self._repo_data, chunk.code, top_k=CODE_MATCH_TOP_K)
+        with rag_metrics.track_retrieval(RetrievalSource.CODE):
+            matches = self._sources.code_similarity_index.find_similar(
+                self._repo_data, chunk.code, top_k=CODE_MATCH_TOP_K
+            )
         return _exclude_self_match(matches, chunk_location)
 
     def _lexical_matches(self, chunk_location: StructuralMatch, chunk: CodeChunk) -> list[LexicalMatch]:
-        matches = self._sources.code_similarity_index.find_lexical_matches(
-            self._repo_data, chunk.code, top_k=LEXICAL_MATCH_TOP_K
-        )
+        with rag_metrics.track_retrieval(RetrievalSource.LEXICAL):
+            matches = self._sources.code_similarity_index.find_lexical_matches(
+                self._repo_data, chunk.code, top_k=LEXICAL_MATCH_TOP_K
+            )
         return _exclude_self_match(matches, chunk_location)
 
 

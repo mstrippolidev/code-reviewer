@@ -17,6 +17,7 @@ from code_reviewer.prompts.rag.dry_judge import DRY_JUDGE_SYSTEM_PROMPT
 from code_reviewer.rag.disjoint_set import DisjointSet
 from code_reviewer.schemas.rag.dry_judge import DryJudgeOutput, DryJudgeVerdict
 from code_reviewer.schemas.review import Incident
+from code_reviewer.telemetry.rag_metrics import rag_metrics
 
 
 class DryJudgeInvocationError(Exception):
@@ -71,10 +72,13 @@ class DryJudge:
         if not candidates:
             return []
         prompt = _build_prompt(query_code, candidates)
+        rag_metrics.record_judge_call(len(candidates))
         try:
             messages = {"messages": [{"role": "user", "content": prompt}]}
-            result = call_with_hard_timeout(lambda: self._agent.invoke(messages))
+            with rag_metrics.track_judge():
+                result = call_with_hard_timeout(lambda: self._agent.invoke(messages))
             output: DryJudgeOutput = result["structured_response"]
+            _record_verdicts(output.verdicts)
             return _incidents_from_verdicts(output.verdicts, candidates)
         except Exception as error:
             raise DryJudgeInvocationError("DRY judge failed to review the given candidates.") from error
@@ -86,6 +90,12 @@ def _build_prompt(query_code: str, candidates: list[JudgeCandidate]) -> str:
         for index, candidate in enumerate(candidates)
     )
     return f"Chunk under review:\n{format_snippet(query_code)}\n\nCandidates:\n\n{candidate_entries}"
+
+
+def _record_verdicts(verdicts: list[DryJudgeVerdict]) -> None:
+    """Counts how many verdicts confirmed a duplicate and how many did not."""
+    duplicates = sum(verdict.is_duplicate for verdict in verdicts)
+    rag_metrics.record_judge_verdicts(duplicates, len(verdicts) - duplicates)
 
 
 def _incidents_from_verdicts(verdicts: list[DryJudgeVerdict], candidates: list[JudgeCandidate]) -> list[Incident]:
