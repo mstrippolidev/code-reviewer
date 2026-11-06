@@ -20,6 +20,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from api.config.settings import ApiSettings
 
 SERVICE_NAME = "code-reviewer-api"
+_UNTRACED_URLS = "health,/api/reviews/[0-9a-f-]{36}$,/api/oauth/github/me"
 
 
 def configure_telemetry(settings: ApiSettings) -> TracerProvider:
@@ -51,8 +52,8 @@ def configure_metrics(settings: ApiSettings) -> MeterProvider:
 
 
 def instrument_fastapi(app: FastAPI) -> None:
-    """Adds one span per request to the app, skipping the health check."""
-    FastAPIInstrumentor.instrument_app(app, excluded_urls="health", exclude_spans=["receive", "send"])
+    """Adds one span per request to the app, skipping the health check and the polling routes."""
+    FastAPIInstrumentor.instrument_app(app, excluded_urls=_UNTRACED_URLS, exclude_spans=["receive", "send"])
 
 
 def _build_resource() -> Resource:

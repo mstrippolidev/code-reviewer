@@ -9,6 +9,7 @@ from aiokafka import AIOKafkaConsumer, ConsumerRecord
 from opentelemetry import propagate, trace
 from opentelemetry.context import Context
 
+from api.observability.correlation import CorrelationIds, correlation_scope
 from api.observability.kafka_lag import ConsumerLagSampler
 from api.observability.kafka_metrics import MessageOutcome, kafka_metrics
 
@@ -84,9 +85,15 @@ class ConsumerInterface(Generic[ParsedMessage], metaclass=ABCMeta):
             await self._handle_parse_error(msg, error)
             await consumer.commit()
             return
-        await self._handle_parsed_message(parsed, msg, consumer)
+        with correlation_scope(self._correlation_of(parsed)):
+            await self._handle_parsed_message(parsed, msg, consumer)
         await consumer.commit()
         kafka_metrics.record_message_consumed(self._consumer_name, msg.topic, MessageOutcome.PROCESSED)
+
+    def _correlation_of(self, parsed: ParsedMessage) -> CorrelationIds:
+        """Reads every correlation id the parsed message happens to carry; the rest stay unset."""
+        found = {name: getattr(parsed, name, None) for name in CorrelationIds.model_fields}
+        return CorrelationIds(**found)
 
     @abstractmethod
     def _parse_msg(self, msg: ConsumerRecord) -> ParsedMessage:

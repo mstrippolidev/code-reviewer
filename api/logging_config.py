@@ -6,8 +6,9 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from api.config.settings import ApiSettings
+from api.observability.correlation import CorrelationFilter
 
-_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s [trace=%(trace_id)s %(correlation)s]: %(message)s"
 _LOG_FILE = Path("logs") / "api.log"
 _LOG_FILE_MAX_BYTES = 5_000_000
 _LOG_FILE_BACKUP_COUNT = 3
@@ -24,12 +25,21 @@ def configure_logging(settings: ApiSettings) -> None:
     logging.basicConfig(
         level=settings.api_log_level,
         format=_LOG_FORMAT,
-        handlers=[logging.StreamHandler(), _build_file_handler()],
+        handlers=[_build_stream_handler(), _build_file_handler()],
         force=True,
     )
 
 
+def _build_stream_handler() -> logging.Handler:
+    """Console handler that stamps the trace and business ids on every record."""
+    handler = logging.StreamHandler()
+    handler.addFilter(CorrelationFilter())
+    return handler
+
+
 def _build_file_handler() -> logging.Handler:
+    """Rotating file handler that stamps the trace and business ids on every record."""
     handler = RotatingFileHandler(_LOG_FILE, maxBytes=_LOG_FILE_MAX_BYTES, backupCount=_LOG_FILE_BACKUP_COUNT)
     handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+    handler.addFilter(CorrelationFilter())
     return handler
