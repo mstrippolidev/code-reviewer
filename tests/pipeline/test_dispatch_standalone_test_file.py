@@ -3,14 +3,18 @@
     source file to pair it to — both dispatch strategies, fakes only.
 """
 import pytest
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from sqlalchemy import create_engine
 
 from code_reviewer.agents.registry import AgentsContainer
+from code_reviewer.pipeline import dispatch as dispatch_module
 from code_reviewer.rag.rerank import HistoryMatchReranker
 from code_reviewer.rag.structural_hash_store import StructuralHashStore
 from code_reviewer.schemas.paired import build_standalone_test_file_content
 from code_reviewer.schemas.review import CodeKey, ReviewScope, SizeStatus
 from code_reviewer.schemas.submission import PreparedFile, SubmittedFile
+from code_reviewer.telemetry.metrics import PipelineMetrics
+from tests.metric_points import AGENT_SKIPPED, points_for
 from tests.pipeline.test_dispatch import (
     DISPATCH_FUNCTIONS,
     DispatchFn,
@@ -103,3 +107,24 @@ def test_standalone_test_file_sends_tcase_the_test_design_prompt_shape(
 
     tcase_code = agents[CodeKey.TCASE].execute_agent_calls[0][0]
     assert tcase_code == build_standalone_test_file_content(TEST_FILE)
+
+
+@DISPATCH_FUNCTIONS
+def test_standalone_test_file_counts_each_left_out_agent_as_skipped(
+    dispatch: DispatchFn,
+    container: AgentsContainer,
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_pipeline_metrics: PipelineMetrics,
+    metric_reader: InMemoryMetricReader,
+) -> None:
+    """Verify the two file agents and DRY are counted with the standalone reason, and the agents that ran are not."""
+    monkeypatch.setattr(dispatch_module, "pipeline_metrics", isolated_pipeline_metrics)
+
+    dispatch(_standalone_prepared_file(), container)
+
+    skipped = {
+        point.attributes["code_reviewer.code_key"]: point.value
+        for point in points_for(metric_reader, AGENT_SKIPPED)
+        if point.attributes["code_reviewer.reason"] == "standalone_test_file"
+    }
+    assert skipped == {"COH": 1, "CMPLX": 1, "DRY": 1}

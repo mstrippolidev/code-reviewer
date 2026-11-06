@@ -41,6 +41,8 @@ from code_reviewer.schemas.review import (
     SkippedFile,
 )
 from code_reviewer.schemas.submission import PreparedFile, SubmittedFile
+from code_reviewer.telemetry.metrics import pipeline_metrics
+from code_reviewer.telemetry.run_usage import track_usage
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -98,35 +100,41 @@ async def run_pipeline(
         meta.skipped_files rather than failing every other file's review.
     """
     trace.get_current_span().set_attribute("code_reviewer.files_count", len(files))
-    prepared_files, skipped_files = await asyncio.to_thread(
-        prepare_files_for_pipeline, files, repo_data, agents_container.intake_llm
-    )
-    with tracer.start_as_current_span("build_call_depth_reports"):
-        prepared_files = await asyncio.to_thread(
-            CallDepthReportBuilder(agents_container.rag_manager).build, prepared_files
+    with track_usage("review") as review_usage:
+        prepared_files, skipped_files = await asyncio.to_thread(
+            prepare_files_for_pipeline, files, repo_data, agents_container.intake_llm
         )
-    entries = []
-    reviewed_files = []
-    for prepared_file in prepared_files:
-        file_path = prepared_file.source_file.file_path
-        with tracer.start_as_current_span("review_file", attributes={"code_reviewer.file_path": file_path}) as span:
-            try:
-                file_entries = await review_file_runnable(
-                    prepared_file, agents_container, on_agent_reviewed=on_agent_reviewed
-                )
-            except Exception as error:
-                span.record_exception(error)
-                span.set_status(Status(StatusCode.ERROR))
-                logger.exception("Agent dispatch failed for file_path=%s; skipping it and continuing", file_path)
-                skipped_files.append(SkippedFile(file_path=file_path, reason=AGENT_EXECUTION_FAILED_REASON))
-                if on_file_reviewed is not None:
-                    await on_file_reviewed(file_path, True, [])
-                continue
-        entries.extend(file_entries)
-        reviewed_files.append(prepared_file)
-        if on_file_reviewed is not None:
-            await on_file_reviewed(file_path, False, file_entries)
-    return Aggregator().build_output(entries, reviewed_files, skipped_files)
+        with tracer.start_as_current_span("build_call_depth_reports"):
+            prepared_files = await asyncio.to_thread(
+                CallDepthReportBuilder(agents_container.rag_manager).build, prepared_files
+            )
+        entries = []
+        reviewed_files = []
+        for prepared_file in prepared_files:
+            file_path = prepared_file.source_file.file_path
+            with (
+                tracer.start_as_current_span("review_file", attributes={"code_reviewer.file_path": file_path}) as span,
+                track_usage(f"file={file_path}"),
+            ):
+                try:
+                    file_entries = await review_file_runnable(
+                        prepared_file, agents_container, on_agent_reviewed=on_agent_reviewed
+                    )
+                except Exception as error:
+                    span.record_exception(error)
+                    span.set_status(Status(StatusCode.ERROR))
+                    logger.exception("Agent dispatch failed for file_path=%s; skipping it and continuing", file_path)
+                    skipped_files.append(SkippedFile(file_path=file_path, reason=AGENT_EXECUTION_FAILED_REASON))
+                    if on_file_reviewed is not None:
+                        await on_file_reviewed(file_path, True, [])
+                    continue
+            entries.extend(file_entries)
+            reviewed_files.append(prepared_file)
+            if on_file_reviewed is not None:
+                await on_file_reviewed(file_path, False, file_entries)
+        output = Aggregator().build_output(entries, reviewed_files, skipped_files)
+        pipeline_metrics.record_review_cost(review_usage.cost_usd)
+        return output
 
 
 @tracer.start_as_current_span("select_pair_and_screen_files")
@@ -155,7 +163,7 @@ def prepare_files_for_pipeline(
     intra_pr_groups = _intra_pr_duplicate_groups(selected_files)
     pairings = pair_source_files_with_tests(selected_files, test_files)
 
-    with ThreadPoolExecutor(max_workers=get_settings().max_intake_screen_concurrency) as executor:
+    with track_usage("intake"), ThreadPoolExecutor(max_workers=get_settings().max_intake_screen_concurrency) as executor:
         futures = [
             executor.submit(contextvars.copy_context().run, _prepare_pairing, pairing, intra_pr_groups, context)
             for pairing in pairings
@@ -184,8 +192,7 @@ def _prepare_pairing(
     try:
         size_status = _run_source_file_guards(pairing.source_file.content, context.intake_llm)
     except (SubmissionTooLargeError, FileTooLargeError, IntakeRejectedError) as error:
-        _log_rejection(pairing.source_file.file_path, error)
-        return None, [_skipped_file(pairing.source_file.file_path, error)]
+        return None, [_rejected_file(pairing.source_file.file_path, error)]
     except Exception:
         logger.exception("Guard execution failed unexpectedly for file_path=%s", pairing.source_file.file_path)
         return None, [SkippedFile(file_path=pairing.source_file.file_path, reason=GUARD_EXECUTION_FAILED_REASON)]
@@ -224,6 +231,13 @@ def _run_source_file_guards(content: str, intake_llm: LLMInterface | None) -> Si
     run_intake_screen(content, llm=intake_llm)
     return size_status
 
+def _rejected_file(file_path: str, error: Exception) -> SkippedFile:
+    """Logs a guard rejection, counts it when the intake screen made it, and returns the report entry."""
+    _log_rejection(file_path, error)
+    if isinstance(error, IntakeRejectedError):
+        pipeline_metrics.record_intake_rejection(error.validator)
+    return _skipped_file(file_path, error)
+
 def _skipped_file(file_path: str, error: Exception) -> SkippedFile:
     return SkippedFile(file_path=file_path, reason=_SKIP_REASONS[type(error)])
 
@@ -241,8 +255,7 @@ def _screen_test_files(
         try:
             _run_test_file_guards(test_file.content, intake_llm)
         except (SubmissionTooLargeError, IntakeRejectedError) as error:
-            _log_rejection(test_file.file_path, error)
-            rejected.append(_skipped_file(test_file.file_path, error))
+            rejected.append(_rejected_file(test_file.file_path, error))
         except Exception:
             logger.exception("Guard execution failed unexpectedly for file_path=%s", test_file.file_path)
             rejected.append(SkippedFile(file_path=test_file.file_path, reason=GUARD_EXECUTION_FAILED_REASON))

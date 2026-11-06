@@ -41,6 +41,7 @@ from code_reviewer.schemas.review import (
 )
 from code_reviewer.telemetry.metrics import pipeline_metrics
 from code_reviewer.telemetry.run_summary import summarize_run
+from code_reviewer.telemetry.run_usage import track_usage
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -200,11 +201,16 @@ class AgentBase:
             AgentInvocationError: If any call fails or its output cannot
                 be validated against AgentOutput.
         """
-        with self._execute_agent_span(), pipeline_metrics.track_agent_run(self._code_agent.value):
+        with self._execute_agent_span(), track_usage(self._usage_label(file_path)), pipeline_metrics.track_agent_run(
+            self._code_agent.value
+        ):
             results = self._invoke_batch(chunks)
         for result in results:
             self._set_file_path_and_code_key(result, file_path)
         return results
+
+    def _usage_label(self, file_path: str | None) -> str:
+        return f"agent={self._code_agent.value} file={file_path}"
 
     def _execute_agent_span(self) -> AbstractContextManager[Span]:
         return tracer.start_as_current_span(
@@ -259,7 +265,9 @@ class AgentBase:
             AgentInvocationError: If the LLM call fails or its output
                 cannot be validated against AgentOutput.
         """
-        with self._execute_agent_span(), pipeline_metrics.track_agent_run(self._code_agent.value):
+        with self._execute_agent_span(), track_usage(self._usage_label(file_path)), pipeline_metrics.track_agent_run(
+            self._code_agent.value
+        ):
             result = self._invoke(code, repo_data)
         self._set_file_path_and_code_key(result, file_path)
         return result
@@ -301,7 +309,7 @@ class AgentBase:
 
     def _record_run_summary(self, messages: Sequence[BaseMessage]) -> None:
         """Reports the tokens, model turns and tool calls of one finished agent run."""
-        pipeline_metrics.record_run_summary(self._code_agent.value, self._model_name, summarize_run(messages))
+        pipeline_metrics.record_run_summary(self._code_agent.value, summarize_run(messages))
 
     def _set_file_path_and_code_key(self, result: AgentOutput, file_path: str | None) -> None:
         """Stamps result with the caller-known file_path and this agent's own CodeKey."""

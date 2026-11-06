@@ -13,9 +13,10 @@ from code_reviewer.pipeline.code_splitter.python import PythonCodeSplit
 from code_reviewer.pipeline.pairing_stem import pairing_stem
 from code_reviewer.pipeline.pr_file_selection import is_test_file
 from code_reviewer.rag.code_similarity_index import CodeSimilarityIndex
-from code_reviewer.rag.indexer import FileChunk, LlamaIndexRagManager
+from code_reviewer.rag.indexer import FileChunk, LlamaIndexRagManager, SimilarChunk
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.schemas.submission import SubmittedFile
+from code_reviewer.telemetry.rag_metrics import RetrievalSource, rag_metrics
 
 DETERMINISTIC_CANDIDATE_CAP = 3
 SEMANTIC_TOP_K = 10
@@ -71,7 +72,8 @@ class PairingCandidateFinder:
         )
 
     def _deterministic_paths(self, repo_data: RepoData, source_path: str) -> list[str]:
-        indexed_paths = self._sources.embedding_index.list_indexed_file_paths(repo_data.repo_id, repo_data.owner_id)
+        with rag_metrics.track_retrieval(RetrievalSource.PAIRING_NAMES):
+            indexed_paths = self._sources.embedding_index.list_indexed_file_paths(repo_data.repo_id, repo_data.owner_id)
         source_stem = pairing_stem(source_path)
         matches = [
             path for path in indexed_paths
@@ -80,19 +82,25 @@ class PairingCandidateFinder:
         return matches[:DETERMINISTIC_CANDIDATE_CAP]
 
     def _semantic_paths(self, repo_data: RepoData, source_file: SubmittedFile, semantic_query: str | None) -> list[str]:
-        embedding_index = self._sources.embedding_index
-        if semantic_query is None:
-            dense_matches = embedding_index.find_similar(repo_data, source_file.content, top_k=SEMANTIC_TOP_K)
-        else:
-            dense_matches = embedding_index.find_similar_by_query(repo_data, semantic_query, top_k=SEMANTIC_TOP_K)
+        with rag_metrics.track_retrieval(RetrievalSource.PAIRING_SEMANTIC):
+            dense_matches = self._dense_matches(repo_data, source_file, semantic_query)
         lexical_query = semantic_query or source_file.content
-        lexical_matches = self._sources.code_similarity_index.find_lexical_matches(
-            repo_data, lexical_query, top_k=SEMANTIC_TOP_K
-        )
+        with rag_metrics.track_retrieval(RetrievalSource.PAIRING_LEXICAL):
+            lexical_matches = self._sources.code_similarity_index.find_lexical_matches(
+                repo_data, lexical_query, top_k=SEMANTIC_TOP_K
+            )
         dense_paths = _valid_test_file_paths(dense_matches, source_file.file_path)
         lexical_paths = _valid_test_file_paths(lexical_matches, source_file.file_path)
         fused = _reciprocal_rank_fusion([dense_paths, lexical_paths])
         return fused[:SEMANTIC_FUSION_CAP]
+
+    def _dense_matches(
+        self, repo_data: RepoData, source_file: SubmittedFile, semantic_query: str | None
+    ) -> list[SimilarChunk]:
+        embedding_index = self._sources.embedding_index
+        if semantic_query is None:
+            return embedding_index.find_similar(repo_data, source_file.content, top_k=SEMANTIC_TOP_K)
+        return embedding_index.find_similar_by_query(repo_data, semantic_query, top_k=SEMANTIC_TOP_K)
 
     def _as_candidates(
         self, repo_data: RepoData, file_paths: list[str], symbols: frozenset[str]
@@ -103,7 +111,8 @@ class PairingCandidateFinder:
         ]
 
     def _file_content(self, repo_data: RepoData, file_path: str, symbols: frozenset[str]) -> str:
-        chunks = self._sources.embedding_index.get_file_chunks(repo_data.repo_id, repo_data.owner_id, file_path)
+        with rag_metrics.track_retrieval(RetrievalSource.PAIRING_FILE_LOOKUP):
+            chunks = self._sources.embedding_index.get_file_chunks(repo_data.repo_id, repo_data.owner_id, file_path)
         relevant = _relevant_chunks(chunks, symbols)
         return "\n".join(chunk.code for chunk in sorted(relevant, key=lambda chunk: chunk.start_line))
 

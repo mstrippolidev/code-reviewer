@@ -7,6 +7,7 @@
 import pytest
 
 from code_reviewer.agents.llm.base import LLMInterface
+from code_reviewer.agents.llm.pricing import TokenPrices
 from code_reviewer.consensus.vote import ConsensusVoteError, Vote, VoteVerdict
 from code_reviewer.consensus import vote as vote_module
 
@@ -17,6 +18,9 @@ class FakeLLMInterface(LLMInterface):
 
     def create_raw_model(self) -> None:
         return None
+
+    def fetch_token_prices(self, model_name: str) -> TokenPrices:
+        return TokenPrices.free()
 
     def _get_model_name(self) -> str:
         return "fake-model"

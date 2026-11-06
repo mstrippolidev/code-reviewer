@@ -22,6 +22,7 @@ OUTCOME = "code_reviewer.outcome"
 CODE_KEY = "code_reviewer.code_key"
 VERDICT = "code_reviewer.verdict"
 ORIGIN = "code_reviewer.origin"
+RESULT = "code_reviewer.result"
 
 
 class RetrievalSource(StrEnum):
@@ -30,6 +31,11 @@ class RetrievalSource(StrEnum):
     CODE = "code"
     LEXICAL = "lexical"
     EXEMPLAR = "exemplar"
+    PAIRING_NAMES = "pairing_names"
+    PAIRING_SEMANTIC = "pairing_semantic"
+    PAIRING_LEXICAL = "pairing_lexical"
+    PAIRING_FILE_LOOKUP = "pairing_file_lookup"
+    EVIDENCE_LOOKUP = "evidence_lookup"
 
 
 class Corpus(StrEnum):
@@ -54,6 +60,20 @@ class DuplicateOrigin(StrEnum):
     INTRA_PR = "intra_pr"
 
 
+class PairingResult(StrEnum):
+    FOUND_FIRST_TRY = "found_first_try"
+    FOUND_AFTER_REWRITE = "found_after_rewrite"
+    NOT_FOUND = "not_found"
+
+
+class EvidenceResult(StrEnum):
+    FOUND = "found"
+    EMPTY = "empty"
+    SYMBOL_NOT_FOUND = "symbol_not_found"
+    FAILED = "failed"
+    NO_REPO = "no_repo"
+
+
 class RagMetrics:
     """Holds the RAG layer's instruments so callers record events, not raw numbers and labels."""
 
@@ -61,6 +81,7 @@ class RagMetrics:
         self._create_retrieval_instruments(meter)
         self._create_exemplar_instruments(meter)
         self._create_dry_instruments(meter)
+        self._create_pairing_and_evidence_instruments(meter)
 
     def track_retrieval(self, source: RetrievalSource) -> AbstractContextManager[None]:
         """Times the enclosed search and records how it ended, re-raising any failure."""
@@ -81,6 +102,10 @@ class RagMetrics:
     def track_judge(self) -> AbstractContextManager[None]:
         """Times the enclosed DRY judge call."""
         return self._timed(self._judge_duration, {})
+
+    def track_pairing(self) -> AbstractContextManager[None]:
+        """Times one whole corpus-wide test-file lookup and records how it ended, re-raising any failure."""
+        return self._timed(self._pairing_duration, {})
 
     def record_rerank_candidates(self, candidates_in: int, candidates_kept: int) -> None:
         """Reports how many candidates a re-rank pass received and how many it kept."""
@@ -119,6 +144,14 @@ class RagMetrics:
         """Counts the judge's verdicts, so the share it confirms as duplicates is visible."""
         self._judge_verdicts.add(duplicates, {VERDICT: "duplicate"})
         self._judge_verdicts.add(rejected, {VERDICT: "not_duplicate"})
+
+    def record_pairing_result(self, result: PairingResult) -> None:
+        """Counts one finished test-file lookup by whether it found a test file, and on which attempt."""
+        self._pairing_lookups.add(1, {RESULT: result.value})
+
+    def record_evidence_lookup(self, result: EvidenceResult) -> None:
+        """Counts one ARCH/COUP evidence lookup by what it gave back."""
+        self._evidence_lookups.add(1, {RESULT: result.value})
 
     @contextmanager
     def _timed(self, histogram: Histogram, labels: dict[str, str]) -> Iterator[None]:
@@ -197,6 +230,24 @@ class RagMetrics:
         )
         self._judge_verdicts = meter.create_counter(
             "code_reviewer.rag.dry.judge.verdicts", unit="{verdict}", description="Judge verdicts, by whether it confirmed"
+        )
+
+    def _create_pairing_and_evidence_instruments(self, meter: Meter) -> None:
+        """Creates the instruments for TCASE's corpus-wide test-file lookup and the ARCH/COUP evidence tool."""
+        self._pairing_duration = _latency_histogram(
+            meter,
+            "code_reviewer.rag.pairing.duration",
+            "Wall time of one corpus-wide test-file lookup, model calls included",
+        )
+        self._pairing_lookups = meter.create_counter(
+            "code_reviewer.rag.pairing.lookups",
+            unit="{lookup}",
+            description="Test-file lookups, by whether one was found and on which attempt",
+        )
+        self._evidence_lookups = meter.create_counter(
+            "code_reviewer.rag.evidence.lookups",
+            unit="{lookup}",
+            description="ARCH/COUP evidence lookups, by what they gave back",
         )
 
 

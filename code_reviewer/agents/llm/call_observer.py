@@ -7,11 +7,15 @@ from enum import StrEnum
 import httpx
 import ollama
 import openai
-from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse, wrap_model_call
+from langchain.agents.middleware import AgentMiddleware, ModelRequest, wrap_model_call
+from langchain.agents.middleware.types import ExtendedModelResponse, ModelCallResult
 from langchain.agents.structured_output import StructuredOutputValidationError
+from langchain_core.messages import AIMessage, BaseMessage
 
 from code_reviewer.agents.llm.middleware import StructuredOutputNotCalledError
+from code_reviewer.agents.llm.timeout import raise_if_deadline_passed
 from code_reviewer.telemetry.metrics import pipeline_metrics
+from code_reviewer.telemetry.run_summary import usage_of
 
 
 class LlmErrorCause(StrEnum):
@@ -53,14 +57,28 @@ def classify_llm_error(error: BaseException) -> str:
 
 
 def build_model_call_observer(code_key: str, model_name: str) -> AgentMiddleware:
-    """Builds the middleware that records latency, concurrency and failure cause for one agent's model calls."""
+    """Builds the middleware that records latency, concurrency, tokens and failure cause for one caller's model calls."""
 
     @wrap_model_call
-    def observe_model_call(request: ModelRequest, handler: Callable[[ModelRequest], ModelResponse]) -> ModelResponse:
+    def observe_model_call(
+        request: ModelRequest, handler: Callable[[ModelRequest], ModelCallResult]
+    ) -> ModelCallResult:
+        raise_if_deadline_passed()
         with pipeline_metrics.track_llm_call(code_key, model_name, classify_llm_error):
-            return handler(request)
+            response = handler(request)
+        pipeline_metrics.record_llm_usage(code_key, model_name, usage_of(_messages_of(response)))
+        return response
 
     return observe_model_call
+
+
+def _messages_of(response: ModelCallResult) -> list[BaseMessage]:
+    """The messages inside any of the three shapes a model call handler can return."""
+    if isinstance(response, AIMessage):
+        return [response]
+    if isinstance(response, ExtendedModelResponse):
+        return response.model_response.result
+    return response.result
 
 
 def _cause_for_ollama_status(status_code: int) -> LlmErrorCause:

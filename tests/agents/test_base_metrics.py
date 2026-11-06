@@ -7,11 +7,15 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from code_reviewer.agents import base
 from code_reviewer.agents.base import AgentBase, AgentInvocationError, FileReviewMeta, FileSizeAwareAgentBase
 from code_reviewer.schemas.review import AgentOutput, AgentReviewEntry, CodeKey, SizeStatus
 from code_reviewer.telemetry.metrics import PipelineMetrics
+from code_reviewer.telemetry.run_summary import TokenUsage
 from tests.metric_points import AGENT_RUN_DURATION, AGENT_SKIPPED, LLM_TOKENS, point_with, points_for
 
 
@@ -42,31 +46,83 @@ def agent() -> AgentBase:
     return AgentBase(CodeKey.VAR, "test prompt")
 
 
-def test_execute_agent_reports_the_input_tokens_of_the_run(agent: AgentBase, metric_reader: InMemoryMetricReader) -> None:
-    """Verify the usage found in the run's messages is reported under the agent's code_key."""
+def test_execute_agent_leaves_token_counting_to_the_model_call_observer(
+    agent: AgentBase, metric_reader: InMemoryMetricReader
+) -> None:
+    """Verify the run itself records no tokens, since the observer counts each real call and retries included."""
     agent._agent.invoke = lambda messages, **kwargs: _result_using(120, 30)
 
     agent.execute_agent("code", "f.py")
 
-    assert point_with(metric_reader, LLM_TOKENS, {"code_reviewer.code_key": "VAR", "code_reviewer.token_type": "input"}).value == 120
+    assert points_for(metric_reader, LLM_TOKENS) == []
 
 
-def test_execute_agent_labels_tokens_with_the_agents_own_model(agent: AgentBase, metric_reader: InMemoryMetricReader) -> None:
-    """Verify the model label is the model this agent was built with."""
-    agent._agent.invoke = lambda messages, **kwargs: _result_using(120, 30)
+@pytest.fixture
+def exported_spans(monkeypatch: pytest.MonkeyPatch) -> InMemorySpanExporter:
+    """Points AgentBase's tracer at a private provider so the agent span's attributes can be read back."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(base, "tracer", provider.get_tracer("test"))
+    return exporter
+
+
+def _model_call_using(input_tokens: int) -> dict[str, Any]:
+    """What one real model call does inside the agent: report its usage, then hand back the run's result."""
+    base.pipeline_metrics.record_llm_usage("VAR", "test-model", TokenUsage(input_tokens=input_tokens))
+    return _result_using(input_tokens, 5)
+
+
+def test_the_agent_span_carries_the_tokens_of_the_calls_made_during_its_run(
+    agent: AgentBase, exported_spans: InMemorySpanExporter
+) -> None:
+    """Verify the totals land on execute_agent, not only on the model-call spans beside it."""
+    agent._agent.invoke = lambda messages, **kwargs: _model_call_using(120)
 
     agent.execute_agent("code", "f.py")
 
-    assert point_with(metric_reader, LLM_TOKENS, {"code_reviewer.model": agent._model_name}).value == 120
+    (span,) = exported_spans.get_finished_spans()
+    assert (span.name, span.attributes["code_reviewer.tokens.input"]) == ("execute_agent", 120)
 
 
-def test_execute_agent_batch_adds_up_the_tokens_of_every_chunk(agent: AgentBase, metric_reader: InMemoryMetricReader) -> None:
-    """Verify a batched run reports each chunk's usage, not just the first."""
-    agent._agent.batch = lambda payloads, config=None: [_result_using(100, 10) for _ in payloads]
+def test_a_batched_run_sums_the_calls_of_every_chunk_on_one_span(
+    agent: AgentBase, exported_spans: InMemorySpanExporter
+) -> None:
+    """Verify one agent run over several chunks reports a single total, so its cost reads as one agent's."""
+    agent._agent.batch = lambda payloads, config=None: [_model_call_using(100) for _ in payloads]
 
     agent.execute_agent_batch(["chunk one", "chunk two"], file_path="f.py")
 
-    assert point_with(metric_reader, LLM_TOKENS, {"code_reviewer.token_type": "input"}).value == 200
+    (span,) = exported_spans.get_finished_spans()
+    assert (span.attributes["code_reviewer.tokens.input"], span.attributes["code_reviewer.llm_calls"]) == (200, 2)
+
+
+def test_the_usage_log_line_names_the_agent_and_the_file(
+    agent: AgentBase, exported_spans: InMemorySpanExporter, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Verify one line per agent run says which agent and which file it was."""
+    caplog.set_level("INFO", logger="code_reviewer.telemetry.run_usage")
+    agent._agent.invoke = lambda messages, **kwargs: _model_call_using(120)
+
+    agent.execute_agent("code", "f.py")
+
+    assert "usage agent=VAR file=f.py input=120" in caplog.text
+
+
+def test_a_failed_run_still_reports_what_it_spent(agent: AgentBase, exported_spans: InMemorySpanExporter) -> None:
+    """Verify an agent that raised after a model call keeps that call's tokens on its span."""
+
+    def spend_then_fail(messages: dict, **kwargs: Any) -> dict:
+        _model_call_using(120)
+        raise RuntimeError("tool loop limit")
+
+    agent._agent.invoke = spend_then_fail
+
+    with pytest.raises(AgentInvocationError):
+        agent.execute_agent("code", "f.py")
+
+    (span,) = exported_spans.get_finished_spans()
+    assert span.attributes["code_reviewer.tokens.input"] == 120
 
 
 def test_execute_agent_records_a_completed_run(agent: AgentBase, metric_reader: InMemoryMetricReader) -> None:

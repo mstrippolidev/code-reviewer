@@ -36,11 +36,14 @@ from code_reviewer.schemas.review import (
     SizeStatus,
 )
 from code_reviewer.schemas.submission import PreparedFile, SubmittedFile
+from code_reviewer.telemetry.metrics import pipeline_metrics
+from code_reviewer.telemetry.run_usage import track_usage
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
 _TEST_FILE_HYGIENE_KEYS = frozenset({CodeKey.VAR, CodeKey.ERR, CodeKey.CMT})
+STANDALONE_TEST_FILE_SKIP_REASON = "standalone_test_file"
 _TCASE_HEADER_LINE_COUNT = 1
 _PAIRING_LOOKUP_ERRORS = (
     VectorStoreQueryError,
@@ -71,6 +74,7 @@ def review_file(
     """
     splitter = splitter or PythonCodeSplit()
     standalone = _is_standalone_test_review(prepared_file)
+    _record_standalone_skips(prepared_file, agents_container)
     file_agents = _file_agents_for(prepared_file, agents_container)
     entries = [] if standalone else _run_file_agents(prepared_file, file_agents)
     chunk_agents = _scoped_chunk_agents(agents_container, standalone)
@@ -85,6 +89,25 @@ def review_file(
 
 def _is_standalone_test_review(prepared_file: PreparedFile) -> bool:
     return prepared_file.review_scope == ReviewScope.TEST_FILE_STANDALONE
+
+
+def _record_standalone_skips(prepared_file: PreparedFile, agents_container: AgentsContainer) -> None:
+    """Counts every selected agent that a standalone test file's scope leaves out."""
+    if not _is_standalone_test_review(prepared_file):
+        return
+    left_out = [
+        *_file_agents_for(prepared_file, agents_container),
+        *(
+            agent
+            for agent in _scoped_chunk_agents(agents_container, standalone=False)
+            if agent.get_agent_key() not in _TEST_FILE_HYGIENE_KEYS
+        ),
+    ]
+    code_keys = [agent.get_agent_key() for agent in left_out]
+    if agents_container.is_selected(CodeKey.DRY):
+        code_keys.append(CodeKey.DRY)
+    for code_key in code_keys:
+        pipeline_metrics.record_agent_skip(code_key.value, STANDALONE_TEST_FILE_SKIP_REASON)
 
 
 def _file_agents_for(
@@ -209,15 +232,16 @@ def _tcase_test_files(
     """
     if prepared_file.test_files or prepared_file.repo_data is None or test_pairing_finder is None:
         return prepared_file.test_files
-    try:
-        return test_pairing_finder.find_test_files(prepared_file.repo_data, prepared_file.source_file)
-    except _PAIRING_LOOKUP_ERRORS:
-        logger.warning(
-            "corpus test-file pairing failed file_path=%s; reviewing without test files",
-            prepared_file.source_file.file_path,
-            exc_info=True,
-        )
-        return []
+    with track_usage(f"pairing file={prepared_file.source_file.file_path}"):
+        try:
+            return test_pairing_finder.find_test_files(prepared_file.repo_data, prepared_file.source_file)
+        except _PAIRING_LOOKUP_ERRORS:
+            logger.warning(
+                "corpus test-file pairing failed file_path=%s; reviewing without test files",
+                prepared_file.source_file.file_path,
+                exc_info=True,
+            )
+            return []
 
 
 def _apply_cmplx_soft_limit_incident(entries: list[AgentReviewEntry], prepared_file: PreparedFile) -> None:
@@ -273,6 +297,7 @@ async def review_file_runnable(
     """
     splitter = splitter or PythonCodeSplit()
     standalone = _is_standalone_test_review(prepared_file)
+    _record_standalone_skips(prepared_file, agents_container)
     file_agents = [] if standalone else _file_agents_for(prepared_file, agents_container)
     chunk_agents = _scoped_chunk_agents(agents_container, standalone)
     context = {

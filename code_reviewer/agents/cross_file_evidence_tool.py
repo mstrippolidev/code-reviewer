@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from code_reviewer.agents.base import ReviewContext
 from code_reviewer.rag.errors import VectorStoreQueryError
 from code_reviewer.rag.indexer import FileChunk, LlamaIndexRagManager
+from code_reviewer.telemetry.rag_metrics import EvidenceResult, RetrievalSource, rag_metrics
 
 _NO_REPO_CONTEXT = (
     "No repository context available for this review — judge this "
@@ -83,22 +84,30 @@ class GetFileChunksTool(BaseTool):
     def _run(
         self, file_path: str, runtime: ToolRuntime[ReviewContext], imported_symbol_name: str | None = None
     ) -> str:
-        context = runtime.context
+        text, result = self._look_up(file_path, runtime.context, imported_symbol_name)
+        rag_metrics.record_evidence_lookup(result)
+        return text
+
+    def _look_up(
+        self, file_path: str, context: ReviewContext | None, imported_symbol_name: str | None
+    ) -> tuple[str, EvidenceResult]:
+        """The text the model reads, paired with what kind of answer it was."""
         if context is None or context.repo_id is None:
-            return _NO_REPO_CONTEXT
+            return _NO_REPO_CONTEXT, EvidenceResult.NO_REPO
 
         try:
             chunks = self._get_cached_chunks(context.repo_id, context.owner_id, file_path)
         except VectorStoreQueryError:
             return (
                 f"Could not look up {file_path!r} right now — judge this "
-                "dependency on what's visible in this file alone."
+                "dependency on what's visible in this file alone.",
+                EvidenceResult.FAILED,
             )
 
         if not chunks:
-            return f"No indexed content found for {file_path!r}."
+            return f"No indexed content found for {file_path!r}.", EvidenceResult.EMPTY
         if imported_symbol_name is None:
-            return _format_chunks(chunks)
+            return _format_chunks(chunks), EvidenceResult.FOUND
         return _narrow_to_symbol(chunks, imported_symbol_name, file_path)
 
     def _get_cached_chunks(self, repo_id: str, owner_id: str | None, file_path: str) -> list[FileChunk]:
@@ -108,22 +117,24 @@ class GetFileChunksTool(BaseTool):
         remembered as permanently empty."""
         cache_key = (repo_id, owner_id, file_path)
         if cache_key not in self._chunk_cache:
-            self._chunk_cache[cache_key] = self.rag_manager.get_file_chunks(repo_id, owner_id, file_path)
+            with rag_metrics.track_retrieval(RetrievalSource.EVIDENCE_LOOKUP):
+                self._chunk_cache[cache_key] = self.rag_manager.get_file_chunks(repo_id, owner_id, file_path)
         return self._chunk_cache[cache_key]
 
 
-def _narrow_to_symbol(chunks: list[FileChunk], symbol_name: str, file_path: str) -> str:
+def _narrow_to_symbol(chunks: list[FileChunk], symbol_name: str, file_path: str) -> tuple[str, EvidenceResult]:
     exact_matches = [chunk for chunk in chunks if chunk.chunk_name == symbol_name]
     if exact_matches:
-        return _format_chunks(exact_matches)
+        return _format_chunks(exact_matches), EvidenceResult.FOUND
 
     windows = _text_windows_around(chunks, symbol_name)
     if not windows:
         return (
             f"{symbol_name!r} was not found in {file_path!r}'s indexed content — judge this "
-            "dependency on what's visible in this file alone."
+            "dependency on what's visible in this file alone.",
+            EvidenceResult.SYMBOL_NOT_FOUND,
         )
-    return "\n\n".join(windows)
+    return "\n\n".join(windows), EvidenceResult.FOUND
 
 
 def _text_windows_around(chunks: list[FileChunk], symbol_name: str) -> list[str]:
