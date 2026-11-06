@@ -11,6 +11,13 @@ from code_reviewer.guardrails.errors import IntakeRejectedError
 from code_reviewer.guardrails.validators.code_detection import CodeDetectionValidator
 from code_reviewer.guardrails.validators.prompt_injection import PromptInjectionValidator
 
+_OTHER_VALIDATOR = "other"
+_VALIDATOR_LABELS = {
+    "CodeDetectionValidator": "code_detection",
+    "PromptInjectionValidator": "prompt_injection",
+    "ProfanityFree": "profanity",
+}
+
 
 def build_intake_guard(llm: LLMInterface | None = None) -> Guard:
     """Assembles the intake Guard in cheapest-first order: the local, no-LLM
@@ -35,4 +42,13 @@ def run_intake_screen(content: str, guard: Guard | None = None, llm: LLMInterfac
     try:
         active_guard.validate(content, metadata={})
     except GuardrailsValidationError as error:
-        raise IntakeRejectedError(str(error)) from error
+        raise IntakeRejectedError(str(error), _rejecting_validator(active_guard)) from error
+
+
+def _rejecting_validator(guard: Guard) -> str:
+    """Names the validator that failed, from a fixed set so it is safe as a metric label."""
+    try:
+        failed_validator = guard.history.last.failed_validations[0].validator_name
+        return _VALIDATOR_LABELS.get(failed_validator, _OTHER_VALIDATOR)
+    except (AttributeError, IndexError, TypeError):
+        return _OTHER_VALIDATOR

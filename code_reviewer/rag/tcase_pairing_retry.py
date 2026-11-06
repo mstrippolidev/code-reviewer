@@ -12,6 +12,7 @@ from code_reviewer.rag.tcase_pairing_query_rewrite import PairingQueryRewriter
 from code_reviewer.rag.tcase_pairing_rerank import PairingReranker
 from code_reviewer.schemas.rag.tcase_pairing import PairingMatchStatus, PairingVerdict
 from code_reviewer.schemas.submission import SubmittedFile
+from code_reviewer.telemetry.rag_metrics import PairingResult, rag_metrics
 
 CONFIRMED_TEST_FILE_CAP = 3
 
@@ -47,11 +48,15 @@ class CorrectiveTestPairingFinder:
             PairingJudgeInvocationError: If the judge call fails.
             PairingQueryRewriteError: If the query rewrite fails.
         """
-        first_attempt = self._attempt(repo_data, source_file, semantic_query=None)
-        if first_attempt.confirmed:
-            return first_attempt.confirmed
-        rewritten_query = self._correction.query_rewriter.rewrite(source_file, first_attempt.rejection_reasons)
-        return self._attempt(repo_data, source_file, semantic_query=rewritten_query).confirmed
+        with rag_metrics.track_pairing():
+            first_attempt = self._attempt(repo_data, source_file, semantic_query=None)
+            if first_attempt.confirmed:
+                rag_metrics.record_pairing_result(PairingResult.FOUND_FIRST_TRY)
+                return first_attempt.confirmed
+            rewritten_query = self._correction.query_rewriter.rewrite(source_file, first_attempt.rejection_reasons)
+            confirmed = self._attempt(repo_data, source_file, semantic_query=rewritten_query).confirmed
+        rag_metrics.record_pairing_result(PairingResult.FOUND_AFTER_REWRITE if confirmed else PairingResult.NOT_FOUND)
+        return confirmed
 
     def _attempt(self, repo_data: RepoData, source_file: SubmittedFile, semantic_query: str | None) -> _AttemptOutcome:
         buckets = self._finder.find_candidates(repo_data, source_file, semantic_query)

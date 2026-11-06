@@ -1,6 +1,7 @@
 import logging
 
 import pytest
+from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 
 from code_reviewer.guardrails.validators.base import logger as validator_logger
@@ -17,8 +18,11 @@ class FakeScreeningLLM:
     def __init__(self, verdict: ScreeningVerdict) -> None:
         self._verdict = verdict
 
-    def create_model(self, schema: type) -> RunnableLambda:
-        return RunnableLambda(lambda _prompt: self._verdict)
+    model_name = "fake-screening-model"
+
+    def create_model(self, schema: type, include_raw: bool = False) -> RunnableLambda:
+        reply = {"raw": AIMessage(content=""), "parsed": self._verdict, "parsing_error": None}
+        return RunnableLambda(lambda _prompt: reply)
 
 
 def _rejecting_llm() -> FakeScreeningLLM:

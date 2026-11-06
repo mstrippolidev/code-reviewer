@@ -9,3 +9,7 @@ class GuardrailsInvocationError(Exception):
 
 class IntakeRejectedError(Exception):
     """Raised when submitted content fails the intake screen: not source code, or a prompt-injection attempt."""
+
+    def __init__(self, message: str, validator: str = "other") -> None:
+        super().__init__(message)
+        self.validator = validator

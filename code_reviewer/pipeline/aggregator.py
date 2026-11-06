@@ -15,6 +15,7 @@ from code_reviewer.schemas.review import (
     SkippedFile,
 )
 from code_reviewer.schemas.submission import PreparedFile
+from code_reviewer.telemetry.incident_overlap import overlapping_agent_pairs
 from code_reviewer.telemetry.metrics import pipeline_metrics
 from code_reviewer.telemetry.output_quality import assess_entry
 
@@ -52,6 +53,8 @@ class Aggregator:
             self._record_output_quality(prepared_file, file_entry, entries_by_file[file_entry.file_path])
         output = AggregatorOutput(meta=self._build_meta(entries, review, skipped_files), review=review)
         pipeline_metrics.record_review_rating(output.meta.overall_rating)
+        for skipped_file in skipped_files:
+            pipeline_metrics.record_file_skipped(skipped_file.reason)
         return output
 
     def _record_output_quality(
@@ -62,6 +65,11 @@ class Aggregator:
         for entry in self._exclude_unrated(entries):
             if entry.code_key not in file_entry.agents_skipped:
                 pipeline_metrics.record_output_quality(entry.code_key.value, assess_entry(entry, file_line_count))
+        pipeline_metrics.record_incident_overlaps(overlapping_agent_pairs(self._located_incidents(file_entry)))
+
+    def _located_incidents(self, file_entry: AggregatedReviewEntry) -> list[AttributedIncident]:
+        """Drops incidents that span the whole file, such as the size-limit ones: they overlap everything by definition."""
+        return [incident for incident in file_entry.incidents if incident.line_position != file_entry.file_lines]
 
     def _group_entries_by_file(self, entries: list[AgentReviewEntry]) -> dict[str, list[AgentReviewEntry]]:
         grouped: dict[str, list[AgentReviewEntry]] = defaultdict(list)

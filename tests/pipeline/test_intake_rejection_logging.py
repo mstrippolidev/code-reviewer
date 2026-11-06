@@ -5,11 +5,14 @@
 import logging
 
 import pytest
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from code_reviewer.guardrails.errors import IntakeRejectedError
 from code_reviewer.pipeline import orchestrator
 from code_reviewer.pipeline.errors import FileTooLargeError, SubmissionTooLargeError
 from code_reviewer.schemas.submission import SubmittedFile
+from code_reviewer.telemetry.metrics import PipelineMetrics
+from tests.metric_points import INTAKE_REJECTIONS, point_with, points_for
 
 INTAKE_DETAIL = "Validation failed: the content reads like prose, not source code"
 
@@ -115,3 +118,69 @@ def test_a_file_that_passes_every_guard_logs_no_rejection(
     orchestrator.prepare_files_for_pipeline([_file("fine.py")])
 
     assert "File rejected" not in warnings_log.text
+
+
+@pytest.fixture
+def rejection_metrics(monkeypatch: pytest.MonkeyPatch, isolated_pipeline_metrics: PipelineMetrics) -> PipelineMetrics:
+    """Points the orchestrator at the private provider, so assertions read only this test's recordings."""
+    monkeypatch.setattr(orchestrator, "pipeline_metrics", isolated_pipeline_metrics)
+    return isolated_pipeline_metrics
+
+
+def test_a_source_file_rejected_by_the_intake_is_counted_under_the_validator_that_did(
+    monkeypatch: pytest.MonkeyPatch, rejection_metrics: PipelineMetrics, metric_reader: InMemoryMetricReader
+) -> None:
+    """Verify the count carries the validator, so code detection and prompt injection are told apart."""
+    _reject_content(monkeypatch, "bad", IntakeRejectedError(INTAKE_DETAIL, validator="prompt_injection"))
+
+    orchestrator.prepare_files_for_pipeline([_file("notes.py", "bad")])
+
+    assert point_with(metric_reader, INTAKE_REJECTIONS, {"code_reviewer.validator": "prompt_injection"}).value == 1
+
+
+def test_a_paired_test_file_rejected_by_the_intake_is_counted_too(
+    monkeypatch: pytest.MonkeyPatch, rejection_metrics: PipelineMetrics, metric_reader: InMemoryMetricReader
+) -> None:
+    """Verify a test file dropped from its source's pairing is not missing from the rate."""
+    _reject_content(monkeypatch, "bad tests", IntakeRejectedError(INTAKE_DETAIL, validator="code_detection"))
+
+    orchestrator.prepare_files_for_pipeline([_file("payment.py"), _file("tests/test_payment.py", "bad tests")])
+
+    assert point_with(metric_reader, INTAKE_REJECTIONS, {"code_reviewer.validator": "code_detection"}).value == 1
+
+
+def test_an_intake_error_that_names_no_validator_is_counted_as_other(
+    monkeypatch: pytest.MonkeyPatch, rejection_metrics: PipelineMetrics, metric_reader: InMemoryMetricReader
+) -> None:
+    """Verify the default keeps the series set fixed when the validator could not be read."""
+    _reject_content(monkeypatch, "bad", IntakeRejectedError(INTAKE_DETAIL))
+
+    orchestrator.prepare_files_for_pipeline([_file("notes.py", "bad")])
+
+    assert point_with(metric_reader, INTAKE_REJECTIONS, {"code_reviewer.validator": "other"}).value == 1
+
+
+def test_a_size_rejection_is_not_counted_as_an_intake_rejection(
+    monkeypatch: pytest.MonkeyPatch, rejection_metrics: PipelineMetrics, metric_reader: InMemoryMetricReader
+) -> None:
+    """Verify only the intake screen feeds this counter; size guards are visible through the skipped-file reasons."""
+
+    def too_long(content: str) -> None:
+        raise SubmissionTooLargeError("Submission is 300000 characters, exceeding the 200000 character limit.")
+
+    monkeypatch.setattr(orchestrator, "run_raw_character_guard", too_long)
+
+    orchestrator.prepare_files_for_pipeline([_file("huge.py")])
+
+    assert points_for(metric_reader, INTAKE_REJECTIONS) == []
+
+
+def test_a_rejection_still_reports_the_same_reason_code_in_the_report(
+    monkeypatch: pytest.MonkeyPatch, rejection_metrics: PipelineMetrics
+) -> None:
+    """Verify counting the rejection changes nothing the report carries."""
+    _reject_content(monkeypatch, "bad", IntakeRejectedError(INTAKE_DETAIL, validator="prompt_injection"))
+
+    _, skipped_files = orchestrator.prepare_files_for_pipeline([_file("notes.py", "bad")])
+
+    assert [(skipped.file_path, skipped.reason) for skipped in skipped_files] == [("notes.py", "intake_rejected")]

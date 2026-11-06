@@ -6,20 +6,23 @@ from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from code_reviewer.pipeline import aggregator
 from code_reviewer.pipeline.aggregator import Aggregator
-from code_reviewer.schemas.review import AgentReviewEntry, CodeKey, Incident, Priority, SizeStatus
+from code_reviewer.schemas.review import AgentReviewEntry, CodeKey, Incident, Priority, SizeStatus, SkippedFile
 from code_reviewer.schemas.submission import PreparedFile, SubmittedFile
 from code_reviewer.telemetry.metrics import PipelineMetrics
 from tests.metric_points import (
+    AGENT_INCIDENT_OVERLAPS,
     AGENT_INCIDENTS,
     AGENT_INVALID_LINE_POSITIONS,
     AGENT_RATING,
     AGENT_RESULTS,
+    FILE_SKIPPED,
     REVIEW_RATING,
     point_with,
     points_for,
 )
 
 _CODE_KEY = "code_reviewer.code_key"
+_AGENT_PAIR = "code_reviewer.agent_pair"
 _FILE_CONTENT = "a = 1\nb = 2\nc = 3\n"
 
 
@@ -128,6 +131,77 @@ def test_a_hard_limit_entry_records_nothing(metric_reader: InMemoryMetricReader)
     _build([_entry(CodeKey.COH, rating=0, incidents=[_incident(Priority.HIGH)])])
 
     assert points_for(metric_reader, AGENT_RATING) == []
+
+
+def test_two_agents_pointing_at_the_same_lines_are_counted_as_an_overlap(metric_reader: InMemoryMetricReader) -> None:
+    """Verify the overlap lands on the series of the two agents that raised it."""
+    _build([
+        _entry(CodeKey.SOLID2, incidents=[_incident(line_position="2-3")]),
+        _entry(CodeKey.TEST, incidents=[_incident(line_position="3-3")]),
+    ])
+
+    assert point_with(metric_reader, AGENT_INCIDENT_OVERLAPS, {_AGENT_PAIR: "SOLID2+TEST"}).value == 1
+
+
+def test_incidents_on_different_lines_are_not_an_overlap(metric_reader: InMemoryMetricReader) -> None:
+    """Verify two agents flagging different places add nothing."""
+    _build([
+        _entry(CodeKey.SOLID2, incidents=[_incident(line_position="1-1")]),
+        _entry(CodeKey.TEST, incidents=[_incident(line_position="3-3")]),
+    ])
+
+    assert points_for(metric_reader, AGENT_INCIDENT_OVERLAPS) == []
+
+
+def test_an_incident_spanning_the_whole_file_is_not_counted_as_an_overlap(metric_reader: InMemoryMetricReader) -> None:
+    """Verify a size-limit style incident, which covers every line, does not overlap with everything."""
+    _build([
+        _entry(CodeKey.CMPLX, incidents=[_incident(line_position="1-3")]),
+        _entry(CodeKey.TEST, incidents=[_incident(line_position="2-2")]),
+    ])
+
+    assert points_for(metric_reader, AGENT_INCIDENT_OVERLAPS) == []
+
+
+def test_a_hard_limit_entry_adds_no_overlap(metric_reader: InMemoryMetricReader) -> None:
+    """Verify the fixed rating-0 incident of a file that was too large is not read as agents agreeing."""
+    _build([
+        _entry(CodeKey.COH, rating=0, incidents=[_incident(Priority.HIGH, line_position="1-3")]),
+        _entry(CodeKey.TEST, incidents=[_incident(line_position="2-2")]),
+    ])
+
+    assert points_for(metric_reader, AGENT_INCIDENT_OVERLAPS) == []
+
+
+def test_a_failed_agent_adds_no_overlap(metric_reader: InMemoryMetricReader) -> None:
+    """Verify an agent that did not judge the file cannot overlap with one that did."""
+    failed = AgentReviewEntry(
+        file_path="a.py", code_key=CodeKey.COUP, rating=0, failed=True, incidents=[_incident(line_position="2-2")]
+    )
+    _build([failed, _entry(CodeKey.TEST, incidents=[_incident(line_position="2-2")])])
+
+    assert points_for(metric_reader, AGENT_INCIDENT_OVERLAPS) == []
+
+
+def test_every_skipped_file_is_counted_under_its_reason(metric_reader: InMemoryMetricReader) -> None:
+    """Verify each reason in the report becomes its own series, with repeated reasons added up."""
+    skipped = [
+        SkippedFile(file_path="a.py", reason="intake_rejected"),
+        SkippedFile(file_path="b.py", reason="intake_rejected"),
+        SkippedFile(file_path="c.py", reason="exceeded_pr_file_cap"),
+    ]
+
+    Aggregator().build_output([_entry(CodeKey.VAR)], [_prepared_file()], skipped)
+
+    assert point_with(metric_reader, FILE_SKIPPED, {"code_reviewer.reason": "intake_rejected"}).value == 2
+    assert point_with(metric_reader, FILE_SKIPPED, {"code_reviewer.reason": "exceeded_pr_file_cap"}).value == 1
+
+
+def test_a_review_with_no_skipped_files_records_no_skips(metric_reader: InMemoryMetricReader) -> None:
+    """Verify the counter stays empty when nothing was left out."""
+    _build([_entry(CodeKey.VAR)])
+
+    assert points_for(metric_reader, FILE_SKIPPED) == []
 
 
 def test_the_overall_rating_is_recorded_once_per_review(metric_reader: InMemoryMetricReader) -> None:

@@ -5,6 +5,8 @@
 from langchain.agents import create_agent
 
 from code_reviewer.agents.llm.base import LLMInterface
+from code_reviewer.agents.llm.call_observer import build_model_call_observer
+from code_reviewer.agents.llm.llm_caller import LlmCaller
 from code_reviewer.agents.llm.middleware import retry_model, retry_transient_call
 from code_reviewer.agents.llm.ollama import OllamaLLM
 from code_reviewer.agents.llm.timeout import call_with_hard_timeout
@@ -22,7 +24,11 @@ class ChunkExplainer:
         self._agent = create_agent(
             model=llm.create_raw_model(),
             system_prompt=CHUNK_EXPLANATION_SYSTEM_PROMPT,
-            middleware=[retry_transient_call, retry_model],
+            middleware=[
+                retry_transient_call,
+                retry_model,
+                build_model_call_observer(LlmCaller.CHUNK_EXPLAINER.value, llm.model_name),
+            ],
             response_format=llm.build_response_format(ChunkExplanation),
         )
 

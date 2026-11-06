@@ -18,6 +18,7 @@ from code_reviewer.schemas.review import AgentReviewEntry, CodeKey, SizeStatus
 from code_reviewer.schemas.submission import PreparedFile, SubmittedFile
 from code_reviewer.telemetry.metrics import pipeline_metrics
 from code_reviewer.telemetry.rag_metrics import RetrievalSource, rag_metrics
+from code_reviewer.telemetry.run_usage import track_usage
 
 tracer = trace.get_tracer(__name__)
 
@@ -62,7 +63,8 @@ def run_dry(agents_container: AgentsContainer, prepared_file: PreparedFile) -> A
             skipped=True,
             skip_reason=DRY_REQUIRES_REPO_REASON,
         )
-    with pipeline_metrics.track_agent_run(CodeKey.DRY.value):
+    usage_label = f"agent={CodeKey.DRY.value} file={prepared_file.source_file.file_path}"
+    with track_usage(usage_label), pipeline_metrics.track_agent_run(CodeKey.DRY.value):
         return _review_against_history(agents_container, prepared_file, prepared_file.repo_data)
 
 

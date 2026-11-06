@@ -5,6 +5,7 @@
 import pytest
 
 from code_reviewer.agents.llm.base import LLMInterface
+from code_reviewer.agents.llm.pricing import TokenPrices
 from code_reviewer.rag import chunk_explainer as chunk_explainer_module
 from code_reviewer.rag.chunk_explainer import ChunkExplainer
 from code_reviewer.rag.errors import ChunkExplanationError
@@ -18,6 +19,9 @@ class _FakeLLMInterface(LLMInterface):
 
     def create_raw_model(self) -> None:
         return None
+
+    def fetch_token_prices(self, model_name: str) -> TokenPrices:
+        return TokenPrices.free()
 
     def _get_model_name(self) -> str:
         return "fake-model"

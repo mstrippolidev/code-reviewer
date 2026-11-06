@@ -1,8 +1,9 @@
 """
     Metric instruments for the review pipeline, recorded through the OpenTelemetry API only.
 """
+import logging
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from enum import StrEnum
 
@@ -10,11 +11,17 @@ from opentelemetry import metrics
 from opentelemetry.metrics import Meter
 
 from code_reviewer.telemetry.output_quality import OutputQuality
-from code_reviewer.telemetry.run_summary import RunSummary
+from code_reviewer.telemetry.run_summary import RunSummary, TokenUsage
+from code_reviewer.telemetry.run_usage import add_tokens_to_current_run
 
-LLM_LATENCY_BUCKETS_SECONDS = [0.5, 1, 2, 5, 10, 20, 30, 60, 120, 180, 300]
+logger = logging.getLogger(__name__)
+
+UsageListener = Callable[[str, str, TokenUsage], None]
+
+LLM_LATENCY_BUCKETS_SECONDS =[0.5, 1, 2, 5, 10, 20, 30, 60, 120, 180, 300]
 MODEL_TURN_BUCKETS = [1, 2, 3, 4, 6, 8, 12]
 RATING_BUCKETS = [0, 20, 40, 60, 70, 80, 85, 90, 95, 100]
+REVIEW_COST_BUCKETS_USD = [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20]
 
 CODE_KEY = "code_reviewer.code_key"
 OUTCOME = "code_reviewer.outcome"
@@ -26,6 +33,8 @@ TOOL_STATUS = "code_reviewer.tool_status"
 REASON = "code_reviewer.reason"
 PRIORITY = "code_reviewer.priority"
 RESULT = "code_reviewer.result"
+VALIDATOR = "code_reviewer.validator"
+AGENT_PAIR = "code_reviewer.agent_pair"
 
 
 class AgentOutcome(StrEnum):
@@ -38,6 +47,7 @@ class PipelineMetrics:
     """Holds the pipeline's instruments so callers record events, not raw numbers and labels."""
 
     def __init__(self, meter: Meter) -> None:
+        self._usage_listeners: list[UsageListener] = []
         self._create_agent_instruments(meter)
         self._create_llm_instruments(meter)
         self._create_output_quality_instruments(meter)
@@ -72,9 +82,26 @@ class PipelineMetrics:
             self._llm_calls_in_flight.add(-1, labels)
             self._llm_call_duration.record(time.perf_counter() - started, labels)
 
-    def record_run_summary(self, code_key: str, model: str, summary: RunSummary) -> None:
-        """Reports the tokens, model turns and tool calls of one finished agent run."""
-        self._record_tokens(code_key, model, summary)
+    def record_llm_usage(self, code_key: str, model: str, usage: TokenUsage) -> None:
+        """Adds the tokens one real model call reported, one series per token type."""
+        counts = {
+            "input": usage.input_tokens,
+            "output": usage.output_tokens,
+            "reasoning": usage.reasoning_tokens,
+            "cached": usage.cached_input_tokens,
+        }
+        for token_type, count in counts.items():
+            self._tokens.add(count, {CODE_KEY: code_key, MODEL: model, TOKEN_TYPE: token_type})
+        add_tokens_to_current_run(usage)
+        for listener in self._usage_listeners:
+            self._notify(listener, code_key, model, usage)
+
+    def add_usage_listener(self, listener: UsageListener) -> None:
+        """Registers a callback told the usage of every real model call, such as a cost counter kept elsewhere."""
+        self._usage_listeners.append(listener)
+
+    def record_run_summary(self, code_key: str, summary: RunSummary) -> None:
+        """Reports the model turns and tool calls of one finished agent run."""
         self._model_turns.record(summary.model_turns, {CODE_KEY: code_key})
         for tool_call in summary.tool_calls:
             status = "error" if tool_call.failed else "success"
@@ -97,6 +124,23 @@ class PipelineMetrics:
     def record_review_rating(self, rating: float) -> None:
         """Reports the overall rating of one finished review."""
         self._review_rating.record(rating)
+
+    def record_review_cost(self, cost_usd: float) -> None:
+        """Reports what one finished review cost; a lower bound when some of its calls had no known price."""
+        self._review_cost.record(cost_usd)
+
+    def record_file_skipped(self, reason: str) -> None:
+        """Counts one file that was left out of a review, by the reason the report gives."""
+        self._files_skipped.add(1, {REASON: reason})
+
+    def record_intake_rejection(self, validator: str) -> None:
+        """Counts one file the intake screen turned down, by the validator that did."""
+        self._intake_rejections.add(1, {VALIDATOR: validator})
+
+    def record_incident_overlaps(self, agent_pairs: Sequence[str]) -> None:
+        """Counts incident pairs from two different agents that point at the same lines."""
+        for agent_pair in agent_pairs:
+            self._incident_overlaps.add(1, {AGENT_PAIR: agent_pair})
 
     def _create_agent_instruments(self, meter: Meter) -> None:
         """Creates the instruments that describe an agent run as a whole."""
@@ -124,7 +168,7 @@ class PipelineMetrics:
         self._tokens = meter.create_counter(
             "code_reviewer.llm.tokens",
             unit="{token}",
-            description="Tokens used by agent runs; reasoning is part of output and cached is part of input",
+            description="Tokens reported by real model calls; reasoning is part of output and cached is part of input",
         )
         self._llm_call_duration = meter.create_histogram(
             "code_reviewer.llm.call.duration",
@@ -137,6 +181,12 @@ class PipelineMetrics:
         )
         self._llm_calls_in_flight = meter.create_up_down_counter(
             "code_reviewer.llm.calls.in_flight", unit="{call}", description="Model calls running right now"
+        )
+        self._review_cost = meter.create_histogram(
+            "code_reviewer.review.cost",
+            unit="USD",
+            description="Cost of one finished review; a lower bound when some model calls had no known price",
+            explicit_bucket_boundaries_advisory=REVIEW_COST_BUCKETS_USD,
         )
 
     def _create_output_quality_instruments(self, meter: Meter) -> None:
@@ -153,6 +203,20 @@ class PipelineMetrics:
             description="Rating of one agent on one file",
             explicit_bucket_boundaries_advisory=RATING_BUCKETS,
         )
+        self._incident_overlaps = meter.create_counter(
+            "code_reviewer.agent.incident_overlaps",
+            unit="{pair}",
+            description=(
+                "Pairs of incidents from two different agents that share a line; one incident "
+                "overlapping several others is counted once per pair"
+            ),
+        )
+        self._files_skipped = meter.create_counter(
+            "code_reviewer.file.skipped", unit="{file}", description="Files left out of a review, by reason"
+        )
+        self._intake_rejections = meter.create_counter(
+            "code_reviewer.intake.rejections", unit="{file}", description="Files the intake screen turned down"
+        )
         self._invalid_line_positions = meter.create_counter(
             "code_reviewer.agent.invalid_line_positions",
             unit="{incident}",
@@ -165,20 +229,16 @@ class PipelineMetrics:
             explicit_bucket_boundaries_advisory=RATING_BUCKETS,
         )
 
+    def _notify(self, listener: UsageListener, code_key: str, model: str, usage: TokenUsage) -> None:
+        """A failing listener is logged and never reaches the model call that reported the usage."""
+        try:
+            listener(code_key, model, usage)
+        except Exception:
+            logger.exception("A usage listener failed for code_key=%s model=%s", code_key, model)
+
     def _record_agent_run(self, code_key: str, outcome: AgentOutcome, seconds: float) -> None:
         """Adds one observation to the agent run duration histogram."""
         self._agent_run_duration.record(seconds, {CODE_KEY: code_key, OUTCOME: outcome.value})
-
-    def _record_tokens(self, code_key: str, model: str, summary: RunSummary) -> None:
-        """Adds one run's token counts to the token counter, one series per token type."""
-        counts = {
-            "input": summary.input_tokens,
-            "output": summary.output_tokens,
-            "reasoning": summary.reasoning_tokens,
-            "cached": summary.cached_input_tokens,
-        }
-        for token_type, count in counts.items():
-            self._tokens.add(count, {CODE_KEY: code_key, MODEL: model, TOKEN_TYPE: token_type})
 
 
 def outcome_of_failure(error: BaseException) -> AgentOutcome:
