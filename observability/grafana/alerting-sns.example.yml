@@ -1,0 +1,22 @@
+
+# The topic emails whoever subscribes to it, so a firing alert is a real message.
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: sns-alerts
+    receivers:
+      - uid: sns-alerts
+        type: sns
+        settings:
+          topic_arn: arn:aws:sns:us-east-2:123456789012:replace-with-your-topic
+          sigv4:
+            region: us-east-2
+
+policies:
+  - orgId: 1
+    receiver: sns-alerts
+    group_by: ["alertname"]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h

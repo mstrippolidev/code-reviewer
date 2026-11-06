@@ -1,0 +1,9 @@
+apiVersion: 1
+
+providers:
+  - name: code-reviewer
+    folder: Code Reviewer
+    type: file
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/dashboards

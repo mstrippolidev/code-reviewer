@@ -1,0 +1,185 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: spend
+    folder: Code Reviewer
+    interval: 1m
+    rules:
+      - uid: daily-spend
+        title: LLM spend over 10 USD in the last 24 hours
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: sum(increase(code_reviewer_llm_cost_USD_total[24h])) > 10
+              instant: true
+              datasource: {type: prometheus, uid: prometheus}
+          - &reduce_last
+            refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings: {mode: dropNN}
+              datasource: {type: __expr__, uid: __expr__}
+          - &above_zero
+            refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+              datasource: {type: __expr__, uid: __expr__}
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations:
+          summary: Rolling 24 hour spend is above $10.
+          description: Open the Cost dashboard. Cost is a lower bound while llm_unpriced_calls is above zero.
+        labels: {severity: warning}
+
+      - uid: expensive-review
+        title: A review cost more than 5 USD
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: >-
+                (sum(code_reviewer_review_cost_USD_count) - sum(code_reviewer_review_cost_USD_bucket{le="5.0"}))
+                - ((sum(code_reviewer_review_cost_USD_count offset 1h)
+                - sum(code_reviewer_review_cost_USD_bucket{le="5.0"} offset 1h)) or vector(0)) > 0
+              instant: true
+              datasource: {type: prometheus, uid: prometheus}
+          - *reduce_last
+          - *above_zero
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          summary: At least one finished review cost more than $5 in the last hour.
+          description: Find it in the log, which carries the review_id, with a line like "usage review ... cost_usd=".
+        labels: {severity: warning}
+
+  - orgId: 1
+    name: intake
+    folder: Code Reviewer
+    interval: 1m
+    rules:
+      - uid: intake-prompt-injection
+        title: The intake rejected a file as prompt injection
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: >-
+                sum(code_reviewer_intake_rejections_total{code_reviewer_validator="prompt_injection"})
+                - (sum(code_reviewer_intake_rejections_total{code_reviewer_validator="prompt_injection"} offset 1h)
+                or vector(0)) > 0
+              instant: true
+              datasource: {type: prometheus, uid: prometheus}
+          - *reduce_last
+          - *above_zero
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          summary: A submitted file was rejected as a prompt-injection attempt in the last hour.
+          description: The log line "File rejected file_path=... reason=intake_rejected" names the file and the detail.
+        labels: {severity: warning}
+
+  - orgId: 1
+    name: llm
+    folder: Code Reviewer
+    interval: 1m
+    rules:
+      - uid: llm-error-rate
+        title: LLM error rate above 20%
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: >-
+                (
+                  sum by (code_reviewer_model) (increase(code_reviewer_llm_call_errors_total[5m]))
+                  / sum by (code_reviewer_model) (increase(code_reviewer_llm_call_duration_seconds_count[5m]))
+                  > 0.2
+                )
+                and on (code_reviewer_model)
+                (sum by (code_reviewer_model) (increase(code_reviewer_llm_call_duration_seconds_count[5m])) >= 5)
+              instant: true
+              datasource: {type: prometheus, uid: prometheus}
+          - *reduce_last
+          - *above_zero
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations:
+          summary: More than 20% of the model calls to {{ $labels.code_reviewer_model }} failed over 5 minutes.
+          description: Open the LLM health dashboard for the cause (rate_limit, server_error, connection, timeout).
+        labels: {severity: critical}
+
+      - uid: llm-stalled
+        title: Model calls are running but none has finished in 5 minutes
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: >-
+                (sum(code_reviewer_llm_calls_in_flight) > 0)
+                and
+                ((sum(increase(code_reviewer_llm_call_duration_seconds_count[5m])) or vector(0)) == 0)
+              instant: true
+              datasource: {type: prometheus, uid: prometheus}
+          - *reduce_last
+          - *above_zero
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations:
+          summary: Calls are in flight but nothing has completed, so the provider may be hanging.
+          description: The hard call timeout is 180 seconds, so a hung call turns into a timeout error after 3 minutes.
+        labels: {severity: critical}
+
+      - uid: llm-unpriced
+        title: A model call had no known price
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: >-
+                sum(code_reviewer_llm_unpriced_calls_total)
+                - (sum(code_reviewer_llm_unpriced_calls_total offset 15m) or vector(0)) > 0
+              instant: true
+              datasource: {type: prometheus, uid: prometheus}
+          - *reduce_last
+          - *above_zero
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          summary: A model with no price list entry made calls, so reported cost is a lower bound.
+          description: Check BEDROCK_PRICE_LIST_MODEL or the model id against the provider's price list.
+        labels: {severity: warning}

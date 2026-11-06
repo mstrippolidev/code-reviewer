@@ -1,0 +1,378 @@
+{
+ "uid": "kafka-and-rag",
+ "title": "Kafka and RAG",
+ "tags": [
+  "code-reviewer"
+ ],
+ "schemaVersion": 39,
+ "version": 1,
+ "editable": true,
+ "refresh": "30s",
+ "time": {
+  "from": "now-6h",
+  "to": "now"
+ },
+ "panels": [
+  {
+   "id": 1,
+   "type": "timeseries",
+   "title": "Consumer lag",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "max by (code_reviewer_consumer, code_reviewer_topic) (code_reviewer_kafka_consumer_lag)",
+     "legendFormat": "{{code_reviewer_consumer}} {{code_reviewer_topic}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 2,
+   "type": "timeseries",
+   "title": "Consumer handler time p95",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 0,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "histogram_quantile(0.95, sum by (le, code_reviewer_consumer) (rate(code_reviewer_kafka_consumer_handler_duration_seconds_bucket[1h])))",
+     "legendFormat": "{{code_reviewer_consumer}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 3,
+   "type": "timeseries",
+   "title": "Messages consumed by outcome, per hour",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 8,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (code_reviewer_consumer, code_reviewer_outcome) (increase(code_reviewer_kafka_consumer_messages_total[1h]))",
+     "legendFormat": "{{code_reviewer_consumer}} {{code_reviewer_outcome}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 4,
+   "type": "timeseries",
+   "title": "Dead letters, per hour",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 8,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (code_reviewer_topic, code_reviewer_error_type) (increase(code_reviewer_kafka_dlq_messages_total[1h]))",
+     "legendFormat": "{{code_reviewer_topic}} {{code_reviewer_error_type}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 5,
+   "type": "timeseries",
+   "title": "Messages published by outcome, per hour",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 16,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (code_reviewer_topic, code_reviewer_outcome) (increase(code_reviewer_kafka_producer_messages_total[1h]))",
+     "legendFormat": "{{code_reviewer_topic}} {{code_reviewer_outcome}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 6,
+   "type": "timeseries",
+   "title": "Consumer crashes, per hour",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 16,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (code_reviewer_consumer) (increase(code_reviewer_kafka_consumer_crashes_total[1h]))",
+     "legendFormat": "{{code_reviewer_consumer}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 7,
+   "type": "timeseries",
+   "title": "Retrieval latency p95 by source",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 24,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "histogram_quantile(0.95, sum by (le, code_reviewer_source) (rate(code_reviewer_rag_retrieval_duration_seconds_bucket[1h])))",
+     "legendFormat": "{{code_reviewer_source}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 8,
+   "type": "timeseries",
+   "title": "Retrieval outcomes by source, per hour",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 24,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (code_reviewer_source, code_reviewer_outcome) (increase(code_reviewer_rag_retrieval_duration_seconds_count[1h]))",
+     "legendFormat": "{{code_reviewer_source}} {{code_reviewer_outcome}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 9,
+   "type": "timeseries",
+   "title": "Embedding, explain, rerank and judge time p95",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 32,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "histogram_quantile(0.95, sum by (le, code_reviewer_kind) (rate(code_reviewer_rag_embedding_duration_seconds_bucket[1h])))",
+     "legendFormat": "embedding {{code_reviewer_kind}}"
+    },
+    {
+     "refId": "B",
+     "expr": "histogram_quantile(0.95, sum by (le) (rate(code_reviewer_rag_explain_duration_seconds_bucket[1h])))",
+     "legendFormat": "explain"
+    },
+    {
+     "refId": "C",
+     "expr": "histogram_quantile(0.95, sum by (le) (rate(code_reviewer_rag_rerank_duration_seconds_bucket[1h])))",
+     "legendFormat": "rerank"
+    },
+    {
+     "refId": "D",
+     "expr": "histogram_quantile(0.95, sum by (le) (rate(code_reviewer_rag_dry_judge_duration_seconds_bucket[1h])))",
+     "legendFormat": "dry judge"
+    },
+    {
+     "refId": "E",
+     "expr": "histogram_quantile(0.95, sum by (le) (rate(code_reviewer_rag_pairing_duration_seconds_bucket[1h])))",
+     "legendFormat": "test-file lookup"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 10,
+   "type": "timeseries",
+   "title": "Exemplar lookups by outcome, per hour",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 32,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (code_reviewer_outcome) (increase(code_reviewer_rag_exemplar_lookups_total[1h]))",
+     "legendFormat": "{{code_reviewer_outcome}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 11,
+   "type": "timeseries",
+   "title": "Indexing: file time p95 and files by status",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 40,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "histogram_quantile(0.95, sum by (le) (rate(code_reviewer_index_file_duration_seconds_bucket[1h])))",
+     "legendFormat": "file time p95"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 12,
+   "type": "timeseries",
+   "title": "Indexing: files by status and failures by cause, per hour",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 40,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (code_reviewer_file_status) (increase(code_reviewer_index_files_total[1h]))",
+     "legendFormat": "{{code_reviewer_file_status}}"
+    },
+    {
+     "refId": "B",
+     "expr": "sum by (code_reviewer_cause) (increase(code_reviewer_index_file_failures_total[1h]))",
+     "legendFormat": "failed: {{code_reviewer_cause}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   }
+  }
+ ]
+}
