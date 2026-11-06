@@ -11,6 +11,7 @@ from langchain_core.language_models import BaseChatModel, LanguageModelInput
 from langchain_core.runnables import Runnable
 from pydantic import BaseModel
 
+from code_reviewer.agents.llm.pricing import TokenPrices
 from code_reviewer.schemas.review import CodeKey
 
 T = TypeVar("T", bound=BaseModel)
@@ -74,6 +75,16 @@ class LLMInterface(ABC, Generic[T]):
             kwargs["base_url"] = base_url
         return init_chat_model(self._get_model_name(), **kwargs)
 
+
+    @abstractmethod
+    def fetch_token_prices(self, model_name: str) -> TokenPrices:
+        """Asks the provider what one token of model_name costs.
+
+        A blocking network call: callers refresh it on a schedule and never from a model call.
+
+        Raises:
+            PriceUnavailableError: If the provider does not list the model or cannot be reached.
+        """
 
     @abstractmethod
     def _get_model_name(self) -> str:
