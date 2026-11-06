@@ -79,6 +79,7 @@ class Settings(BaseSettings):
 
     bedrock_region: str = "us-east-2"
     bedrock_llm_model: str = "deepseek.v3-v1:0"
+    bedrock_price_list_model: str = ""
 
 
 

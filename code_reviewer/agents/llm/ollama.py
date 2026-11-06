@@ -6,6 +6,7 @@ from typing import Any
 from langchain.agents.structured_output import ProviderStrategy, ResponseFormat
 
 from code_reviewer.agents.llm.base import LLMInterface, T
+from code_reviewer.agents.llm.pricing import TokenPrices
 from code_reviewer.config.settings import get_settings
 
 settings = get_settings()
@@ -13,6 +14,9 @@ settings = get_settings()
 
 class OllamaLLM(LLMInterface[T]):
     """Builds chat models backed by a local Ollama instance."""
+
+    def fetch_token_prices(self, model_name: str) -> TokenPrices:
+        return TokenPrices.free()
 
     def _get_model_name(self) -> str:
         return settings.ollama_llm_model
