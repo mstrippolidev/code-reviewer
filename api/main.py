@@ -26,6 +26,7 @@ from api.indexing.repo_progress_broadcaster import RepoProgressBroadcaster
 from api.integrations.github import GitHubOAuthClient, GitHubOAuthConfig
 from api.integrations.github_pull_requests import GitHubPullRequestClient
 from api.logging_config import configure_logging
+from api.observability.llm_cost import start_cost_tracking
 from api.observability.telemetry import configure_metrics, configure_telemetry, instrument_fastapi
 from api.review.pull_request_files import PullRequestFileFetcher
 from api.review.pull_request_loader import PullRequestSubmissionLoader
@@ -62,6 +63,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if settings.otel_enable:
         app.state.tracer_provider = configure_telemetry(settings)
         app.state.meter_provider = configure_metrics(settings)
+        app.state.price_book = start_cost_tracking(settings)
     app.state.database_engine = DatabaseEngine(settings.async_database_url)
     app.state.http_client = httpx.AsyncClient(http2=True)
     app.state.redis = Redis.from_url(settings.redis_url)
@@ -102,6 +104,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await task
     await app.state.kafka_producer.stop()
     if settings.otel_enable:
+        await app.state.price_book.stop()
         app.state.tracer_provider.shutdown()
         app.state.meter_provider.shutdown()
     await app.state.http_client.aclose()
