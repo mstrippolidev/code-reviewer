@@ -30,7 +30,6 @@ class SharedExemplarQuery:
 
     code_key: CodeKey
     code: str
-    relevance_floor: float
 
 
 class SharedExemplarStore(ExemplarStoreBase):
@@ -86,7 +85,7 @@ class SharedExemplarStore(ExemplarStoreBase):
         """Retrieve curated good code for one principle, unscoped by repo.
 
         Returns:
-            Exemplars at or above the query's relevance floor, best first.
+            Up to top_k candidates, most similar first, for the exemplar jury to judge.
 
         Raises:
             VectorStoreQueryError: If querying the vector store fails.

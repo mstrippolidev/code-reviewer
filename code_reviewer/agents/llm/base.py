@@ -37,6 +37,10 @@ class LLMInterface(ABC, Generic[T]):
         """The provider's cheap, fast model for short judgment calls; this same instance when it has none."""
         return self
 
+    def for_judge_panel(self) -> "list[LLMInterface[T]]":
+        """The independent models that vote together on a judgment; just the fast tier when the provider has no panel."""
+        return [self.for_fast_tier()]
+
     @property
     def model_name(self) -> str:
         """Name of the model this provider instance runs, used to label metrics."""

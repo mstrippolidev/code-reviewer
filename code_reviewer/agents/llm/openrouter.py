@@ -59,6 +59,13 @@ class OpenRouter(LLMInterface[T]):
             return self
         return OpenRouter(temperature=self._temperature, model_name=settings.openrouter_fast_model)
 
+    def for_judge_panel(self) -> "list[OpenRouter[T]]":
+        """One provider per model in OPENROUTER_JUDGE_MODELS; the fast tier alone when none is configured."""
+        names = [name.strip() for name in settings.openrouter_judge_models.split(",") if name.strip()]
+        if not names:
+            return super().for_judge_panel()
+        return [OpenRouter(temperature=self._temperature, model_name=name) for name in names]
+
     def fetch_token_prices(self, model_name: str) -> TokenPrices:
         try:
             response = httpx.get(

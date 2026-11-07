@@ -1,6 +1,6 @@
 """
-    Tests that exemplar lookups report how they ended and the best score they saw, before the relevance floor.
-    The vector index is a fake, so no embedding call happens here.
+    Tests that exemplar lookups report the best similarity score they saw and how they ended once the jury
+    had its say. The vector index and the jury are fakes, so no embedding or model call happens here.
 """
 from types import SimpleNamespace
 
@@ -8,9 +8,9 @@ import pytest
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from code_reviewer.rag import exemplar_injection, exemplars
-from code_reviewer.rag.errors import VectorStoreQueryError
+from code_reviewer.rag.errors import ExemplarJudgeInvocationError, VectorStoreQueryError
 from code_reviewer.rag.exemplar_injection import ExemplarCorpora, ExemplarInjection
-from code_reviewer.rag.exemplars import ExemplarQuery, ExemplarStore
+from code_reviewer.rag.exemplars import Exemplar, ExemplarQuery, ExemplarStore
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.rag.shared_exemplars import SharedExemplarQuery, SharedExemplarStore
 from code_reviewer.schemas.review import CodeKey
@@ -22,9 +22,8 @@ from tests.metric_points import (
     point_with,
     points_for,
 )
-from tests.rag.test_exemplar_injection import FakeStore, _capture_prompt, _request
+from tests.rag.test_exemplar_injection import FakeSharedStore, FakeStore, _capture_prompt, _exemplar, _request
 
-FLOOR = 0.5
 _CORPUS = "code_reviewer.corpus"
 _CODE_KEY = "code_reviewer.code_key"
 _OUTCOME = "code_reviewer.outcome"
@@ -63,6 +62,21 @@ class _Index:
         return self._retriever
 
 
+class _Jury:
+    """Stands in for the exemplar jury: confirms what it was given, or a fixed answer, or fails on demand."""
+
+    def __init__(self, confirmed: list[Exemplar] | None = None, error: Exception | None = None) -> None:
+        self._confirmed = confirmed
+        self._error = error
+        self.was_asked = False
+
+    def confirm(self, code_key: CodeKey, code: str, candidates: list[Exemplar]) -> list[Exemplar]:
+        self.was_asked = True
+        if self._error:
+            raise self._error
+        return candidates if self._confirmed is None else self._confirmed
+
+
 @pytest.fixture(autouse=True)
 def route_metrics_to_the_test_provider(monkeypatch: pytest.MonkeyPatch, isolated_rag_metrics: RagMetrics) -> None:
     """Points the stores and the middleware at a private provider, so assertions read only this test's recordings."""
@@ -83,46 +97,39 @@ def _shared_store(scores: list[float]) -> SharedExemplarStore:
 
 
 def _repo_query() -> ExemplarQuery:
-    return ExemplarQuery(repo_data=REPO_DATA, code_key=CodeKey.SOLID1, code="class A: ...", relevance_floor=FLOOR)
+    return ExemplarQuery(repo_data=REPO_DATA, code_key=CodeKey.SOLID1, code="class A: ...")
 
 
-def test_a_lookup_with_a_candidate_above_the_floor_is_counted_as_injected(metric_reader: InMemoryMetricReader) -> None:
-    """Verify a candidate that clears the floor is an injection."""
-    _repo_store([0.8, 0.4]).find_exemplars(_repo_query())
-
-    labels = {_CORPUS: "repo", _CODE_KEY: "SOLID1", _OUTCOME: "injected"}
-    assert point_with(metric_reader, RAG_EXEMPLAR_LOOKUPS, labels).value == 1
+def _middleware(repo: object, jury: _Jury | None) -> ExemplarInjection:
+    return ExemplarInjection(CodeKey.SOLID1, ExemplarCorpora(repo=repo, jury=jury))
 
 
-def test_a_lookup_with_only_weak_candidates_is_counted_as_below_the_floor(metric_reader: InMemoryMetricReader) -> None:
-    """Verify candidates that exist but all miss the floor are told apart from an empty corpus."""
-    _repo_store([0.3, 0.45]).find_exemplars(_repo_query())
+def test_the_store_returns_every_candidate_most_similar_first_without_judging_them() -> None:
+    """Verify the store only retrieves: it applies no score floor, since the jury decides what is worth showing."""
+    found = _repo_store([0.9, 0.05]).find_exemplars(_repo_query())
 
-    assert point_with(metric_reader, RAG_EXEMPLAR_LOOKUPS, {_OUTCOME: "below_floor"}).value == 1
-
-
-def test_a_lookup_that_finds_nothing_is_counted_as_having_no_candidates(metric_reader: InMemoryMetricReader) -> None:
-    """Verify an empty result is its own outcome, which is what an empty corpus looks like."""
-    _repo_store([]).find_exemplars(_repo_query())
-
-    assert point_with(metric_reader, RAG_EXEMPLAR_LOOKUPS, {_OUTCOME: "no_candidates"}).value == 1
-    assert points_for(metric_reader, RAG_EXEMPLAR_BEST_SCORE) == []
+    assert [exemplar.score for exemplar in found] == [0.9, 0.05]
 
 
-def test_the_best_score_is_recorded_before_the_floor_removes_it(metric_reader: InMemoryMetricReader) -> None:
-    """Verify a score that missed the floor still shows up, so the floor can be judged against real scores."""
+def test_the_best_similarity_score_is_recorded(metric_reader: InMemoryMetricReader) -> None:
+    """Verify the best embedding score of a lookup's candidates is reported, so the recall stage can be judged."""
     _repo_store([0.3, 0.45]).find_exemplars(_repo_query())
 
     assert point_with(metric_reader, RAG_EXEMPLAR_BEST_SCORE, {_CORPUS: "repo"}).sum == 0.45
 
 
-def test_the_shared_corpus_is_labelled_as_shared(metric_reader: InMemoryMetricReader) -> None:
+def test_a_lookup_that_finds_nothing_records_no_score(metric_reader: InMemoryMetricReader) -> None:
+    """Verify an empty corpus leaves no point, so the histogram never holds a made-up score."""
+    _repo_store([]).find_exemplars(_repo_query())
+
+    assert points_for(metric_reader, RAG_EXEMPLAR_BEST_SCORE) == []
+
+
+def test_the_shared_corpus_score_is_labelled_as_shared(metric_reader: InMemoryMetricReader) -> None:
     """Verify the curated repo-less corpus is told apart from a repo's own."""
-    query = SharedExemplarQuery(code_key=CodeKey.SOLID1, code="class A: ...", relevance_floor=FLOOR)
+    _shared_store([0.9]).find_exemplars(SharedExemplarQuery(code_key=CodeKey.SOLID1, code="class A: ..."))
 
-    _shared_store([0.9]).find_exemplars(query)
-
-    assert point_with(metric_reader, RAG_EXEMPLAR_LOOKUPS, {_CORPUS: "shared", _OUTCOME: "injected"}).value == 1
+    assert point_with(metric_reader, RAG_EXEMPLAR_BEST_SCORE, {_CORPUS: "shared"}).sum == 0.9
 
 
 def test_the_search_itself_is_timed_as_an_exemplar_retrieval(metric_reader: InMemoryMetricReader) -> None:
@@ -133,21 +140,67 @@ def test_the_search_itself_is_timed_as_an_exemplar_retrieval(metric_reader: InMe
 
 
 def test_a_failing_search_still_raises_a_store_query_error(metric_reader: InMemoryMetricReader) -> None:
-    """Verify the store keeps raising, and the failed search is timed, with no lookup outcome recorded by the store."""
+    """Verify the store keeps raising, and the failed search is timed, with no score recorded."""
     store = _repo_store([], error=RuntimeError("store down"))
 
     with pytest.raises(VectorStoreQueryError):
         store.find_exemplars(_repo_query())
 
     assert point_with(metric_reader, RAG_RETRIEVAL_DURATION, {_SOURCE: "exemplar", _OUTCOME: "failed"}).count == 1
-    assert points_for(metric_reader, RAG_EXEMPLAR_LOOKUPS) == []
+    assert points_for(metric_reader, RAG_EXEMPLAR_BEST_SCORE) == []
+
+
+def test_a_lookup_the_jury_confirms_is_counted_as_injected(metric_reader: InMemoryMetricReader) -> None:
+    """Verify a candidate the jury keeps is an injection."""
+    _capture_prompt(_middleware(FakeStore([_exemplar()]), _Jury()), _request())
+
+    labels = {_CORPUS: "repo", _CODE_KEY: "SOLID1", _OUTCOME: "injected"}
+    assert point_with(metric_reader, RAG_EXEMPLAR_LOOKUPS, labels).value == 1
+
+
+def test_a_lookup_whose_candidates_the_jury_rejects_is_counted_as_judged_irrelevant(
+    metric_reader: InMemoryMetricReader,
+) -> None:
+    """Verify candidates that exist but are all voted down are told apart from an empty corpus."""
+    _capture_prompt(_middleware(FakeStore([_exemplar()]), _Jury(confirmed=[])), _request())
+
+    assert point_with(metric_reader, RAG_EXEMPLAR_LOOKUPS, {_OUTCOME: "judged_irrelevant"}).value == 1
+
+
+def test_a_lookup_that_finds_nothing_is_counted_as_having_no_candidates_and_skips_the_jury(
+    metric_reader: InMemoryMetricReader,
+) -> None:
+    """Verify an empty corpus is its own outcome, and costs no jury call."""
+    jury = _Jury()
+
+    _capture_prompt(_middleware(FakeStore([]), jury), _request())
+
+    assert point_with(metric_reader, RAG_EXEMPLAR_LOOKUPS, {_OUTCOME: "no_candidates"}).value == 1
+
+
+def test_a_jury_failure_is_counted_as_failed(metric_reader: InMemoryMetricReader) -> None:
+    """Verify the failure the middleware swallows to keep the review going is visible as a failed lookup."""
+    jury = _Jury(error=ExemplarJudgeInvocationError("judge down"))
+
+    _capture_prompt(_middleware(FakeStore([_exemplar()]), jury), _request())
+
+    assert point_with(metric_reader, RAG_EXEMPLAR_LOOKUPS, {_OUTCOME: "failed"}).value == 1
 
 
 def test_a_store_failure_during_injection_is_counted_as_failed(metric_reader: InMemoryMetricReader) -> None:
-    """Verify the failure the middleware swallows to keep the review going is visible as a failed lookup."""
-    middleware = ExemplarInjection(CodeKey.SOLID1, ExemplarCorpora(repo=FakeStore(error=RuntimeError("store down"))))
+    """Verify a store outage is visible as a failed lookup rather than an empty one."""
+    middleware = _middleware(FakeStore(error=RuntimeError("store down")), _Jury())
 
     _capture_prompt(middleware, _request())
 
     labels = {_CORPUS: "repo", _CODE_KEY: "SOLID1", _OUTCOME: "failed"}
     assert point_with(metric_reader, RAG_EXEMPLAR_LOOKUPS, labels).value == 1
+
+
+def test_the_shared_corpus_lookup_is_labelled_as_shared(metric_reader: InMemoryMetricReader) -> None:
+    """Verify a repo-less review's lookup is told apart from a repo's own."""
+    middleware = ExemplarInjection(CodeKey.SOLID1, ExemplarCorpora(shared=FakeSharedStore([_exemplar()]), jury=_Jury()))
+
+    _capture_prompt(middleware, _request(context=None))
+
+    assert point_with(metric_reader, RAG_EXEMPLAR_LOOKUPS, {_CORPUS: "shared", _OUTCOME: "injected"}).value == 1

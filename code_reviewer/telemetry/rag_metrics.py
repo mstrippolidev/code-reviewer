@@ -50,9 +50,15 @@ class EmbeddingKind(StrEnum):
 
 class ExemplarOutcome(StrEnum):
     INJECTED = "injected"
-    BELOW_FLOOR = "below_floor"
+    JUDGED_IRRELEVANT = "judged_irrelevant"
     NO_CANDIDATES = "no_candidates"
     FAILED = "failed"
+
+
+class JuryResult(StrEnum):
+    UNANIMOUS_RELEVANT = "unanimous_relevant"
+    UNANIMOUS_NOT_RELEVANT = "unanimous_not_relevant"
+    SPLIT = "split"
 
 
 class DuplicateOrigin(StrEnum):
@@ -117,8 +123,18 @@ class RagMetrics:
         self._exemplar_lookups.add(1, {CORPUS: corpus.value, CODE_KEY: code_key, OUTCOME: outcome.value})
 
     def record_exemplar_best_score(self, corpus: Corpus, score: float) -> None:
-        """Reports the best score a lookup found, before the relevance floor was applied."""
+        """Reports the best embedding-similarity score among a lookup's candidates."""
         self._exemplar_best_score.record(score, {CORPUS: corpus.value})
+
+    def record_exemplar_jury_result(self, judges_in_favour: int, panel_size: int) -> None:
+        """Counts one candidate the exemplar jury voted on, by whether the judges agreed."""
+        if judges_in_favour == panel_size:
+            result = JuryResult.UNANIMOUS_RELEVANT
+        elif judges_in_favour == 0:
+            result = JuryResult.UNANIMOUS_NOT_RELEVANT
+        else:
+            result = JuryResult.SPLIT
+        self._exemplar_jury_candidates.add(1, {RESULT: result.value})
 
     def record_dry_chunk_with_candidates(self) -> None:
         """Counts one chunk whose repo history held something worth comparing it against."""
@@ -193,15 +209,20 @@ class RagMetrics:
         )
 
     def _create_exemplar_instruments(self, meter: Meter) -> None:
-        """Creates the instruments that describe exemplar lookups against the relevance floor."""
+        """Creates the instruments that describe how exemplar lookups ended and how the jury voted."""
         self._exemplar_lookups = meter.create_counter(
             "code_reviewer.rag.exemplar.lookups", unit="{lookup}", description="Exemplar lookups, by how they ended"
         )
         self._exemplar_best_score = meter.create_histogram(
             "code_reviewer.rag.exemplar.best_score",
             unit="{score}",
-            description="Best score an exemplar lookup found, before the relevance floor",
+            description="Best embedding-similarity score among an exemplar lookup's candidates",
             explicit_bucket_boundaries_advisory=SCORE_BUCKETS,
+        )
+        self._exemplar_jury_candidates = meter.create_counter(
+            "code_reviewer.rag.exemplar.jury.candidates",
+            unit="{candidate}",
+            description="Exemplar candidates the jury voted on, by whether the judges agreed",
         )
 
     def _create_dry_instruments(self, meter: Meter) -> None:
