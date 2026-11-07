@@ -23,6 +23,7 @@ from code_reviewer.rag.code_similarity_index import CodeSimilarityIndex
 from code_reviewer.rag.dry_judge import DryJudge, DryJudgeLike
 from code_reviewer.rag.dry_judge_split import SizeGuardedDryJudge, SplitConfig
 from code_reviewer.rag.exemplar_injection import ExemplarCorpora
+from code_reviewer.rag.exemplar_judge import ExemplarJudge, ExemplarJury
 from code_reviewer.rag.exemplars import ExemplarStore
 from code_reviewer.rag.indexer import LlamaIndexRagManager
 from code_reviewer.rag.rerank import HistoryMatchReranker
@@ -113,7 +114,7 @@ def build_agent_roster(
     )
     exemplar_store = exemplar_store or ExemplarStore()
     shared_exemplar_store = shared_exemplar_store or SharedExemplarStore()
-    corpora = ExemplarCorpora(repo=exemplar_store, shared=shared_exemplar_store)
+    corpora = ExemplarCorpora(repo=exemplar_store, shared=shared_exemplar_store, jury=_exemplar_jury(llm))
     file_agents = [
         SolidSrpOcpAgent(_llm_for(CodeKey.SOLID1, llm), corpora),
         SolidLspDipAgent(_llm_for(CodeKey.SOLID2, llm), corpora),
@@ -167,6 +168,12 @@ def _llm_for(code_key: CodeKey, llm: LLMInterface | None) -> LLMInterface | None
 
 def _fast_llm(llm: LLMInterface | None) -> LLMInterface | None:
     return llm.for_fast_tier() if llm is not None else None
+
+
+def _exemplar_jury(llm: LLMInterface | None) -> ExemplarJury:
+    """One judge per model of the provider's panel; a single default judge when no provider is given."""
+    panel = llm.for_judge_panel() if llm is not None else [None]
+    return ExemplarJury([ExemplarJudge(judge_llm) for judge_llm in panel])
 
 
 def _build_test_pairing_finder(

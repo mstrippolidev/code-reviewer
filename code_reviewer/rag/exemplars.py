@@ -26,7 +26,7 @@ from code_reviewer.rag.errors import (
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.rag.vector_store import create_vector_store_instance
 from code_reviewer.schemas.review import CodeKey
-from code_reviewer.telemetry.rag_metrics import Corpus, ExemplarOutcome, RetrievalSource, rag_metrics
+from code_reviewer.telemetry.rag_metrics import Corpus, RetrievalSource, rag_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -101,15 +101,9 @@ class ExemplarStoreBase:
             logger.exception("Exemplar search failed")
             raise VectorStoreQueryError("Exemplar search failed") from error
         found = [self._as_exemplar(node) for node in nodes]
-        kept = [exemplar for exemplar in found if exemplar.score >= query.relevance_floor]
-        self._record_lookup(query.code_key, found, kept)
-        return kept
-
-    def _record_lookup(self, code_key: CodeKey, found: list[Exemplar], kept: list[Exemplar]) -> None:
-        """Reports how the lookup ended and the best score it saw, before the relevance floor was applied."""
         if found:
             rag_metrics.record_exemplar_best_score(self.CORPUS, max(exemplar.score for exemplar in found))
-        rag_metrics.record_exemplar_lookup(self.CORPUS, code_key.value, _lookup_outcome(found, kept))
+        return found
 
     def _get_index(self) -> VectorStoreIndex:
         if self._index is None:
@@ -130,14 +124,6 @@ class ExemplarStoreBase:
 
     def _code_key_filter(self, code_key: CodeKey) -> MetadataFilter:
         return MetadataFilter(key="code_key", value=code_key.value)
-
-
-def _lookup_outcome(found: list[Exemplar], kept: list[Exemplar]) -> ExemplarOutcome:
-    if not found:
-        return ExemplarOutcome.NO_CANDIDATES
-    if not kept:
-        return ExemplarOutcome.BELOW_FLOOR
-    return ExemplarOutcome.INJECTED
 
 
 class ExemplarStore(ExemplarStoreBase):
@@ -188,14 +174,14 @@ class ExemplarStore(ExemplarStoreBase):
         shared rather than something to see past.
 
         Args:
-            query: The code under review, its principle, and the relevance
-                floor below which nothing is worth injecting.
-            top_k: How many exemplars to retrieve at most.
+            query: The code under review and its principle.
+            top_k: How many candidates to return at most.
 
         Returns:
-            Exemplars at or above the relevance floor, best first. Empty
-            when nothing clears it — an unrelated exemplar steers an agent's
-            judgment worse than no exemplar at all.
+            Up to top_k candidates, most similar first. They are only
+            candidates: the exemplar jury decides which are worth showing,
+            since an unrelated exemplar steers an agent's judgment worse
+            than no exemplar at all.
 
         Raises:
             VectorStoreQueryError: If querying the vector store fails.
@@ -247,10 +233,8 @@ class ExemplarSource:
 
 @dataclass(frozen=True)
 class ExemplarQuery:
-    """One exemplar lookup: what is being reviewed, for which principle, and
-    how relevant a match has to be before it is worth injecting."""
+    """One exemplar lookup: what is being reviewed and for which principle."""
 
     repo_data: RepoData
     code_key: CodeKey
     code: str
-    relevance_floor: float

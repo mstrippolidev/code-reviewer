@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     max_dispatch_concurrency: int = 4
     max_intake_screen_concurrency: int = 4
 
-    exemplar_relevance_floor: float = 0.5
+    exemplar_judge_pool: int = 3
     exemplar_top_k: int = 2
 
     dry_rerank_max_candidates: int = 3

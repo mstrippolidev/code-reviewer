@@ -60,3 +60,7 @@ class PairingJudgeInvocationError(Exception):
 
 class PairingQueryRewriteError(Exception):
     """Raised when rewriting the TCASE pairing search query fails."""
+
+
+class ExemplarJudgeInvocationError(Exception):
+    """Raised when an exemplar judge's LLM call fails or its output cannot be validated."""

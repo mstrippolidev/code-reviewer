@@ -10,6 +10,7 @@ from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResp
 from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage
 
 from code_reviewer.config.settings import get_settings
+from code_reviewer.rag.exemplar_judge import ExemplarJury
 from code_reviewer.rag.exemplars import Exemplar, ExemplarQuery, ExemplarStore
 from code_reviewer.rag.repo_data import RepoData
 from code_reviewer.rag.shared_exemplars import SharedExemplarQuery, SharedExemplarStore
@@ -31,17 +32,20 @@ exists.
 
 @dataclass(frozen=True)
 class ExemplarCorpora:
-    """The two exemplar corpora an agent may draw on, bundled so an agent
-    that already carries a rag_manager stays within the 3-parameter limit."""
+    """The two exemplar corpora an agent may draw on and the jury that confirms
+    their candidates, bundled so an agent that already carries a rag_manager
+    stays within the 3-parameter limit."""
 
     repo: ExemplarStore | None = None
     shared: SharedExemplarStore | None = None
+    jury: ExemplarJury | None = None
 
 
 class ExemplarInjection(AgentMiddleware):
     """Appends retrieved known-good code to an agent's prompt, drawn from the
     reviewed repo's own corpus, or from the curated repo-less one when the
-    review has no repo at all — never from both."""
+    review has no repo at all — never from both. Only candidates the jury
+    unanimously calls relevant are shown."""
 
     def __init__(self, code_key: CodeKey, corpora: ExemplarCorpora) -> None:
         super().__init__()
@@ -65,32 +69,38 @@ class ExemplarInjection(AgentMiddleware):
         code = _code_under_review(request.messages)
         if code is None:
             return []
-        top_k = get_settings().exemplar_top_k
         repo_data = _repo_data(request)
         if repo_data is not None:
-            return self._from_repo(repo_data, code, top_k)
-        return self._from_shared(code, top_k)
+            return self._from_repo(repo_data, code)
+        return self._from_shared(code)
 
-    def _from_repo(self, repo_data: RepoData, code: str, top_k: int) -> list[Exemplar]:
+    def _from_repo(self, repo_data: RepoData, code: str) -> list[Exemplar]:
         if self._corpora.repo is None:
             return []
-        query = ExemplarQuery(
-            repo_data=repo_data,
-            code_key=self._code_key,
-            code=code,
-            relevance_floor=get_settings().exemplar_relevance_floor,
+        query = ExemplarQuery(repo_data=repo_data, code_key=self._code_key, code=code)
+        pool_size = get_settings().exemplar_judge_pool
+        return self._safely(
+            lambda: self._judged(self._corpora.repo.find_exemplars(query, top_k=pool_size), code, Corpus.REPO),
+            Corpus.REPO,
         )
-        return self._safely(lambda: self._corpora.repo.find_exemplars(query, top_k=top_k), Corpus.REPO)
 
-    def _from_shared(self, code: str, top_k: int) -> list[Exemplar]:
+    def _from_shared(self, code: str) -> list[Exemplar]:
         if self._corpora.shared is None:
             return []
-        query = SharedExemplarQuery(
-            code_key=self._code_key,
-            code=code,
-            relevance_floor=get_settings().exemplar_relevance_floor,
+        query = SharedExemplarQuery(code_key=self._code_key, code=code)
+        pool_size = get_settings().exemplar_judge_pool
+        return self._safely(
+            lambda: self._judged(self._corpora.shared.find_exemplars(query, top_k=pool_size), code, Corpus.SHARED),
+            Corpus.SHARED,
         )
-        return self._safely(lambda: self._corpora.shared.find_exemplars(query, top_k=top_k), Corpus.SHARED)
+
+    def _judged(self, candidates: list[Exemplar], code: str, corpus: Corpus) -> list[Exemplar]:
+        """Keeps the candidates the jury unanimously calls relevant, at most EXEMPLAR_TOP_K, and records how the
+        lookup ended. With no jury configured the most similar candidates pass through."""
+        confirmed = self._corpora.jury.confirm(self._code_key, code, candidates) if self._corpora.jury else candidates
+        kept = confirmed[: get_settings().exemplar_top_k]
+        rag_metrics.record_exemplar_lookup(corpus, self._code_key.value, _lookup_outcome(candidates, kept))
+        return kept
 
     def _safely(self, lookup: Callable[[], list[Exemplar]], corpus: Corpus) -> list[Exemplar]:
         """Retrieval never fails a review: a missing corpus or a store outage
@@ -101,6 +111,14 @@ class ExemplarInjection(AgentMiddleware):
             logger.warning("Exemplar retrieval failed for %s; reviewing without it.", self._code_key)
             rag_metrics.record_exemplar_lookup(corpus, self._code_key.value, ExemplarOutcome.FAILED)
             return []
+
+
+def _lookup_outcome(candidates: list[Exemplar], kept: list[Exemplar]) -> ExemplarOutcome:
+    if not candidates:
+        return ExemplarOutcome.NO_CANDIDATES
+    if not kept:
+        return ExemplarOutcome.JUDGED_IRRELEVANT
+    return ExemplarOutcome.INJECTED
 
 
 def _repo_data(request: ModelRequest) -> RepoData | None:

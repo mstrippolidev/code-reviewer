@@ -18,6 +18,7 @@ from tests.metric_points import (
     RAG_DRY_EXACT_MATCHES,
     RAG_EMBEDDING_DURATION,
     RAG_EXEMPLAR_BEST_SCORE,
+    RAG_EXEMPLAR_JURY_CANDIDATES,
     RAG_EXEMPLAR_LOOKUPS,
     RAG_EXPLAIN_DURATION,
     RAG_JUDGE_CANDIDATES,
@@ -38,6 +39,7 @@ _CORPUS = "code_reviewer.corpus"
 _CODE_KEY = "code_reviewer.code_key"
 _VERDICT = "code_reviewer.verdict"
 _ORIGIN = "code_reviewer.origin"
+_RESULT = "code_reviewer.result"
 
 
 def test_a_search_is_timed_per_source(isolated_rag_metrics: RagMetrics, metric_reader: InMemoryMetricReader) -> None:
@@ -113,20 +115,33 @@ def test_an_exemplar_lookup_is_counted_by_corpus_agent_and_outcome(
     isolated_rag_metrics: RagMetrics, metric_reader: InMemoryMetricReader
 ) -> None:
     """Verify the injection rate can be read per agent and per corpus."""
-    isolated_rag_metrics.record_exemplar_lookup(Corpus.REPO, "SOLID1", ExemplarOutcome.BELOW_FLOOR)
+    isolated_rag_metrics.record_exemplar_lookup(Corpus.REPO, "SOLID1", ExemplarOutcome.JUDGED_IRRELEVANT)
 
-    labels = {_CORPUS: "repo", _CODE_KEY: "SOLID1", _OUTCOME: "below_floor"}
+    labels = {_CORPUS: "repo", _CODE_KEY: "SOLID1", _OUTCOME: "judged_irrelevant"}
     assert point_with(metric_reader, RAG_EXEMPLAR_LOOKUPS, labels).value == 1
 
 
 def test_the_best_exemplar_score_is_recorded_per_corpus(
     isolated_rag_metrics: RagMetrics, metric_reader: InMemoryMetricReader
 ) -> None:
-    """Verify the score distribution can be read against the relevance floor, per corpus."""
+    """Verify the similarity score distribution can be read per corpus."""
     isolated_rag_metrics.record_exemplar_best_score(Corpus.SHARED, 0.55)
 
     point = point_with(metric_reader, RAG_EXEMPLAR_BEST_SCORE, {_CORPUS: "shared"})
     assert (point.count, point.sum) == (1, 0.55)
+
+
+@pytest.mark.parametrize(
+    ("judges_in_favour", "expected_result"),
+    [(3, "unanimous_relevant"), (0, "unanimous_not_relevant"), (2, "split"), (1, "split")],
+)
+def test_a_jury_vote_is_counted_by_whether_the_judges_agreed(
+    isolated_rag_metrics: RagMetrics, metric_reader: InMemoryMetricReader, judges_in_favour: int, expected_result: str
+) -> None:
+    """Verify the share of split votes can be read, which says whether a jury is worth its cost."""
+    isolated_rag_metrics.record_exemplar_jury_result(judges_in_favour, panel_size=3)
+
+    assert point_with(metric_reader, RAG_EXEMPLAR_JURY_CANDIDATES, {_RESULT: expected_result}).value == 1
 
 
 def test_dry_chunks_are_counted_with_and_without_candidates(

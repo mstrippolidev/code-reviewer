@@ -1,9 +1,8 @@
 """
-    LangChain tool wrapping LlamaIndexRagManager.get_file_chunks for the
-    ARCH/COUP multi-hop evidence pass. file_path and imported_symbol_name
-    are the only arguments the model supplies; repo scoping arrives via the
-    immutable per-invocation ToolRuntime.context, never something the model
-    can see or set itself.
+    The get_file_chunks tool that the ARCH and COUP agents call to read another
+    file of the reviewed repo from the index. The model passes a file path and,
+    optionally, one symbol name; the repo searched comes from the review's
+    context, never from the model.
 """
 import re
 
