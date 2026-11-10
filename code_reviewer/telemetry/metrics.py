@@ -111,6 +111,10 @@ class PipelineMetrics:
         """Counts one agent that was skipped without running."""
         self._agent_skipped.add(1, {CODE_KEY: code_key, REASON: reason})
 
+    def record_invented_review(self, code_key: str, result: str) -> None:
+        """Counts one review that described code it was not given; result is `retried` or `failed`."""
+        self._invented_reviews.add(1, {CODE_KEY: code_key, RESULT: result})
+
     def record_output_quality(self, code_key: str, quality: OutputQuality) -> None:
         """Reports what one agent concluded about one file."""
         labels = {CODE_KEY: code_key}
@@ -161,6 +165,11 @@ class PipelineMetrics:
         )
         self._agent_skipped = meter.create_counter(
             "code_reviewer.agent.skipped", unit="{agent}", description="Agents skipped without running"
+        )
+        self._invented_reviews = meter.create_counter(
+            "code_reviewer.agent.invented_reviews",
+            unit="{review}",
+            description="Reviews whose incidents were all about code the agent was not given",
         )
 
     def _create_llm_instruments(self, meter: Meter) -> None:

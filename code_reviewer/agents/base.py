@@ -28,6 +28,7 @@ from code_reviewer.agents.llm.middleware import (
 )
 from code_reviewer.agents.llm.ollama import OllamaLLM
 from code_reviewer.agents.llm.timeout import call_with_hard_timeout
+from code_reviewer.agents.output_grounding import is_review_invented
 from code_reviewer.config.settings import get_settings
 from code_reviewer.pipeline.call_depth.depth_follower import DepthReport
 from code_reviewer.rag.repo_data import RepoData
@@ -41,6 +42,7 @@ from code_reviewer.schemas.review import (
 )
 from code_reviewer.telemetry.metrics import pipeline_metrics
 from code_reviewer.telemetry.run_summary import summarize_run
+from code_reviewer.telemetry.run_transcript import record_transcript
 from code_reviewer.telemetry.run_usage import track_usage
 
 logger = logging.getLogger(__name__)
@@ -64,6 +66,10 @@ def recursion_limit_for_tool_calls(max_tool_calls: int) -> int:
 
 class AgentInvocationError(Exception):
     """Raised when an agent's LLM call fails or its output cannot be validated."""
+
+
+class InventedReviewError(AgentInvocationError):
+    """Raised when an agent twice returned incidents about code it was not given."""
 
 
 @dataclass(frozen=True)
@@ -110,6 +116,7 @@ class AgentBase:
         llm_factory = llm if llm is not None else OllamaLLM()
         self._model_name = llm_factory.model_name
         tools = self._build_tools()
+        self._checks_quoted_names = not tools
         self._agent = create_agent(
             model=llm_factory.create_raw_model(),
             tools=tools,
@@ -231,6 +238,16 @@ class AgentBase:
             AgentInvocationError: If any call fails or its output cannot
                 be validated against AgentOutput.
         """
+        results = self._batch_once(chunks)
+        invented = [index for index, result in enumerate(results) if self._should_retry(result, chunks[index])]
+        if not invented:
+            return results
+        retried = self._batch_once([chunks[index] for index in invented])
+        for index, result in zip(invented, retried):
+            results[index] = self._accept_or_raise(result, chunks[index])
+        return results
+
+    def _batch_once(self, chunks: list[str]) -> list[AgentOutput]:
         payloads = [{"messages": [{"role": "user", "content": code}]} for code in chunks]
         config = {"max_concurrency": get_settings().max_batch_concurrency}
         try:
@@ -285,6 +302,27 @@ class AgentBase:
             AgentInvocationError: If the LLM call fails or its output
                 cannot be validated against AgentOutput.
         """
+        result = self._invoke_once(code, repo_data)
+        if not self._should_retry(result, code):
+            return result
+        return self._accept_or_raise(self._invoke_once(code, repo_data), code)
+
+    def _should_retry(self, result: AgentOutput, code: str) -> bool:
+        """True when every incident is about code that is not in `code`; counts it as a retry."""
+        invented = is_review_invented(result, code, self._checks_quoted_names)
+        if invented:
+            logger.warning("Agent %s described code it was not given; asking again.", self._code_agent)
+            pipeline_metrics.record_invented_review(self._code_agent.value, "retried")
+        return invented
+
+    def _accept_or_raise(self, result: AgentOutput, code: str) -> AgentOutput:
+        """The retried result, unless it is again about code that is not there."""
+        if not is_review_invented(result, code, self._checks_quoted_names):
+            return result
+        pipeline_metrics.record_invented_review(self._code_agent.value, "failed")
+        raise InventedReviewError(f"Agent {self._code_agent} twice described code it was not given.")
+
+    def _invoke_once(self, code: str, repo_data: RepoData | None) -> AgentOutput:
         messages = {
             "messages": [
                 {
@@ -308,8 +346,9 @@ class AgentBase:
             ) from error
 
     def _record_run_summary(self, messages: Sequence[BaseMessage]) -> None:
-        """Reports the tokens, model turns and tool calls of one finished agent run."""
+        """Reports the model turns and tool calls of one finished agent run, and hands its messages to any open capture."""
         pipeline_metrics.record_run_summary(self._code_agent.value, summarize_run(messages))
+        record_transcript(messages)
 
     def _set_file_path_and_code_key(self, result: AgentOutput, file_path: str | None) -> None:
         """Stamps result with the caller-known file_path and this agent's own CodeKey."""

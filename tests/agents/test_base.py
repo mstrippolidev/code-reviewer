@@ -107,7 +107,7 @@ def test_multiple_review_entries_are_merged_into_one(agent: AgentBase) -> None:
     output = AgentOutput(review=[fetched_file_entry, reviewed_file_entry])
     agent._agent.invoke = lambda messages, **kwargs: {"structured_response": output}
 
-    result = agent.execute_agent("code", file_path="reviewed.py")
+    result = agent.execute_agent("first line\nsecond line", file_path="reviewed.py")
 
     assert len(result.review) == 1
     assert result.review[0].incidents[0].description == "real finding"
