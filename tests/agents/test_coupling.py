@@ -1,9 +1,9 @@
 """
-    Tests for the COUP agent (coupling). Content-based checks run against a
-    real small local model, per this project's approach to LLM-backed
-    tests. The hard-limit short-circuit test needs no LLM at all — COUP is
-    a FileSizeAwareAgentBase agent, same as SOLID2/COH, so it isn't marked
-    with pytest.mark.llm like the rest of this file.
+    Tests for the COUP agent (coupling). The content-based checks live in
+    tests/fixtures/coup/labels.json and run in test_agent_labels.py against
+    a real small local model. The hard-limit short-circuit test needs no LLM
+    at all — COUP is a FileSizeAwareAgentBase agent, same as SOLID2/COH, so
+    it isn't marked with pytest.mark.llm.
 """
 from unittest.mock import Mock
 
@@ -26,164 +26,12 @@ def coup_agent(small_llm) -> CouplingAgent:
 
 
 @pytest.mark.llm
-def test_good_coupling_is_not_flagged(coup_agent: CouplingAgent) -> None:
-    code = load_fixture("coup/good_coupling.py")
-
-    result = coup_agent.execute_agent(code, file_path="good_coupling.py")
-
-    entry = result.review[0]
-    assert entry.code_key == CodeKey.COUP
-    assert entry.incidents == []
-    assert entry.rating == 100
-
-
-@pytest.mark.llm
-def test_public_api_delegation_is_not_flagged_as_feature_envy(coup_agent: CouplingAgent) -> None:
-    """Calling several public methods on a collaborator to orchestrate a
-    workflow is delegation through its declared interface, not this
-    method manipulating another object's data itself."""
-    code = load_fixture("coup/false_positive_public_api_delegation.py")
-
-    result = coup_agent.execute_agent(code, file_path="false_positive_public_api_delegation.py")
-
-    entry = result.review[0]
-    assert entry.incidents == []
-    assert entry.rating == 100
-
-
-@pytest.mark.llm
-def test_public_property_access_is_not_flagged_as_intimacy(coup_agent: CouplingAgent) -> None:
-    """Reading a declared public field is not reaching past another
-    unit's private surface."""
-    code = load_fixture("coup/false_positive_public_property_access.py")
-
-    result = coup_agent.execute_agent(code, file_path="false_positive_public_property_access.py")
-
-    entry = result.review[0]
-    assert entry.incidents == []
-    assert entry.rating == 100
-
-
-@pytest.mark.llm
-def test_single_hop_access_is_not_flagged_as_chain_navigation(coup_agent: CouplingAgent) -> None:
-    """One direct collaborator, one attribute — there is no chain of
-    intermediate objects to navigate through."""
-    code = load_fixture("coup/false_positive_single_hop_access.py")
-
-    result = coup_agent.execute_agent(code, file_path="false_positive_single_hop_access.py")
-
-    entry = result.review[0]
-    assert entry.incidents == []
-    assert entry.rating == 100
-
-
-@pytest.mark.llm
-def test_circular_dependency_violation_is_flagged(coup_agent: CouplingAgent) -> None:
-    code = load_fixture("coup/circular_dependency_violation.py")
-
-    result = coup_agent.execute_agent(code, file_path="circular_dependency_violation.py")
-
-    entry = result.review[0]
-    assert entry.incidents != []
-    assert entry.rating < 100
-
-
-@pytest.mark.llm
-def test_feature_envy_violation_is_flagged(coup_agent: CouplingAgent) -> None:
-    code = load_fixture("coup/feature_envy_violation.py")
-
-    result = coup_agent.execute_agent(code, file_path="feature_envy_violation.py")
-
-    entry = result.review[0]
-    assert entry.incidents != []
-    assert entry.rating < 100
-
-
-@pytest.mark.llm
-def test_inappropriate_intimacy_violation_is_flagged(coup_agent: CouplingAgent) -> None:
-    code = load_fixture("coup/inappropriate_intimacy_violation.py")
-
-    result = coup_agent.execute_agent(code, file_path="inappropriate_intimacy_violation.py")
-
-    entry = result.review[0]
-    assert entry.incidents != []
-    assert entry.rating < 100
-
-
-@pytest.mark.llm
-def test_god_object_violation_is_flagged(coup_agent: CouplingAgent) -> None:
-    code = load_fixture("coup/god_object_violation.py")
-
-    result = coup_agent.execute_agent(code, file_path="god_object_violation.py")
-
-    entry = result.review[0]
-    assert entry.incidents != []
-    assert entry.rating < 100
-
-
-@pytest.mark.llm
-def test_deep_chain_violation_is_flagged(coup_agent: CouplingAgent) -> None:
-    code = load_fixture("coup/deep_chain_violation.py")
-
-    result = coup_agent.execute_agent(code, file_path="deep_chain_violation.py")
-
-    entry = result.review[0]
-    assert entry.incidents != []
-    assert entry.rating < 100
-
-
-@pytest.mark.llm
 def test_file_path_is_stamped_on_every_entry(coup_agent: CouplingAgent) -> None:
     code = load_fixture("coup/circular_dependency_violation.py")
 
     result = coup_agent.execute_agent(code, file_path="circular_dependency_violation.py")
 
     assert all(entry.file_path == "circular_dependency_violation.py" for entry in result.review)
-
-
-@pytest.mark.llm
-def test_high_priority_scenario_is_flagged_high(coup_agent: CouplingAgent) -> None:
-    code = load_fixture("coup/priority_high.py")
-
-    result = coup_agent.execute_agent(code, file_path="priority_high.py")
-
-    entry = result.review[0]
-    assert any(incident.priority == Priority.HIGH for incident in entry.incidents)
-
-
-@pytest.mark.llm
-def test_medium_priority_scenario_is_flagged_medium(coup_agent: CouplingAgent) -> None:
-    code = load_fixture("coup/priority_medium.py")
-
-    result = coup_agent.execute_agent(code, file_path="priority_medium.py")
-
-    entry = result.review[0]
-    assert any(incident.priority == Priority.MEDIUM for incident in entry.incidents)
-
-
-@pytest.mark.llm
-def test_low_priority_scenario_is_flagged_low(coup_agent: CouplingAgent) -> None:
-    code = load_fixture("coup/priority_low.py")
-
-    result = coup_agent.execute_agent(code, file_path="priority_low.py")
-
-    entry = result.review[0]
-    assert any(incident.priority == Priority.LOW for incident in entry.incidents)
-
-
-@pytest.mark.llm
-def test_out_of_scope_scenario_is_flagged_low(coup_agent: CouplingAgent) -> None:
-    """Common coupling through shared module-level state (two classes with
-    no reference to each other, both reading and writing the same global)
-    is coupling-adjacent but outside COUP's five in-scope categories, so
-    it must still be reported, but only at priority low."""
-    code = load_fixture("coup/priority_out_of_scope_low.py")
-
-    result = coup_agent.execute_agent(code, file_path="priority_out_of_scope_low.py")
-
-    entry = result.review[0]
-    assert entry.incidents != []
-    assert all(incident.priority == Priority.LOW for incident in entry.incidents)
 
 
 def test_hard_limit_exceeded_short_circuits_without_an_llm_call(coup_agent: CouplingAgent) -> None:

@@ -7,9 +7,8 @@
 """
 
 
-class DiscountCalculator:
-    def __init__(self, discount_percentage: float) -> None:
-        self.discount_percentage = discount_percentage
+discount_rate = 0.10
 
-    def apply(self, discount_percentage: float) -> float:
-        return discount_percentage * (1 - self.discount_percentage)
+
+def apply_discount(price: float, discount_rate: float) -> float:
+    return price * (1 - discount_rate)
