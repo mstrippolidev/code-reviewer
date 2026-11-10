@@ -9,12 +9,12 @@ import time
 
 class SessionStore:
     def __init__(self) -> None:
-        self.sessions: dict[str, str] = {}
+        self._sessions: dict[str, str] = {}
         self.retry_count = 0
         self.last_cleanup_at = time.time()
 
     def create(self, session_id: str, user_id: str) -> None:
-        self.sessions[session_id] = user_id
+        self._sessions[session_id] = user_id
 
     def get(self, session_id: str) -> str | None:
-        return self.sessions.get(session_id)
+        return self._sessions.get(session_id)

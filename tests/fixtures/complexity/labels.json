@@ -1,0 +1,209 @@
+[
+  {
+    "id": "more-than-3-other-files-is-high",
+    "fixture": "complexity/call_depth/cross_file_chain",
+    "path": "app/routers/orders.py",
+    "expected": "high",
+    "must_cover_call": {"function": "create_order", "callee": "place_order"},
+    "reason": "The route reaches real logic through more than 3 different files, which the rule marks high."
+  },
+  {
+    "id": "mixed-chain-judges-files-first",
+    "fixture": "complexity/call_depth/mixed_chain",
+    "path": "app/routers/orders.py",
+    "expected": "high",
+    "reason": "The chain mixes cross-file and same-file hops; the number of different files decides first, and it is over 3."
+  },
+  {
+    "id": "three-other-files-is-not-high",
+    "fixture": "complexity/call_depth/three_other_files",
+    "path": "app/routers/orders.py",
+    "expected": null,
+    "also_accepted": ["low", "medium"],
+    "reason": "Exactly 3 other files is the limit itself, not over it; two hops are pass-throughs, so a note below high is defensible."
+  },
+  {
+    "id": "five-same-file-hops-is-never-high",
+    "fixture": "complexity/false_positive_same_file_helpers_within_limit.py",
+    "path": "false_positive_same_file_helpers_within_limit.py",
+    "expected": null,
+    "also_accepted": ["low", "medium"],
+    "reason": "About 5 same-file hops is the guide's fine zone; a low or medium note is defensible, high is not."
+  },
+  {
+    "id": "six-same-file-hops-is-at-least-medium",
+    "fixture": "complexity/hops_priority_medium.py",
+    "path": "hops_priority_medium.py",
+    "expected": "medium",
+    "also_accepted": ["high"],
+    "reason": "6 to 7 same-file hops is usually medium in the guide; high is tolerated because it sits next to the over-7 limit."
+  },
+  {
+    "id": "more-than-7-same-file-hops-is-high",
+    "fixture": "complexity/hops_pass_through_chain.py",
+    "path": "hops_pass_through_chain.py",
+    "expected": "high",
+    "reason": "More than 7 same-file hops of pure pass-through is high in the guide."
+  },
+  {
+    "id": "walk-stopped-at-the-hop-limit-is-high",
+    "fixture": "complexity/call_depth/hop_limit_chain.py",
+    "path": "hop_limit_chain.py",
+    "expected": "high",
+    "reason": "The walk hit its hop limit without reaching real logic, so the depth is at least the limit and is high."
+  },
+  {
+    "id": "uneven-same-file-depth-is-medium",
+    "fixture": "complexity/uneven_call_depth.py",
+    "path": "uneven_call_depth.py",
+    "expected": "medium",
+    "must_cover_call": {"function": "price_for", "callee": "discount_entry"},
+    "reason": "One call is much deeper than its siblings in the same file, which the rule marks medium."
+  },
+  {
+    "id": "uneven-cross-file-depth-is-medium",
+    "fixture": "complexity/call_depth/uneven_cross_file",
+    "path": "app/routers/checkout.py",
+    "expected": "medium",
+    "must_cover_call": {"function": "checkout", "callee": "ship_cart"},
+    "reason": "One call is much deeper than its siblings across files, which the rule marks medium."
+  },
+  {
+    "id": "even-depth-is-not-flagged",
+    "fixture": "complexity/false_positive_even_call_depth.py",
+    "path": "false_positive_even_call_depth.py",
+    "expected": null,
+    "reason": "Every call reaches real logic in one step, so no call is the odd one out."
+  },
+  {
+    "id": "layer-that-decides-is-not-flagged",
+    "fixture": "complexity/call_depth/deciding_layers",
+    "path": "app/routers/orders.py",
+    "expected": null,
+    "reason": "Each layer validates, authorizes or hides I/O, so none is a pass-through and the depth is justified."
+  },
+  {
+    "id": "single-file-layers-that-decide-are-not-flagged",
+    "fixture": "complexity/false_positive_layers_that_decide.py",
+    "path": "false_positive_layers_that_decide.py",
+    "expected": null,
+    "reason": "Three hops is the limit itself, and every layer validates, authorizes or hides I/O, so none is a pass-through."
+  },
+  {
+    "id": "depends-providers-are-not-flagged",
+    "fixture": "complexity/call_depth/depends_route",
+    "path": "app/routers/repos.py",
+    "expected": null,
+    "reason": "Depends providers are wiring the framework resolves, not hops the reader must follow."
+  },
+  {
+    "id": "unresolved-call-is-not-flagged",
+    "fixture": "complexity/call_depth/unresolved_call",
+    "path": "app/routers/invoices.py",
+    "expected": null,
+    "reason": "The walker could not resolve the callee, so the agent has no evidence of depth and must not guess."
+  },
+  {
+    "id": "library-wrapper-is-at-most-low",
+    "fixture": "complexity/call_depth/library_forward.py",
+    "path": "library_forward.py",
+    "expected": null,
+    "also_accepted": ["low"],
+    "reason": "The wrapper only forwards, so a low note is defensible; one hop is far inside every limit, so anything higher is a false alarm."
+  },
+  {
+    "id": "shared-clean-service-is-not-flagged",
+    "fixture": "shared/clean_service.py",
+    "path": "clean_service.py",
+    "expected": null,
+    "reason": "The shared clean fixture has no complexity problem."
+  },
+  {
+    "id": "good-complexity-is-not-flagged",
+    "fixture": "complexity/good_complexity.py",
+    "path": "good_complexity.py",
+    "expected": null,
+    "reason": "Code written to stay inside every complexity limit."
+  },
+  {
+    "id": "two-level-nesting-is-not-flagged",
+    "fixture": "complexity/false_positive_two_level_nesting.py",
+    "path": "false_positive_two_level_nesting.py",
+    "expected": null,
+    "reason": "Two levels is the boundary itself, not a violation of 'more than 2 levels deep'."
+  },
+  {
+    "id": "three-part-condition-is-not-flagged",
+    "fixture": "complexity/false_positive_three_part_condition.py",
+    "path": "false_positive_three_part_condition.py",
+    "expected": null,
+    "reason": "Three parts is the boundary itself, not a violation of 'more than 3 parts'."
+  },
+  {
+    "id": "guard-clause-style-is-not-flagged",
+    "fixture": "complexity/guard_clause_style.py",
+    "path": "guard_clause_style.py",
+    "expected": null,
+    "reason": "Flat, top-level guard clauses are the preferred alternative to nesting and must not be flagged for exit-point count."
+  },
+  {
+    "id": "deeply-nested-conditionals-are-flagged",
+    "fixture": "complexity/deeply_nested_conditionals.py",
+    "path": "deeply_nested_conditionals.py",
+    "expected": null,
+    "flagged_any_priority": true,
+    "reason": "Conditionals nested more than 2 levels deep; the fixture was written to violate that."
+  },
+  {
+    "id": "complex-boolean-condition-is-flagged",
+    "fixture": "complexity/complex_boolean_condition.py",
+    "path": "complex_boolean_condition.py",
+    "expected": null,
+    "flagged_any_priority": true,
+    "reason": "A condition with more than 3 parts; the fixture was written to violate that."
+  },
+  {
+    "id": "too-many-exit-points-is-flagged",
+    "fixture": "complexity/too_many_exit_points.py",
+    "path": "too_many_exit_points.py",
+    "expected": null,
+    "flagged_any_priority": true,
+    "reason": "A function with too many exit points; the fixture was written to violate that."
+  },
+  {
+    "id": "high-cyclomatic-complexity-is-flagged",
+    "fixture": "complexity/high_cyclomatic_complexity.py",
+    "path": "high_cyclomatic_complexity.py",
+    "expected": null,
+    "flagged_any_priority": true,
+    "reason": "A function with high cyclomatic complexity; the fixture was written to violate that."
+  },
+  {
+    "id": "clear-high-priority-fixture",
+    "fixture": "complexity/priority_high.py",
+    "path": "priority_high.py",
+    "expected": "high",
+    "reason": "Priority-tier fixture built as a clear high."
+  },
+  {
+    "id": "clear-medium-priority-fixture",
+    "fixture": "complexity/priority_medium.py",
+    "path": "priority_medium.py",
+    "expected": "medium",
+    "reason": "Priority-tier fixture built as a clear medium."
+  },
+  {
+    "id": "clear-low-priority-fixture",
+    "fixture": "complexity/priority_low.py",
+    "path": "priority_low.py",
+    "expected": "low",
+    "reason": "Priority-tier fixture built as a clear low."
+  },
+  {
+    "id": "out-of-scope-finding-is-low",
+    "fixture": "complexity/priority_out_of_scope_low.py",
+    "path": "priority_out_of_scope_low.py",
+    "expected": "low",
+    "reason": "A raised and caught exception used for ordinary control flow is a real clarity problem outside CMPLX's four categories, so it is reported, but only at low."
+  }
+]
