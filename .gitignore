@@ -18,3 +18,6 @@ logs/
 .DS_Store
 
 PROJECT_SUMMARY.md
+
+# evaluation run reports (contain model output)
+evaluation/results/

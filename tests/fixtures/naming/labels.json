@@ -1,0 +1,14 @@
+[
+  {"id": "shared-clean-service-is-not-flagged", "fixture": "shared/clean_service.py", "path": "clean_service.py", "expected": null, "reason": "The shared clean fixture has no naming problem."},
+  {"id": "acceptable-short-names-are-not-flagged", "fixture": "naming/acceptable_short_names.py", "path": "acceptable_short_names.py", "expected": null, "reason": "Short names that are conventional in their context are acceptable."},
+  {"id": "similar-but-distinct-names-are-not-flagged", "fixture": "naming/similar_but_distinct_names.py", "path": "similar_but_distinct_names.py", "expected": null, "reason": "The names look alike but name genuinely different things."},
+  {"id": "unexpressible-comment-is-not-flagged", "fixture": "naming/false_positive_unexpressible_comment.py", "path": "false_positive_unexpressible_comment.py", "expected": null, "reason": "The comment states a business rule no identifier could carry, not a unit or qualifier the name omitted."},
+  {"id": "different-concepts-different-verbs-are-not-flagged", "fixture": "naming/false_positive_different_concepts_different_verbs.py", "path": "false_positive_different_concepts_different_verbs.py", "expected": null, "reason": "fetch_user and get_cached_region name two genuinely different operations, not one concept named two ways."},
+  {"id": "bad-abbreviations-are-flagged", "fixture": "naming/bad_abbreviations.py", "path": "bad_abbreviations.py", "expected": null, "flagged_any_priority": true, "reason": "Abbreviated names a reader cannot expand; the fixture was written to violate that."},
+  {"id": "vague-names-are-flagged", "fixture": "naming/vague_names.py", "path": "vague_names.py", "expected": null, "flagged_any_priority": true, "reason": "Names that say nothing about what they hold; the fixture was written to violate that."},
+  {"id": "inconsistent-vocabulary-is-flagged", "fixture": "naming/inconsistent_vocabulary.py", "path": "inconsistent_vocabulary.py", "expected": null, "flagged_any_priority": true, "reason": "One concept named in two inconsistent ways; the fixture was written to violate that."},
+  {"id": "clear-high-priority-fixture", "fixture": "naming/priority_high.py", "path": "priority_high.py", "expected": "high", "reason": "Priority-tier fixture built as a clear high."},
+  {"id": "clear-medium-priority-fixture", "fixture": "naming/priority_medium.py", "path": "priority_medium.py", "expected": "medium", "reason": "Priority-tier fixture built as a clear medium."},
+  {"id": "clear-low-priority-fixture", "fixture": "naming/priority_low.py", "path": "priority_low.py", "expected": "low", "reason": "Priority-tier fixture built as a clear low."},
+  {"id": "out-of-scope-finding-is-low", "fixture": "naming/priority_out_of_scope_low.py", "path": "priority_out_of_scope_low.py", "expected": "low", "reason": "Variable shadowing is naming-adjacent but outside VAR's four categories, so it is reported only at low."}
+]
