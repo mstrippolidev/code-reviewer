@@ -1,0 +1,1023 @@
+{
+  "arch": {
+    "agent": "arch",
+    "model": "deepseek/deepseek-v4-pro-0813",
+    "git_commit": "unknown",
+    "prompt_hash": "17e168c7e0cd",
+    "prompt_hash_source": "current_prompts",
+    "score": {
+      "agent": "arch",
+      "labels": 15,
+      "failed_runs": 0,
+      "abandoned_runs": 0,
+      "invalid_line_incidents": 0,
+      "pass_rate": 1.0,
+      "recall": 1.0,
+      "false_positive_rate": 0.0,
+      "exact_priority_rate": 1.0,
+      "accepted_priority_rate": 1.0
+    },
+    "labels": {
+      "good-architecture-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "injected-abstraction-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "infrastructure-adapter-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "template-method-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "factory-function-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "value-object-construction-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "naturally-varying-shapes-are-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "layer-violation-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "dependency-direction-violation-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "construction-mixed-with-use-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "pattern-inconsistency-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-high-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-medium-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-low-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "out-of-scope-finding-is-low": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      }
+    }
+  },
+  "bound": {
+    "agent": "bound",
+    "model": "deepseek/deepseek-v4-pro-0813",
+    "git_commit": "unknown",
+    "prompt_hash": "8ec56f6aff10",
+    "prompt_hash_source": "current_prompts",
+    "score": {
+      "agent": "bound",
+      "labels": 15,
+      "failed_runs": 0,
+      "abandoned_runs": 0,
+      "invalid_line_incidents": 4,
+      "pass_rate": 0.98,
+      "recall": 0.9875,
+      "false_positive_rate": 0.014285714285714287,
+      "exact_priority_rate": 0.95,
+      "accepted_priority_rate": 0.95
+    },
+    "labels": {
+      "good-boundaries-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 10
+      },
+      "defensive-copy-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 10
+      },
+      "necessary-public-api-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 10
+      },
+      "wrapped-library-type-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 10
+      },
+      "protected-for-subclasses-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 10
+      },
+      "typed-parameter-is-not-flagged": {
+        "accepted_rate": 0.9,
+        "runs": 10
+      },
+      "read-only-property-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 10
+      },
+      "leaked-representation-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 10
+      },
+      "unmarked-private-state-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 10
+      },
+      "oversized-surface-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 10
+      },
+      "library-type-leakage-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 10
+      },
+      "clear-high-priority-fixture": {
+        "accepted_rate": 0.9,
+        "runs": 10
+      },
+      "clear-medium-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 10
+      },
+      "clear-low-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 10
+      },
+      "out-of-scope-finding-is-low": {
+        "accepted_rate": 0.9,
+        "runs": 10
+      }
+    }
+  },
+  "coh": {
+    "agent": "coh",
+    "model": "deepseek/deepseek-v4-pro-0813",
+    "git_commit": "unknown",
+    "prompt_hash": "c549695cf44c",
+    "prompt_hash_source": "current_prompts",
+    "score": {
+      "agent": "coh",
+      "labels": 12,
+      "failed_runs": 1,
+      "abandoned_runs": 0,
+      "invalid_line_incidents": 0,
+      "pass_rate": 0.9833333333333334,
+      "recall": 0.975,
+      "false_positive_rate": 0.0,
+      "exact_priority_rate": 0.95,
+      "accepted_priority_rate": 0.95
+    },
+    "labels": {
+      "good-cohesion-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "stateful-cache-wrapper-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "classmethod-factory-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "related-utils-module-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "bundled-concerns-are-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "disjoint-methods-are-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "grab-bag-module-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "method-ignoring-self-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-high-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-medium-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-low-priority-fixture": {
+        "accepted_rate": 0.8,
+        "runs": 5
+      },
+      "out-of-scope-finding-is-low": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      }
+    }
+  },
+  "comments": {
+    "agent": "comments",
+    "model": "google/gemini-2.5-flash",
+    "git_commit": "unknown",
+    "prompt_hash": "669043de0b1a",
+    "prompt_hash_source": "current_prompts",
+    "score": {
+      "agent": "comments",
+      "labels": 12,
+      "failed_runs": 0,
+      "abandoned_runs": 0,
+      "invalid_line_incidents": 0,
+      "pass_rate": 1.0,
+      "recall": 1.0,
+      "false_positive_rate": 0.0,
+      "exact_priority_rate": 1.0,
+      "accepted_priority_rate": 1.0
+    },
+    "labels": {
+      "shared-clean-service-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "good-comments-are-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "doctest-example-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "caller-relevant-precondition-docstring-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "redundant-comments-are-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "stale-ambiguous-comment-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "commented-out-code-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "implementation-leaking-docstring-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-high-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-medium-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-low-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "out-of-scope-finding-is-low": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      }
+    }
+  },
+  "complexity": {
+    "agent": "complexity",
+    "model": "deepseek/deepseek-v4-pro-0813",
+    "git_commit": "unknown",
+    "prompt_hash": "0ac4999bbde0",
+    "prompt_hash_source": "current_prompts",
+    "score": {
+      "agent": "complexity",
+      "labels": 28,
+      "failed_runs": 0,
+      "abandoned_runs": 0,
+      "invalid_line_incidents": 12,
+      "pass_rate": 1.0,
+      "recall": 1.0,
+      "false_positive_rate": 0.0,
+      "exact_priority_rate": 1.0,
+      "accepted_priority_rate": 1.0
+    },
+    "labels": {
+      "more-than-3-other-files-is-high": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "mixed-chain-judges-files-first": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "three-other-files-is-not-high": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "five-same-file-hops-is-never-high": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "six-same-file-hops-is-at-least-medium": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "more-than-7-same-file-hops-is-high": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "walk-stopped-at-the-hop-limit-is-high": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "uneven-same-file-depth-is-medium": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "uneven-cross-file-depth-is-medium": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "even-depth-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "layer-that-decides-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "single-file-layers-that-decide-are-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "depends-providers-are-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "unresolved-call-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "library-wrapper-is-at-most-low": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "shared-clean-service-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "good-complexity-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "two-level-nesting-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "three-part-condition-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "guard-clause-style-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "deeply-nested-conditionals-are-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "complex-boolean-condition-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "too-many-exit-points-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "high-cyclomatic-complexity-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-high-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-medium-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-low-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "out-of-scope-finding-is-low": {
+        "accepted_rate": 1.0,
+        "runs": 10
+      }
+    }
+  },
+  "conc": {
+    "agent": "conc",
+    "model": "deepseek/deepseek-v4-pro-0813",
+    "git_commit": "unknown",
+    "prompt_hash": "30e663ea5f7e",
+    "prompt_hash_source": "current_prompts",
+    "score": {
+      "agent": "conc",
+      "labels": 11,
+      "failed_runs": 0,
+      "abandoned_runs": 0,
+      "invalid_line_incidents": 0,
+      "pass_rate": 1.0,
+      "recall": 1.0,
+      "false_positive_rate": 0.0,
+      "exact_priority_rate": 1.0,
+      "accepted_priority_rate": 1.0
+    },
+    "labels": {
+      "good-concurrency-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "lock-protected-mutation-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "sync-blocking-call-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "unprotected-shared-state-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "check-then-act-race-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "async-misuse-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "non-atomic-resource-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-high-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-medium-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-low-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "out-of-scope-finding-is-low": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      }
+    }
+  },
+  "coup": {
+    "agent": "coup",
+    "model": "deepseek/deepseek-v4-pro-0813",
+    "git_commit": "unknown",
+    "prompt_hash": "c39c135afc35",
+    "prompt_hash_source": "current_prompts",
+    "score": {
+      "agent": "coup",
+      "labels": 13,
+      "failed_runs": 0,
+      "abandoned_runs": 0,
+      "invalid_line_incidents": 0,
+      "pass_rate": 1.0,
+      "recall": 1.0,
+      "false_positive_rate": 0.0,
+      "exact_priority_rate": 1.0,
+      "accepted_priority_rate": 1.0
+    },
+    "labels": {
+      "good-coupling-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "public-api-delegation-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "public-property-access-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "single-hop-access-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "circular-dependency-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "feature-envy-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "inappropriate-intimacy-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "god-object-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "deep-chain-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-high-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-medium-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-low-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "out-of-scope-finding-is-low": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      }
+    }
+  },
+  "errors": {
+    "agent": "errors",
+    "model": "google/gemini-2.5-flash",
+    "git_commit": "unknown",
+    "prompt_hash": "e080d33ef9da",
+    "prompt_hash_source": "current_prompts",
+    "score": {
+      "agent": "errors",
+      "labels": 13,
+      "failed_runs": 0,
+      "abandoned_runs": 0,
+      "invalid_line_incidents": 0,
+      "pass_rate": 1.0,
+      "recall": 1.0,
+      "false_positive_rate": 0.0,
+      "exact_priority_rate": 1.0,
+      "accepted_priority_rate": 1.0
+    },
+    "labels": {
+      "shared-clean-service-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "good-error-handling-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "idiomatic-optional-return-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "narrow-exception-with-fallback-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "guard-clause-early-return-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "generic-exception-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "returns-error-code-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "swallowed-exception-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "dead-code-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-high-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-medium-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-low-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "out-of-scope-finding-is-low": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      }
+    }
+  },
+  "naming": {
+    "agent": "naming",
+    "model": "google/gemini-2.5-flash",
+    "git_commit": "unknown",
+    "prompt_hash": "b5218335ab0a",
+    "prompt_hash_source": "current_prompts",
+    "score": {
+      "agent": "naming",
+      "labels": 12,
+      "failed_runs": 0,
+      "abandoned_runs": 0,
+      "invalid_line_incidents": 0,
+      "pass_rate": 1.0,
+      "recall": 1.0,
+      "false_positive_rate": 0.0,
+      "exact_priority_rate": 1.0,
+      "accepted_priority_rate": 1.0
+    },
+    "labels": {
+      "out-of-scope-finding-is-low": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "shared-clean-service-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "acceptable-short-names-are-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "similar-but-distinct-names-are-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "unexpressible-comment-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "different-concepts-different-verbs-are-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "bad-abbreviations-are-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "vague-names-are-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "inconsistent-vocabulary-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-high-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-medium-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-low-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      }
+    }
+  },
+  "solid1": {
+    "agent": "solid1",
+    "model": "deepseek/deepseek-v4-pro-0813",
+    "git_commit": "unknown",
+    "prompt_hash": "80638d9cb74e",
+    "prompt_hash_source": "current_prompts",
+    "score": {
+      "agent": "solid1",
+      "labels": 15,
+      "failed_runs": 0,
+      "abandoned_runs": 0,
+      "invalid_line_incidents": 0,
+      "pass_rate": 0.9866666666666667,
+      "recall": 0.98,
+      "false_positive_rate": 0.0,
+      "exact_priority_rate": 1.0,
+      "accepted_priority_rate": 1.0
+    },
+    "labels": {
+      "shared-clean-service-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "good-solid1-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "builder-pattern-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "strategy-extension-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "stored-boolean-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "srp-class-violation-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "ocp-violation-is-flagged": {
+        "accepted_rate": 0.8,
+        "runs": 5
+      },
+      "srp-function-violation-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "too-many-params-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "boolean-flag-argument-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-high-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-medium-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-low-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "out-of-scope-finding-is-low": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "speculative-abstraction-out-of-scope-is-low": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      }
+    }
+  },
+  "solid2": {
+    "agent": "solid2",
+    "model": "deepseek/deepseek-v4-pro-0813",
+    "git_commit": "unknown",
+    "prompt_hash": "c7a94f31d131",
+    "prompt_hash_source": "current_prompts",
+    "score": {
+      "agent": "solid2",
+      "labels": 16,
+      "failed_runs": 0,
+      "abandoned_runs": 0,
+      "invalid_line_incidents": 0,
+      "pass_rate": 1.0,
+      "recall": 1.0,
+      "false_positive_rate": 0.0,
+      "exact_priority_rate": 1.0,
+      "accepted_priority_rate": 1.0
+    },
+    "labels": {
+      "shared-clean-service-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "good-solid2-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "internal-scalar-state-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "covariant-override-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "cohesive-small-interface-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "local-concrete-collaborator-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "fastapi-depends-provider-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "protocol-at-io-boundary-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "lsp-violation-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "isp-violation-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "dip-violation-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-high-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-medium-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-low-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "out-of-scope-finding-is-low": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "leaky-kwargs-passthrough-out-of-scope-is-low": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      }
+    }
+  },
+  "tcase": {
+    "agent": "tcase",
+    "model": "deepseek/deepseek-v4-pro-0813",
+    "git_commit": "unknown",
+    "prompt_hash": "8e068caa72c5",
+    "prompt_hash_source": "current_prompts",
+    "score": {
+      "agent": "tcase",
+      "labels": 11,
+      "failed_runs": 1,
+      "abandoned_runs": 0,
+      "invalid_line_incidents": 2,
+      "pass_rate": 0.890909090909091,
+      "recall": 0.9,
+      "false_positive_rate": 0.06666666666666667,
+      "exact_priority_rate": 0.88,
+      "accepted_priority_rate": 0.88
+    },
+    "labels": {
+      "fully-tested-code-is-not-flagged": {
+        "accepted_rate": 0.8,
+        "runs": 5
+      },
+      "parametrized-coverage-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "trivial-passthrough-without-tests-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "partially-tested-code-is-flagged": {
+        "accepted_rate": 0.8,
+        "runs": 5
+      },
+      "no-test-file-is-flagged": {
+        "accepted_rate": 0.8,
+        "runs": 5
+      },
+      "concurrent-state-without-concurrent-tests-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-high-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-medium-priority-fixture": {
+        "accepted_rate": 0.8,
+        "runs": 5
+      },
+      "clear-low-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "out-of-scope-finding-is-low": {
+        "accepted_rate": 0.8,
+        "runs": 5
+      },
+      "mocked-away-logic-out-of-scope-is-low": {
+        "accepted_rate": 0.8,
+        "runs": 5
+      }
+    }
+  },
+  "test": {
+    "agent": "test",
+    "model": "deepseek/deepseek-v4-pro-0813",
+    "git_commit": "unknown",
+    "prompt_hash": "d2167dd9516c",
+    "prompt_hash_source": "current_prompts",
+    "score": {
+      "agent": "test",
+      "labels": 14,
+      "failed_runs": 0,
+      "abandoned_runs": 0,
+      "invalid_line_incidents": 1,
+      "pass_rate": 1.0,
+      "recall": 1.0,
+      "false_positive_rate": 0.0,
+      "exact_priority_rate": 1.0,
+      "accepted_priority_rate": 1.0
+    },
+    "labels": {
+      "good-testability-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "internal-value-object-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "immutable-module-constant-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "trivial-staticmethod-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "fastapi-depends-route-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "pure-function-with-branching-is-not-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "hardcoded-dependency-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 10
+      },
+      "hidden-global-state-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "static-method-complexity-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "excessive-dependencies-is-flagged": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-high-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-medium-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "clear-low-priority-fixture": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      },
+      "out-of-scope-finding-is-low": {
+        "accepted_rate": 1.0,
+        "runs": 5
+      }
+    }
+  }
+}
