@@ -183,3 +183,27 @@ groups:
           summary: A model with no price list entry made calls, so reported cost is a lower bound.
           description: Check BEDROCK_PRICE_LIST_MODEL or the model id against the provider's price list.
         labels: {severity: warning}
+
+      - uid: alive-check-failed
+        title: The daily model probe failed
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: >-
+                sum(code_reviewer_alive_check_runs_total{code_reviewer_result="failed"})
+                - (sum(code_reviewer_alive_check_runs_total{code_reviewer_result="failed"} offset 25h) or vector(0)) > 0
+              instant: true
+              datasource: {type: prometheus, uid: prometheus}
+          - *reduce_last
+          - *above_zero
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          summary: A model tier did not return a parsed review to the production probe in the last 25 hours.
+          description: Check the model id, the provider credentials and quota. The probe runs once per ALIVE_CHECK_INTERVAL_HOURS.
+        labels: {severity: critical}
