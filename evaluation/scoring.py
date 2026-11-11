@@ -10,6 +10,7 @@ from pydantic import BaseModel, computed_field
 
 from code_reviewer.schemas.review import Incident, Priority
 from evaluation.labels import FixtureLabel
+from evaluation.run_record import RunRecord
 from evaluation.transcript import RunTranscript
 
 
@@ -74,6 +75,7 @@ class EvaluationReport(BaseModel):
     model_by_agent: dict[str, str]
     runs_per_label: int
     created_at: datetime
+    run_record: RunRecord | None = None
     scores: list[AgentScore]
     results: dict[str, list[LabelResult]]
 
