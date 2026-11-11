@@ -30,11 +30,18 @@ FILE_STATUS = "code_reviewer.file_status"
 CAUSE = "code_reviewer.cause"
 GUARD = "code_reviewer.guard"
 SCOPE = "code_reviewer.scope"
+TIER = "code_reviewer.tier"
+MODEL = "code_reviewer.model"
 
 
 class ReviewResult(StrEnum):
     COMPLETED = "completed"
     DEGRADED = "degraded"
+    FAILED = "failed"
+
+
+class AliveResult(StrEnum):
+    OK = "ok"
     FAILED = "failed"
 
 
@@ -78,6 +85,9 @@ class ApiMetrics:
         self._create_search_instruments(meter)
         self._create_indexing_instruments(meter)
         self._create_guard_instruments(meter)
+        self._alive_check_runs = meter.create_counter(
+            "code_reviewer.alive_check.runs", unit="{call}", description="Daily probe calls to a model tier, by result"
+        )
 
     def record_review_started(self, kind: ReviewKind, queue_wait_seconds: float) -> None:
         """Reports how long a review job waited before a worker picked it up."""
@@ -144,6 +154,10 @@ class ApiMetrics:
     def record_unfinished_indexings(self, unfinished: int) -> None:
         """Reports how many unfinished indexings a user had when the cap was checked."""
         self._unfinished_indexings.record(unfinished)
+
+    def record_alive_check(self, tier: str, model: str, result: AliveResult) -> None:
+        """Counts one probe call made to a model tier and whether it came back as a parsed review."""
+        self._alive_check_runs.add(1, {TIER: tier, MODEL: model, RESULT: result.value})
 
     def _create_guard_instruments(self, meter: Meter) -> None:
         """Creates the instruments that describe the cost guards."""
