@@ -25,7 +25,8 @@ from code_reviewer.schemas.review import Incident, Priority
 from evaluation.incidents import highest_priority
 from evaluation.labels import FixtureLabel, label_folders, load_labels
 from evaluation.result_paths import REASONING_LOG_SUFFIX, result_files
-from evaluation.reviewer import LabelReviewer, production_llm_for
+from evaluation.reviewer import LabelReviewer, production_llm_for, prompt_hash_for
+from evaluation.run_record import build_run_record
 from evaluation.scoring import AgentScore, EvaluationReport, LabelResult, score_agent
 from evaluation.transcript import RunTranscript
 from evaluation.transcript_report import render_reasoning_log, render_transcript_report
@@ -145,11 +146,13 @@ def evaluate_agent(folder: str, options: RunOptions, llm: LLMInterface) -> list[
 
 
 def build_report(options: RunOptions, results: dict[str, list[LabelResult]], llm: LLMInterface) -> EvaluationReport:
-    """Score every agent and stamp the report with the model each agent actually ran on."""
+    """Score every agent and stamp the report with the model, prompt and code each agent actually ran on."""
+    prompt_hashes = {folder: prompt_hash_for(folder, llm) for folder in results}
     return EvaluationReport(
         model_by_agent={folder: production_llm_for(folder, llm).model_name for folder in results},
         runs_per_label=options.runs,
         created_at=datetime.now(timezone.utc),
+        run_record=build_run_record(prompt_hashes),
         scores=[score_agent(folder, folder_results) for folder, folder_results in results.items()],
         results=results,
     )
@@ -205,6 +208,7 @@ def report_of_agent(report: EvaluationReport, folder: str) -> EvaluationReport:
         model_by_agent={folder: report.model_by_agent[folder]},
         runs_per_label=report.runs_per_label,
         created_at=report.created_at,
+        run_record=report.run_record.only(folder) if report.run_record else None,
         scores=[score for score in report.scores if score.agent == folder],
         results={folder: report.results[folder]},
     )

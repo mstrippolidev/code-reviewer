@@ -26,6 +26,7 @@ from code_reviewer.schemas.submission import SubmittedFile
 from code_reviewer.telemetry.run_transcript import capture_transcript
 from evaluation.incidents import count_invalid_lines
 from evaluation.labels import FixtureLabel
+from evaluation.run_record import hash_prompt
 from evaluation.transcript import RunTranscript, transcript_of
 from tests.call_depth_scenario import CallDepthScenario
 from tests.helpers import FIXTURES_DIR, load_fixture
@@ -70,6 +71,12 @@ CODE_KEY_BY_FOLDER: dict[str, CodeKey] = {
 def production_llm_for(folder: str, llm: LLMInterface) -> LLMInterface:
     """The model production gives this folder's agent: the registry's own routing, fast tier included."""
     return llm.for_code_key(CODE_KEY_BY_FOLDER[folder])
+
+
+def prompt_hash_for(folder: str, llm: LLMInterface) -> str:
+    """Fingerprint of the system prompt production gives this folder's agent."""
+    agent = AGENT_CLASS_BY_FOLDER[folder](llm=production_llm_for(folder, llm))
+    return hash_prompt(agent.get_system_prompt())
 
 
 def pairing_of(label: FixtureLabel) -> Pairing:
