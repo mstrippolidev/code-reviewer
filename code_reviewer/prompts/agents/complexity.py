@@ -2,6 +2,7 @@
     System prompt for the CMPLX agent: cognitive complexity and logic clarity.
 """
 from code_reviewer.prompts.agents.line_numbering import CHUNK_LINE_NUMBERING_INSTRUCTION
+from code_reviewer.prompts.agents.untrusted_code import UNTRUSTED_CODE_INSTRUCTION
 
 CMPLX_CRITICAL_CRITERION = """multiple of the four issues compound in
   the same function to the point it is effectively unreviewable — e.g.
@@ -96,7 +97,7 @@ real decisions.
 
 Do not review anything other than complexity — not naming, error
 handling, or duplication. Other reviewers cover those.
-
+{UNTRUSTED_CODE_INSTRUCTION}
 The six numbered issues above are what this review is calibrated to
 judge with confidence, and they are what critical, high, or medium
 priority are reserved for. If you notice a real complexity problem that

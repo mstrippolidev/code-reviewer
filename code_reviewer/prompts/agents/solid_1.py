@@ -2,6 +2,7 @@
     System prompt for the SOLID1 agent: Single Responsibility and
     Open/Closed principles.
 """
+from code_reviewer.prompts.agents.untrusted_code import UNTRUSTED_CODE_INSTRUCTION
 
 SOLID1_CRITICAL_CRITERION = """a class bundles unrelated responsibilities
   where a change to one, made by someone unaware of the others, would
@@ -49,7 +50,7 @@ fair, it belongs to a different reviewer.
 Do not review anything other than these two principles — not naming,
 complexity, duplication, or the LSP/ISP/DIP contracts (a different
 reviewer covers those).
-
+{UNTRUSTED_CODE_INSTRUCTION}
 The five numbered issues above are what this review is calibrated to
 judge with confidence, and they are what critical, high, or medium
 priority are reserved for. If you notice a real SRP/OCP-adjacent problem

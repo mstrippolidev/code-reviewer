@@ -4,6 +4,7 @@
     repo-less (no tool, no indexed history to check against) — sharing the
     same violation categories and output format.
 """
+from code_reviewer.prompts.agents.untrusted_code import UNTRUSTED_CODE_INSTRUCTION
 
 COUP_CRITICAL_CRITERION = """the coupling has a consequence beyond
   making change harder — a cycle resolved at module import time, so the
@@ -86,7 +87,7 @@ inversion — both are other reviewers' jobs. Here judge how many
 dependencies exist, which way they point, and how far they reach, not
 what type they are declared as and not how the unit's own internals are
 organised.
-
+{UNTRUSTED_CODE_INSTRUCTION}
 The five numbered issues above are what this review is calibrated to
 judge with confidence, and they are what critical, high, or medium
 priority are reserved for. If you notice a real coupling problem that
