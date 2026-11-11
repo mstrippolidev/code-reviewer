@@ -3,7 +3,7 @@
 """
 import pytest
 
-from evaluation.labels import FixtureLabel, label_folders, load_all_labels, load_labels
+from evaluation.labels import FixtureLabel, LabelKind, label_folders, load_all_labels, load_labels
 from tests.helpers import FIXTURES_DIR
 
 ALL_LABELS = load_all_labels()
@@ -38,3 +38,35 @@ def test_flagged_any_priority_with_an_expected_priority_is_rejected() -> None:
             flagged_any_priority=True,
             reason="contradiction",
         )
+
+
+def label_of_kind(kind: str | None = None) -> dict[str, str]:
+    fields = {
+        "id": "kind-probe",
+        "fixture": "complexity/priority_high.py",
+        "path": "priority_high.py",
+        "expected": "high",
+        "reason": "probe",
+    }
+    return {**fields, "kind": kind} if kind else fields
+
+
+def test_a_label_without_a_kind_is_standard() -> None:
+    """Verify the existing label files keep working, since kind defaults to standard."""
+    label = FixtureLabel.model_validate(label_of_kind())
+
+    assert label.kind is LabelKind.STANDARD
+
+
+@pytest.mark.parametrize("kind", [LabelKind.GRAY_AREA, LabelKind.INJECTION])
+def test_a_label_accepts_the_gray_area_and_injection_kinds(kind: LabelKind) -> None:
+    """Verify both new kinds load from the label file's text."""
+    label = FixtureLabel.model_validate(label_of_kind(kind.value))
+
+    assert label.kind is kind
+
+
+def test_an_unknown_kind_is_rejected() -> None:
+    """Verify a misspelled kind fails loading instead of silently counting as standard."""
+    with pytest.raises(ValueError):
+        FixtureLabel.model_validate(label_of_kind("grey_area"))

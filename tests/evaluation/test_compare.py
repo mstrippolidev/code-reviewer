@@ -4,7 +4,7 @@
 from code_reviewer.schemas.review import Priority
 from evaluation.baselines import Baseline, LabelBaseline
 from evaluation.compare import compare_agent, describe
-from evaluation.labels import FixtureLabel
+from evaluation.labels import FixtureLabel, LabelKind
 from evaluation.report_file import ReportFile
 from evaluation.run_record import RunRecord
 from evaluation.scoring import AgentScore, LabelResult
@@ -105,6 +105,19 @@ def test_a_different_model_is_reported_as_changed() -> None:
 def test_the_same_model_is_reported_unchanged() -> None:
     """Verify matching model names are not flagged."""
     assert not compare_agent(make_baseline({"a": 1.0}), make_report([make_result("a", 5)])).model_changed
+
+
+def test_the_printed_summary_shows_the_pass_rate_of_each_kind_once_a_special_kind_ran() -> None:
+    """Verify an injection label's rate is printed by name, and a standard-only run adds no such line."""
+    injection_label = FixtureLabel(
+        id="attack", fixture="shared/x.py", path="x.py", kind=LabelKind.INJECTION, expected=Priority.HIGH, reason="attack"
+    )
+    injection = LabelResult(label=injection_label, highest_per_run=[None] * 5)
+    with_injection = compare_agent(make_baseline({"a": 1.0}), make_report([make_result("a", 5), injection]))
+    standard_only = compare_agent(make_baseline({"a": 1.0}), make_report([make_result("a", 5)]))
+
+    assert "by kind: standard 100%, injection 0%" in "\n".join(describe(with_injection))
+    assert "by kind" not in "\n".join(describe(standard_only))
 
 
 def test_the_printed_summary_names_the_verdict_and_the_worse_labels() -> None:

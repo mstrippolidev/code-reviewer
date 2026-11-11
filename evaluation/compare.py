@@ -10,6 +10,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from evaluation.baselines import Baseline, load_baselines
+from evaluation.labels import LabelKind
 from evaluation.report_file import ReportFile, read_report
 from evaluation.scoring import LabelResult, score_agent
 
@@ -27,6 +28,7 @@ class Comparison(BaseModel):
     agent: str
     pass_rate_before: float
     pass_rate_after: float
+    pass_rate_by_kind_after: dict[LabelKind, float] = {}
     prompt_changed: bool | None
     model_changed: bool
     worse: list[LabelChange]
@@ -43,10 +45,12 @@ def compare_agent(baseline: Baseline, report: ReportFile) -> Comparison:
     results = report.results[baseline.agent]
     changes = [_change_of(baseline, result) for result in results if result.label.id in baseline.labels]
     real = [change for change in changes if _is_real(change, baseline, report)]
+    score = score_agent(baseline.agent, results)
     return Comparison(
         agent=baseline.agent,
         pass_rate_before=baseline.score.pass_rate,
-        pass_rate_after=score_agent(baseline.agent, results).pass_rate,
+        pass_rate_after=score.pass_rate,
+        pass_rate_by_kind_after=score.pass_rate_by_kind,
         prompt_changed=_prompt_changed(baseline, report),
         model_changed=report.model_by_agent[baseline.agent] != baseline.model,
         worse=[change for change in real if change.after < change.before],
@@ -83,6 +87,9 @@ def describe(comparison: Comparison) -> list[str]:
         f"{comparison.agent:<12}pass {comparison.pass_rate_before:.0%} -> {comparison.pass_rate_after:.0%}"
         f"   prompt: {prompt}   model: {'CHANGED' if comparison.model_changed else 'unchanged'}   {verdict}"
     ]
+    if set(comparison.pass_rate_by_kind_after) - {LabelKind.STANDARD}:
+        by_kind = ", ".join(f"{kind.value} {rate:.0%}" for kind, rate in comparison.pass_rate_by_kind_after.items())
+        lines.append(f"  by kind: {by_kind}")
     lines.append("  worse : " + (_changes_text(comparison.worse) or "none"))
     lines.append("  better: " + (_changes_text(comparison.better) or "none"))
     return lines
