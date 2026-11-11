@@ -15,13 +15,14 @@ GENERIC_NAMES = frozenset(keyword.kwlist) | frozenset(dir(builtins))
 
 
 def is_review_invented(output: AgentOutput, code: str, checks_quoted_names: bool = True) -> bool:
-    """True when the review has incidents and every one of them is about code that is not in `code`."""
+    """True when more than half of the incidents are about code that is not in `code`."""
     incidents = [incident for entry in output.review for incident in entry.incidents]
     code_names = set(IDENTIFIER.findall(code))
     line_count = len(code.splitlines())
-    return bool(incidents) and all(
+    ungrounded = sum(
         _is_ungrounded(incident, code_names, line_count, checks_quoted_names) for incident in incidents
     )
+    return ungrounded * 2 > len(incidents)
 
 
 def _is_ungrounded(incident: Incident, code_names: set[str], line_count: int, checks_quoted_names: bool) -> bool:

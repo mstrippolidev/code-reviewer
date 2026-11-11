@@ -3,6 +3,7 @@
 """
 from code_reviewer.agents.output_grounding import is_review_invented
 from code_reviewer.schemas.review import AgentOutput, AgentReviewEntry, CodeKey, Incident, Priority
+from tests.helpers import load_fixture
 
 CODE = "class Cart:\n    def __init__(self):\n        self.items = []\n\n    def add(self, item):\n        self.items.append(item)\n"
 
@@ -43,14 +44,25 @@ def test_quoted_names_missing_from_the_file_are_invented() -> None:
     assert is_review_invented(review, CODE)
 
 
-def test_one_incident_about_the_file_keeps_the_review() -> None:
-    """Verify a mixed review is kept, since only a review with no grounded incident is treated as invented."""
+def test_half_of_the_incidents_outside_the_file_keeps_the_review() -> None:
+    """Verify a review is kept when exactly half of its incidents are ungrounded, since only more than half fails."""
     review = output_with(
         incident("`handle_department_created` trusts the payload."),
         incident("`items` is public and mutable.", line_position="3-3"),
     )
 
     assert not is_review_invented(review, CODE)
+
+
+def test_most_incidents_outside_the_file_are_invented_even_if_one_is_real() -> None:
+    """Verify a review with one real incident among many outside the file counts as invented."""
+    review = output_with(
+        incident("The public list is exposed.", line_position="40-60"),
+        incident("The public list is exposed.", line_position="70-80"),
+        incident("`items` is public and mutable.", line_position="3-3"),
+    )
+
+    assert is_review_invented(review, CODE)
 
 
 def test_a_malformed_line_range_is_not_evidence_of_invented_code() -> None:
@@ -78,3 +90,25 @@ def test_the_name_check_can_be_switched_off_for_agents_that_read_other_files() -
 
     assert is_review_invented(review, CODE)
     assert not is_review_invented(review, CODE, checks_quoted_names=False)
+
+
+TCASE_SOURCE = load_fixture("tcase/partially_tested_source.py")
+
+
+def test_a_multi_incident_tcase_report_about_the_file_is_kept() -> None:
+    """Verify the three-incident TCASE reply seen on a real run, about the right function, is not invented."""
+    review = output_with(
+        incident("The negative-value branch that raises ValueError is unasserted.", line_position="11-12"),
+        incident("`calculate_total`'s multi-item accumulation path is unasserted.", line_position="10-13"),
+        incident("The rounding path is unasserted.", line_position="14"),
+    )
+
+    assert not is_review_invented(review, TCASE_SOURCE)
+
+
+def test_most_of_fourteen_incidents_beyond_a_short_file_are_invented() -> None:
+    """Verify 14 incidents on a 16-line file, 11 of them past the last line, fails although 3 land inside it."""
+    inside = [incident("The rounding path is unasserted.", line_position="9-10") for _ in range(3)]
+    outside = [incident("The rounding path is unasserted.", line_position=f"{40 + n}-{41 + n}") for n in range(11)]
+
+    assert is_review_invented(output_with(*inside, *outside), TCASE_SOURCE)
