@@ -28,7 +28,7 @@ from code_reviewer.agents.llm.middleware import (
 )
 from code_reviewer.agents.llm.ollama import OllamaLLM
 from code_reviewer.agents.llm.timeout import call_with_hard_timeout
-from code_reviewer.agents.output_grounding import is_review_invented
+from code_reviewer.agents.reply_check import AgentReply, ReplyProblem, ReplyRules, find_reply_problem
 from code_reviewer.config.settings import get_settings
 from code_reviewer.pipeline.call_depth.depth_follower import DepthReport
 from code_reviewer.rag.repo_data import RepoData
@@ -70,6 +70,10 @@ class AgentInvocationError(Exception):
 
 class InventedReviewError(AgentInvocationError):
     """Raised when an agent twice returned incidents about code it was not given."""
+
+
+class ReasonlessReplyError(AgentInvocationError):
+    """Raised when a reasoning model twice returned an empty review with no reasoning."""
 
 
 @dataclass(frozen=True)
@@ -116,7 +120,7 @@ class AgentBase:
         llm_factory = llm if llm is not None else OllamaLLM()
         self._model_name = llm_factory.model_name
         tools = self._build_tools()
-        self._checks_quoted_names = not tools
+        self._reply_rules = ReplyRules(checks_quoted_names=not tools, expects_reasoning=llm_factory.emits_reasoning)
         self._agent = create_agent(
             model=llm_factory.create_raw_model(),
             tools=tools,
@@ -238,23 +242,24 @@ class AgentBase:
             AgentInvocationError: If any call fails or its output cannot
                 be validated against AgentOutput.
         """
-        results = self._batch_once(chunks)
-        invented = [index for index, result in enumerate(results) if self._should_retry(result, chunks[index])]
-        if not invented:
-            return results
-        retried = self._batch_once([chunks[index] for index in invented])
-        for index, result in zip(invented, retried):
-            results[index] = self._accept_or_raise(result, chunks[index])
-        return results
+        replies = self._batch_once(chunks)
+        outputs = [reply.output for reply in replies]
+        doubtful = [index for index, reply in enumerate(replies) if self._should_retry(reply, chunks[index])]
+        if not doubtful:
+            return outputs
+        retried = self._batch_once([chunks[index] for index in doubtful])
+        for index, reply in zip(doubtful, retried):
+            outputs[index] = self._accept_or_raise(reply, chunks[index])
+        return outputs
 
-    def _batch_once(self, chunks: list[str]) -> list[AgentOutput]:
+    def _batch_once(self, chunks: list[str]) -> list[AgentReply]:
         payloads = [{"messages": [{"role": "user", "content": code}]} for code in chunks]
         config = {"max_concurrency": get_settings().max_batch_concurrency}
         try:
             results = call_with_hard_timeout(lambda: self._agent.batch(payloads, config=config))
             for result in results:
                 self._record_run_summary(result.get("messages", []))
-            return [result["structured_response"] for result in results]
+            return [AgentReply(result["structured_response"], result.get("messages", [])) for result in results]
         except Exception as error:
             logger.error("Agent %s failed to review the given code.", self._code_agent, exc_info=True)
             raise AgentInvocationError(
@@ -302,27 +307,37 @@ class AgentBase:
             AgentInvocationError: If the LLM call fails or its output
                 cannot be validated against AgentOutput.
         """
-        result = self._invoke_once(code, repo_data)
-        if not self._should_retry(result, code):
-            return result
+        reply = self._invoke_once(code, repo_data)
+        if not self._should_retry(reply, code):
+            return reply.output
         return self._accept_or_raise(self._invoke_once(code, repo_data), code)
 
-    def _should_retry(self, result: AgentOutput, code: str) -> bool:
-        """True when every incident is about code that is not in `code`; counts it as a retry."""
-        invented = is_review_invented(result, code, self._checks_quoted_names)
-        if invented:
-            logger.warning("Agent %s described code it was not given; asking again.", self._code_agent)
-            pipeline_metrics.record_invented_review(self._code_agent.value, "retried")
-        return invented
+    def _should_retry(self, reply: AgentReply, code: str) -> bool:
+        """True when the reply fails either check, so it is asked again; counts the retry."""
+        problem = find_reply_problem(reply, code, self._reply_rules)
+        if problem is None:
+            return False
+        logger.warning("Agent %s gave an untrustworthy reply (%s); asking again.", self._code_agent, problem.value)
+        self._count_reply_problem(problem, "retried")
+        return True
 
-    def _accept_or_raise(self, result: AgentOutput, code: str) -> AgentOutput:
-        """The retried result, unless it is again about code that is not there."""
-        if not is_review_invented(result, code, self._checks_quoted_names):
-            return result
-        pipeline_metrics.record_invented_review(self._code_agent.value, "failed")
-        raise InventedReviewError(f"Agent {self._code_agent} twice described code it was not given.")
+    def _accept_or_raise(self, reply: AgentReply, code: str) -> AgentOutput:
+        """The retried reply's output, unless it fails either check again."""
+        problem = find_reply_problem(reply, code, self._reply_rules)
+        if problem is None:
+            return reply.output
+        self._count_reply_problem(problem, "failed")
+        if problem is ReplyProblem.INVENTED:
+            raise InventedReviewError(f"Agent {self._code_agent} twice described code it was not given.")
+        raise ReasonlessReplyError(f"Agent {self._code_agent} twice sent an empty review with no reasoning.")
 
-    def _invoke_once(self, code: str, repo_data: RepoData | None) -> AgentOutput:
+    def _count_reply_problem(self, problem: ReplyProblem, result: str) -> None:
+        if problem is ReplyProblem.INVENTED:
+            pipeline_metrics.record_invented_review(self._code_agent.value, result)
+        else:
+            pipeline_metrics.record_reasonless_reply(self._code_agent.value, result)
+
+    def _invoke_once(self, code: str, repo_data: RepoData | None) -> AgentReply:
         messages = {
             "messages": [
                 {
@@ -338,7 +353,7 @@ class AgentBase:
         try:
             result = call_with_hard_timeout(lambda: self._agent.invoke(messages, **invoke_kwargs))
             self._record_run_summary(result.get("messages", []))
-            return result["structured_response"]
+            return AgentReply(result["structured_response"], result.get("messages", []))
         except Exception as error:
             logger.error("Agent %s failed to review the given code.", self._code_agent, exc_info=True)
             raise AgentInvocationError(

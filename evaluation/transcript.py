@@ -7,8 +7,8 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from pydantic import BaseModel, Field, computed_field
 
-REASONING_BLOCK_TYPES = ("reasoning", "thinking")
-REASONING_BLOCK_KEYS = ("reasoning", "thinking", "text")
+from code_reviewer.agents.reasoning import reasoning_of
+
 ROLE_BY_MESSAGE_TYPE = {"human": "user", "ai": "assistant", "tool": "tool", "system": "system"}
 REPLY_DETAIL_KEYS = ("model_name", "finish_reason", "native_finish_reason", "system_fingerprint")
 
@@ -52,7 +52,7 @@ def _transcript_message(message: BaseMessage) -> TranscriptMessage:
     return TranscriptMessage(
         role=ROLE_BY_MESSAGE_TYPE.get(message.type, message.type),
         text=_text_of(message.content),
-        reasoning=_reasoning_of(message),
+        reasoning=reasoning_of(message),
         tool_calls=_tool_calls_of(message),
         tool_name=message.name if isinstance(message, ToolMessage) else None,
         reply_details=_reply_details_of(message),
@@ -76,26 +76,6 @@ def _text_of(content: str | list[str | dict[str, Any]]) -> str:
 
 def _is_text_part(part: str | dict[str, Any]) -> bool:
     return isinstance(part, str) or part.get("type") == "text"
-
-
-def _reasoning_of(message: BaseMessage) -> str | None:
-    """The reasoning langchain_openrouter stores in additional_kwargs, else any reasoning content blocks."""
-    stored = message.additional_kwargs.get("reasoning_content")
-    if stored:
-        return str(stored)
-    if not isinstance(message.content, list):
-        return None
-    blocks = [_block_reasoning(part) for part in message.content if _is_reasoning_block(part)]
-    joined = "\n".join(block for block in blocks if block)
-    return joined or None
-
-
-def _is_reasoning_block(part: str | dict[str, Any]) -> bool:
-    return isinstance(part, dict) and part.get("type") in REASONING_BLOCK_TYPES
-
-
-def _block_reasoning(block: dict[str, Any]) -> str:
-    return next((str(block[key]) for key in REASONING_BLOCK_KEYS if block.get(key)), "")
 
 
 def _tool_calls_of(message: BaseMessage) -> list[TranscriptToolCall]:
