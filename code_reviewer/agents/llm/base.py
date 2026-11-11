@@ -46,6 +46,11 @@ class LLMInterface(ABC, Generic[T]):
         """Name of the model this provider instance runs, used to label metrics."""
         return self._get_model_name()
 
+    @property
+    def emits_reasoning(self) -> bool:
+        """True when this model normally sends reasoning, so a reply without any is suspect."""
+        return False
+
     def create_model(
         self, output_schema: type[T], include_raw: bool = False
     ) -> Runnable[LanguageModelInput, T | dict[str, Any]]:

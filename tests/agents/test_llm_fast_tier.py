@@ -21,6 +21,18 @@ def test_openrouter_with_an_explicit_model_keeps_it_for_fast_tier_calls() -> Non
     assert explicit_llm.for_fast_tier() is explicit_llm
 
 
+def test_only_the_configured_main_model_is_expected_to_send_reasoning() -> None:
+    """Verify the main model is held to the reasoning check while the fast tier and explicit models are not."""
+    assert OpenRouter().emits_reasoning
+    assert not OpenRouter().for_fast_tier().emits_reasoning
+    assert not OpenRouter(model_name="some/judge-model").emits_reasoning
+
+
+def test_ollama_is_not_expected_to_send_reasoning() -> None:
+    """Verify the local provider is left out of the reasoning check."""
+    assert not OllamaLLM().emits_reasoning
+
+
 def test_ollama_has_no_fast_tier_and_returns_itself() -> None:
     """Verify local Ollama, which has no fast model configured, keeps its own model."""
     ollama_llm = OllamaLLM()

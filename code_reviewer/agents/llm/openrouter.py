@@ -49,6 +49,11 @@ class OpenRouter(LLMInterface[T]):
         self._explicit_model = model_name is not None
         self._model_name = model_name or settings.openrouter_model
 
+    @property
+    def emits_reasoning(self) -> bool:
+        """True for the configured main model, which is the reasoning one; the fast tier and explicit models are not assumed to be."""
+        return self._model_name == settings.openrouter_model
+
     def for_code_key(self, code_key: CodeKey) -> "OpenRouter[T]":
         if self._explicit_model or code_key.value not in _fast_code_keys():
             return self

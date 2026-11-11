@@ -115,6 +115,10 @@ class PipelineMetrics:
         """Counts one review that described code it was not given; result is `retried` or `failed`."""
         self._invented_reviews.add(1, {CODE_KEY: code_key, RESULT: result})
 
+    def record_reasonless_reply(self, code_key: str, result: str) -> None:
+        """Counts one empty review sent with no reasoning by a reasoning model; result is `retried` or `failed`."""
+        self._reasonless_replies.add(1, {CODE_KEY: code_key, RESULT: result})
+
     def record_output_quality(self, code_key: str, quality: OutputQuality) -> None:
         """Reports what one agent concluded about one file."""
         labels = {CODE_KEY: code_key}
@@ -169,7 +173,12 @@ class PipelineMetrics:
         self._invented_reviews = meter.create_counter(
             "code_reviewer.agent.invented_reviews",
             unit="{review}",
-            description="Reviews whose incidents were all about code the agent was not given",
+            description="Reviews whose incidents were mostly about code the agent was not given",
+        )
+        self._reasonless_replies = meter.create_counter(
+            "code_reviewer.agent.reasonless_replies",
+            unit="{review}",
+            description="Empty reviews that a reasoning model sent with no reasoning",
         )
 
     def _create_llm_instruments(self, meter: Meter) -> None:
