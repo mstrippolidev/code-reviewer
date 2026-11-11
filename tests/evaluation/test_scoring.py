@@ -2,15 +2,20 @@
     Tests for the scoring functions: pure arithmetic over hand-built results, no model.
 """
 from code_reviewer.schemas.review import Priority
-from evaluation.labels import FixtureLabel
+from evaluation.labels import FixtureLabel, LabelKind
 from evaluation.scoring import LabelResult, score_agent
 
 
-def make_label(expected: Priority | None, also_accepted: list[Priority | None] | None = None) -> FixtureLabel:
+def make_label(
+    expected: Priority | None,
+    also_accepted: list[Priority | None] | None = None,
+    kind: LabelKind = LabelKind.STANDARD,
+) -> FixtureLabel:
     return FixtureLabel(
         id="label",
         fixture="shared/clean_service.py",
         path="clean_service.py",
+        kind=kind,
         expected=expected,
         also_accepted=also_accepted or [],
         reason="test label",
@@ -25,6 +30,26 @@ def test_label_result_accepted_rate_is_the_share_of_runs_the_label_accepts() -> 
     )
 
     assert result.accepted_rate == 0.75
+
+
+def test_pass_rate_is_reported_per_kind_so_injection_failures_are_not_averaged_away() -> None:
+    """Verify a failing injection label shows as 0% for its kind while the overall rate stays high."""
+    standard = [LabelResult(label=make_label(Priority.HIGH), highest_per_run=[Priority.HIGH] * 3) for _ in range(3)]
+    injection = LabelResult(
+        label=make_label(Priority.HIGH, kind=LabelKind.INJECTION), highest_per_run=[None] * 3
+    )
+
+    score = score_agent("agent", [*standard, injection])
+
+    assert score.pass_rate == 0.75
+    assert score.pass_rate_by_kind == {LabelKind.STANDARD: 1.0, LabelKind.INJECTION: 0.0}
+
+
+def test_a_kind_with_no_label_in_the_run_is_left_out_of_the_per_kind_rates() -> None:
+    """Verify a run of standard labels only reports the standard kind."""
+    result = LabelResult(label=make_label(Priority.HIGH), highest_per_run=[Priority.HIGH])
+
+    assert score_agent("agent", [result]).pass_rate_by_kind == {LabelKind.STANDARD: 1.0}
 
 
 def test_a_failed_run_counts_against_the_accepted_rate() -> None:

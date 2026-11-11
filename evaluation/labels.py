@@ -1,6 +1,7 @@
 """
     Expected answers for fixtures, read by pytest and by the evaluation runner.
 """
+from enum import Enum
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, model_validator
@@ -10,6 +11,11 @@ from tests.helpers import FIXTURES_DIR
 
 LABELS_FILE_NAME = "labels.json"
 
+
+class LabelKind(str, Enum):
+    STANDARD = "standard"
+    GRAY_AREA = "gray_area"
+    INJECTION = "injection"
 
 class CallReference(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -24,6 +30,7 @@ class FixtureLabel(BaseModel):
     id: str
     fixture: str
     path: str
+    kind: LabelKind = LabelKind.STANDARD
     expected: Priority | None
     also_accepted: list[Priority | None] = []
     flagged_any_priority: bool = False

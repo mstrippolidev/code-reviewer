@@ -9,7 +9,7 @@ from statistics import mean
 from pydantic import BaseModel, computed_field
 
 from code_reviewer.schemas.review import Incident, Priority
-from evaluation.labels import FixtureLabel
+from evaluation.labels import FixtureLabel, LabelKind
 from evaluation.run_record import RunRecord
 from evaluation.transcript import RunTranscript
 
@@ -65,6 +65,7 @@ class AgentScore(BaseModel):
     abandoned_runs: int
     invalid_line_incidents: int
     pass_rate: float
+    pass_rate_by_kind: dict[LabelKind, float] = {}
     recall: float | None
     false_positive_rate: float | None
     exact_priority_rate: float | None
@@ -85,6 +86,15 @@ def _mean_or_none(rates: list[float]) -> float | None:
     return mean(rates) if rates else None
 
 
+def _pass_rate_by_kind(results: list[LabelResult]) -> dict[LabelKind, float]:
+    """Pass rate of each kind of label the run held, so a failing injection label is not averaged away."""
+    return {
+        kind: mean(result.accepted_rate for result in results if result.label.kind is kind)
+        for kind in LabelKind
+        if any(result.label.kind is kind for result in results)
+    }
+
+
 def score_agent(agent: str, results: list[LabelResult]) -> AgentScore:
     """Score one agent over its labelled fixtures.
 
@@ -103,6 +113,7 @@ def score_agent(agent: str, results: list[LabelResult]) -> AgentScore:
         abandoned_runs=sum(result.abandoned_runs for result in results),
         invalid_line_incidents=sum(result.invalid_line_incidents for result in results),
         pass_rate=mean(result.accepted_rate for result in results),
+        pass_rate_by_kind=_pass_rate_by_kind(results),
         recall=_mean_or_none([result.flagged_rate for result in violations]),
         false_positive_rate=_mean_or_none([result.rejected_rate for result in clean]),
         exact_priority_rate=_mean_or_none([result.exact_rate for result in with_priority]),
