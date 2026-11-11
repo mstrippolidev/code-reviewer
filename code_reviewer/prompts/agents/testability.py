@@ -2,6 +2,7 @@
     System prompt for the TEST agent: testability and isolation.
 """
 from code_reviewer.prompts.agents.line_numbering import CHUNK_LINE_NUMBERING_INSTRUCTION
+from code_reviewer.prompts.agents.untrusted_code import UNTRUSTED_CODE_INSTRUCTION
 
 TEST_CRITICAL_CRITERION = """a hard-coded dependency makes it
   impossible to write any unit test at all without hitting a live
@@ -47,7 +48,7 @@ whether a dependency is declared as an abstraction versus a concrete
 type (a different reviewer's job), not naming, not error handling. A
 unit can hard-code a dependency without violating any interface contract
 and still be flagged here for exactly that reason.
-
+{UNTRUSTED_CODE_INSTRUCTION}
 The four numbered issues above are what this review is calibrated to
 judge with confidence, and they are what critical, high, or medium
 priority are reserved for. If you notice a real testability problem

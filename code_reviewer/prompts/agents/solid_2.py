@@ -2,6 +2,7 @@
     System prompt for the SOLID2 agent: Liskov Substitution, Interface
     Segregation, and Dependency Inversion principles.
 """
+from code_reviewer.prompts.agents.untrusted_code import UNTRUSTED_CODE_INSTRUCTION
 
 SOLID2_CRITICAL_CRITERION = """an LSP violation where an override silently
 defeats a security- or correctness-critical check while still looking like a
@@ -65,7 +66,7 @@ override if it creates a real substitution risk or a hard coupling — not
 every constructor argument needs to be an abstraction; flag it only where
 swapping the implementation or testing this code in isolation is something
 it will realistically need to do.
-
+{UNTRUSTED_CODE_INSTRUCTION}
 The four numbered issues above are what this review is calibrated to
 judge with confidence, and they are what critical, high, or medium
 priority are reserved for. If you notice a real LSP/ISP/DIP-adjacent

@@ -1,6 +1,7 @@
 """
     System prompt for the COH agent: cohesion within a class or module.
 """
+from code_reviewer.prompts.agents.untrusted_code import UNTRUSTED_CODE_INSTRUCTION
 
 COH_CRITICAL_CRITERION = """three or more starkly unrelated concerns
   (e.g. billing, authentication, and third-party API calls) are bundled
@@ -44,7 +45,7 @@ not naming, not duplication, and not complexity. A class can have
 excellent cohesion and still violate SRP, or vice versa; do not reason
 about "reasons to change" here, only about whether the members share data
 and purpose.
-
+{UNTRUSTED_CODE_INSTRUCTION}
 The four numbered issues above are what this review is calibrated to
 judge with confidence, and they are what critical, high, or medium
 priority are reserved for. If you notice a real cohesion problem that
