@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from code_reviewer.rag.exemplar_seeding import FIXTURE_DIR_CODE_KEYS, seed_shared_exemplars
+from code_reviewer.rag.exemplar_seeding import (
+    FIXTURE_DIR_CODE_KEYS,
+    SEED_EXEMPLARS_DIR,
+    seed_shared_exemplars,
+)
 from code_reviewer.rag.exemplars import ExemplarSource
 from code_reviewer.schemas.review import CodeKey
 
@@ -102,3 +106,15 @@ def test_an_already_populated_corpus_is_left_alone(fixtures_dir: Path) -> None:
 
     assert seed_shared_exemplars(store, fixtures_dir) == 0
     assert store.added == []
+
+
+def test_the_packaged_seed_directory_holds_a_file_for_every_retrieving_agent() -> None:
+    """Verify the folder the production Job reads exists in the image with one
+    curated file per agent, since a missing folder loads zero files and only
+    logs a warning."""
+    store = RecordingStore()
+
+    loaded = seed_shared_exemplars(store, SEED_EXEMPLARS_DIR)
+
+    assert loaded == len(FIXTURE_DIR_CODE_KEYS)
+    assert {key for key, _ in store.added} == set(FIXTURE_DIR_CODE_KEYS.values())

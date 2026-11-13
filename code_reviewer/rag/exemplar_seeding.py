@@ -22,6 +22,8 @@ FIXTURE_DIR_CODE_KEYS: dict[str, CodeKey] = {
 
 GOOD_FIXTURE_GLOB = "good_*.py"
 
+SEED_EXEMPLARS_DIR = Path(__file__).parent / "seed_exemplars"
+
 
 def seed_shared_exemplars(store: SharedExemplarStore, fixtures_dir: Path) -> int:
     """Bootstrap the repo-less corpus from hand-curated good_*.py fixtures.

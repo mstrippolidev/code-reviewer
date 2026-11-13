@@ -1,0 +1,4 @@
+namespace: code-reviewer
+
+resources:
+  - job.yaml

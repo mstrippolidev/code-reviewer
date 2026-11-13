@@ -6,4 +6,5 @@ resources:
   - ../../base/kafka
   - ../../base/redis
   - ../../base/api
+  - ../../base/exemplar-seed
   - ../../base/frontend

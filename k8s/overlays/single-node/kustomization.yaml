@@ -5,6 +5,7 @@ resources:
   - ../../base/kafka
   - ../../base/redis
   - ../../base/api
+  - ../../base/exemplar-seed
   - ../../base/frontend
 
 patches:
@@ -68,6 +69,14 @@ patches:
   - target:
       kind: Job
       name: api-db-migrate
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
+
+  - target:
+      kind: Job
+      name: api-exemplar-seed
     patch: |-
       - op: add
         path: /spec/template/spec/containers/0/imagePullPolicy
