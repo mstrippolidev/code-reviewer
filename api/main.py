@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -12,6 +13,12 @@ from api.config.settings import ApiSettings, get_api_settings
 from api.db.engine import DatabaseEngine
 from api.dependencies import get_token_cipher
 from api.exception_handlers import register_exception_handlers
+from api.exemplars.promotion_consumer import (
+    MIN_PROMOTION_JUDGES,
+    ExemplarPromotionConsumer,
+    ExemplarPromotionConsumerDependencies,
+)
+from api.exemplars.publisher import ExemplarNominationPublisher
 from api.indexing.consumer import ConsumerDependencies, consume
 from api.indexing.consumers.dlq_notifier import DlqNotifier, PrintDlqNotifier
 from api.indexing.consumers.repo_file_index_consumer import RepoFileIndexConsumerDependencies
@@ -54,9 +61,12 @@ from code_reviewer.agents.registry import build_agent_roster
 from code_reviewer.rag.chunk_explainer import ChunkExplainer
 from code_reviewer.rag.code_similarity_index import CodeSimilarityIndex
 from code_reviewer.rag.embedding.factory import build_embedding
+from code_reviewer.rag.exemplar_promotion import ExemplarPromoter
 from code_reviewer.rag.exemplars import ExemplarStore
 from code_reviewer.rag.indexer import LlamaIndexRagManager
 from code_reviewer.rag.shared_exemplars import SharedExemplarStore
+
+logger = logging.getLogger(__name__)
 
 ConsumerSpec = tuple[str, ConsumerDependencies]
 
@@ -75,12 +85,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.repo_completion_finalizer = RepoCompletionFinalizer(app.state.kafka_producer)
     embedding = build_embedding()
     app.state.rag_manager = LlamaIndexRagManager(embedding=embedding, explainer=ChunkExplainer(build_llm()))
+    app.state.exemplar_store = ExemplarStore(embedding=embedding)
     app.state.repo_progress_broadcaster = RepoProgressBroadcaster()
     app.state.agents_container = build_agent_roster(
         llm=build_llm(),
         rag_manager=app.state.rag_manager,
         code_similarity_index=CodeSimilarityIndex(embedding=embedding),
-        exemplar_store=ExemplarStore(embedding=embedding),
+        exemplar_store=app.state.exemplar_store,
         shared_exemplar_store=SharedExemplarStore(embedding=embedding),
     )
     app.state.review_progress_broadcaster = ReviewProgressBroadcaster()
@@ -95,6 +106,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     ]
     app.state.consumer_tasks.append(asyncio.create_task(_build_review_consumer(app).consume()))
     app.state.consumer_tasks.append(asyncio.create_task(_build_similar_code_consumer(app).consume()))
+    _start_promotion_consumer(app, settings)
     app.state.consumer_tasks.append(
         asyncio.create_task(ReviewProgressConsumer(app.state.review_progress_broadcaster).consume())
     )
@@ -183,8 +195,28 @@ def _build_review_consumer(app: FastAPI) -> ReviewRequestConsumer:
         progress_publisher=KafkaReviewProgressPublisher(app.state.kafka_producer),
         dlq_producer=app.state.kafka_producer,
         pull_request_loader=_build_pull_request_loader(app, get_api_settings()),
+        nomination_publisher=ExemplarNominationPublisher(app.state.kafka_producer),
     )
     return ReviewRequestConsumer(dependencies)
+
+
+def _start_promotion_consumer(app: FastAPI, settings: ApiSettings) -> None:
+    """Starts exemplar promotion only with a real panel: one judge is always unanimous, so it would gate nothing."""
+    judges = build_llm().for_judge_panel()
+    if len(judges) < MIN_PROMOTION_JUDGES:
+        logger.warning(
+            "Exemplar promotion is off: OPENROUTER_JUDGE_MODELS gives %d judge(s), need %d",
+            len(judges),
+            MIN_PROMOTION_JUDGES,
+        )
+        return
+    dependencies = ExemplarPromotionConsumerDependencies(
+        database_engine=app.state.database_engine,
+        promoter=ExemplarPromoter(app.state.exemplar_store, judges),
+        dlq_producer=app.state.kafka_producer,
+    )
+    consumer = ExemplarPromotionConsumer(dependencies, settings.kafka_bootstrap_servers)
+    app.state.consumer_tasks.append(asyncio.create_task(consumer.consume()))
 
 
 def _build_pull_request_loader(app: FastAPI, settings: ApiSettings) -> PullRequestSubmissionLoader:

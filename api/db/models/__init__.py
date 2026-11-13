@@ -1,5 +1,6 @@
 from api.db.models.agent import Agent
 from api.db.models.calibration import CalibrationLabel, CalibrationPair
+from api.db.models.exemplar_promotion import ExemplarPromotion
 from api.db.models.finding_feedback import FindingFeedback
 from api.db.models.guest_session import GuestSession
 from api.db.models.indexed_file import IndexedFile
@@ -18,6 +19,7 @@ __all__ = [
     "Agent",
     "CalibrationLabel",
     "CalibrationPair",
+    "ExemplarPromotion",
     "FindingFeedback",
     "GuestSession",
     "IndexedFile",

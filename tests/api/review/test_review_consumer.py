@@ -234,12 +234,23 @@ class FakePullRequestLoader:
         raise AssertionError("a non pull request review must not read a pull request")
 
 
+class FakeNominationPublisher:
+    """Records the jobs a finished review would have queued for exemplar promotion."""
+
+    def __init__(self) -> None:
+        self.nominated: list[ReviewJob] = []
+
+    async def nominate(self, job: ReviewJob) -> None:
+        self.nominated.append(job)
+
+
 def _make_consumer(
     *,
     session: FakeAsyncSession,
     broadcaster: FakeProgressPublisher,
     dlq_producer: FakeDlqProducer | None = None,
     pull_request_loader: object | None = None,
+    nomination_publisher: object | None = None,
 ) -> ReviewRequestConsumer:
     dependencies = ReviewRequestConsumerDependencies(
         database_engine=FakeDatabaseEngine(session),
@@ -247,6 +258,7 @@ def _make_consumer(
         progress_publisher=broadcaster,
         dlq_producer=dlq_producer or FakeDlqProducer(),
         pull_request_loader=pull_request_loader or FakePullRequestLoader(),
+        nomination_publisher=nomination_publisher or FakeNominationPublisher(),
     )
     return ReviewRequestConsumer(dependencies)
 
@@ -274,6 +286,48 @@ async def test_run_review_completes_and_stores_the_result(monkeypatch: pytest.Mo
     assert job.result["meta"]["overall_rating"] == 90.0
     assert job.completed_at is not None
     assert [event.status for event in broadcaster.published] == [ReviewJobStatus.RUNNING, ReviewJobStatus.COMPLETED]
+
+
+@pytest.mark.asyncio
+async def test_a_finished_repo_review_is_nominated_for_exemplar_promotion(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify a plain repo review hands its job to the nomination publisher once it has finished."""
+    review_msg = _make_message()
+    job = _make_job(review_msg)
+    session = FakeAsyncSession(
+        registered_repo=_make_repo(),
+        review_job=job,
+        indexed_files=[IndexedFile(id=1, repo_id=10, file_path="a.py", status=IndexedFileStatus.INDEXED, content="x = 1\n")],
+    )
+    publisher = FakeNominationPublisher()
+    consumer = _make_consumer(session=session, broadcaster=FakeProgressPublisher(), nomination_publisher=publisher)
+
+    async def fake_run_pipeline(*args, **kwargs) -> AggregatorOutput:
+        return _make_result()
+
+    monkeypatch.setattr(review_consumer, "run_pipeline", fake_run_pipeline)
+
+    await consumer._run_review(review_msg)
+
+    assert publisher.nominated == [job]
+
+
+@pytest.mark.asyncio
+async def test_a_finished_guest_review_is_not_nominated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify only repo reviews nominate: a guest review has no repo corpus to add an exemplar to."""
+    review_msg = _make_guest_message()
+    guest_file = ReviewJobFile(id=1, review_job_id=1, file_path="example.py", content="def f():\n    return 1\n")
+    session = FakeAsyncSession(review_job=_make_job(review_msg), guest_files=[guest_file])
+    publisher = FakeNominationPublisher()
+    consumer = _make_consumer(session=session, broadcaster=FakeProgressPublisher(), nomination_publisher=publisher)
+
+    async def fake_run_pipeline(*args, **kwargs) -> AggregatorOutput:
+        return _make_result()
+
+    monkeypatch.setattr(review_consumer, "run_pipeline", fake_run_pipeline)
+
+    await consumer._run_review(review_msg)
+
+    assert publisher.nominated == []
 
 
 @pytest.mark.asyncio
