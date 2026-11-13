@@ -1,5 +1,6 @@
 import { useParams } from 'react-router-dom'
 import { ReviewDashboard } from '../components/ReviewDashboard'
+import { FeedbackProvider } from '../feedback/FeedbackProvider'
 import { useAgentCatalog } from '../hooks/useAgentCatalog'
 import { useReviewStream } from '../hooks/useReviewStream'
 import { useUnauthorizedHandler } from '../hooks/useUnauthorizedHandler'
@@ -24,12 +25,14 @@ export function ReviewPage() {
   const reports = buildFileReports({ job, agentProgress, reviewedFiles, failedFiles, catalog })
 
   return (
-    <ReviewDashboard
-      job={job}
-      reports={reports}
-      catalog={catalog}
-      onOpenAnnotated={(filePath, incident) => openAnnotatedFile(reviewId, job.repo_id, filePath, incident)}
-    />
+    <FeedbackProvider reviewId={reviewId}>
+      <ReviewDashboard
+        job={job}
+        reports={reports}
+        catalog={catalog}
+        onOpenAnnotated={(filePath, incident) => openAnnotatedFile(reviewId, job.repo_id, filePath, incident)}
+      />
+    </FeedbackProvider>
   )
 }
 

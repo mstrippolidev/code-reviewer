@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import { formatLineRange, parseLineRange } from '../utils/lineRange'
+import { FeedbackButtons } from './FeedbackButtons'
 
 export const CODE_LINE_HEIGHT = 22
 
@@ -119,6 +120,7 @@ function IncidentMargin({ groups, focusedPosition, agentNamesByCodeKey }) {
             ) : null}
             <p className="margin-card-description">{incident.description}</p>
             <p className="margin-card-advice">{incident.advice}</p>
+            <FeedbackButtons incidentId={incident.incident_id} />
           </article>
         )
       })}

@@ -1,4 +1,5 @@
 import { formatLineRange } from '../utils/lineRange'
+import { FeedbackButtons } from './FeedbackButtons'
 
 export function IncidentCard({ incident, agentName, onOpenInFile }) {
   return (
@@ -20,6 +21,7 @@ export function IncidentCard({ incident, agentName, onOpenInFile }) {
         <span className="incident-advice-label">Fix</span>
         {incident.advice}
       </p>
+      <FeedbackButtons incidentId={incident.incident_id} />
     </li>
   )
 }
