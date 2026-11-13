@@ -29,6 +29,7 @@ from api.schemas.indexing import RepoRegisteredMessage
 from api.schemas.repos import RegisterRepoRequest, RepoStatusProgressMessage
 from api.security.token_cipher import TokenCipher
 from code_reviewer.rag.errors import VectorStoreDeletionError
+from code_reviewer.rag.exemplars import ExemplarStore
 from code_reviewer.rag.indexer import LlamaIndexRagManager
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ class RepoIntegrations:
     token_cipher: TokenCipher
     kafka_producer: RepoIndexProducer
     rag_manager: LlamaIndexRagManager
+    exemplar_store: ExemplarStore
 
 
 class RepoLifecycleService:
@@ -186,13 +188,16 @@ class RepoLifecycleService:
         await self._publish_registered(repo)
 
     async def _purge_indexed_content(self, repo_id: int) -> None:
-        """Removes every indexed trace of a repo — vector store first, then the IndexedFile rows —
-        without touching the RegisteredRepo row itself, so a deletion and a branch switch share this."""
+        """Removes every indexed trace of a repo — vector store and exemplars first, then the IndexedFile rows
+        and promotion decisions — without touching the RegisteredRepo row itself, so a deletion and a branch
+        switch share this."""
         try:
             await asyncio.to_thread(self._integrations.rag_manager.delete_repo, str(repo_id))
+            await asyncio.to_thread(self._integrations.exemplar_store.delete_repo, str(repo_id))
         except VectorStoreDeletionError as error:
             raise RepoPurgeError("Could not purge this repo's indexed content; repo was not unregistered") from error
         await self._repository.delete_indexed_files(repo_id)
+        await self._repository.delete_exemplar_promotions(repo_id)
 
     async def _publish_registered(self, repo: RegisteredRepo) -> None:
         await self._publish_queued(REPO_REGISTERED, self._registration_message(repo), REGISTRATION_QUEUE_FAILURE)

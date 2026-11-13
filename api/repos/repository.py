@@ -2,6 +2,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.db.models.exemplar_promotion import ExemplarPromotion
 from api.db.models.indexed_file import IndexedFile, IndexedFileStatus
 from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
 from api.db.models.user_repo import UserRepo
@@ -103,6 +104,9 @@ class RegisteredRepoRepository:
 
     async def delete_indexed_files(self, repo_id: int) -> None:
         await self._session.execute(delete(IndexedFile).where(IndexedFile.repo_id == repo_id))
+
+    async def delete_exemplar_promotions(self, repo_id: int) -> None:
+        await self._session.execute(delete(ExemplarPromotion).where(ExemplarPromotion.repo_id == repo_id))
 
     async def commit_changes(self) -> None:
         await self._session.commit()

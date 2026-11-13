@@ -60,6 +60,9 @@ class FakeRepoStore:
     async def delete_indexed_files(self, repo_id: int) -> None:
         self._calls.append(("delete_indexed_files", repo_id))
 
+    async def delete_exemplar_promotions(self, repo_id: int) -> None:
+        self._calls.append(("delete_exemplar_promotions", repo_id))
+
     async def commit_changes(self) -> None:
         return None
 
@@ -104,6 +107,14 @@ class FakeVectorStore:
         if self._delete_error:
             raise self._delete_error
         self._calls.append(("vector_store", repo_id))
+
+
+class FakeExemplarStore:
+    def __init__(self, calls: list[tuple[str, object]]) -> None:
+        self._calls = calls
+
+    def delete_repo(self, repo_id: str) -> None:
+        self._calls.append(("exemplar_store", repo_id))
 
 
 def _make_user(user_id: int = 1, token: str = "cipher-text") -> User:
@@ -162,6 +173,7 @@ def _build_service(
         token_cipher=FakeDecryptor(),
         kafka_producer=producer or FakeProducer(),
         rag_manager=FakeVectorStore(recorded_calls, delete_error),
+        exemplar_store=FakeExemplarStore(recorded_calls),
     )
     return RepoLifecycleService(store or FakeRepoStore(recorded_calls, registered), integrations, MAX_UNFINISHED_INDEXINGS)
 
@@ -268,7 +280,12 @@ async def test_register_a_failed_repo_by_its_owner_clears_the_old_content_first(
 
     await service.register(REQUEST, _make_user())
 
-    assert calls == [("vector_store", "10"), ("delete_indexed_files", 10)]
+    assert calls == [
+        ("vector_store", "10"),
+        ("exemplar_store", "10"),
+        ("delete_indexed_files", 10),
+        ("delete_exemplar_promotions", 10),
+    ]
 
 
 @pytest.mark.asyncio
@@ -365,7 +382,13 @@ async def test_delete_removes_the_vector_store_content_before_the_database_rows(
 
     await service.delete(_make_registered_repo(), _make_user())
 
-    assert calls == [("vector_store", "10"), ("delete_indexed_files", 10), ("remove", 10)]
+    assert calls == [
+        ("vector_store", "10"),
+        ("exemplar_store", "10"),
+        ("delete_indexed_files", 10),
+        ("delete_exemplar_promotions", 10),
+        ("remove", 10),
+    ]
 
 
 @pytest.mark.asyncio
