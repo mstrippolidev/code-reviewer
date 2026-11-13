@@ -6,6 +6,7 @@ from mcp_server.custom_caller_auth import CallerBearerAuth
 from mcp_server.resources.agents import AGENTS_URI, AgentsResource
 from mcp_server.tools.index_repo import IndexRepoTool
 from mcp_server.tools.repo_status import HttpRepoStatusSource, RepoStatusTools
+from mcp_server.tools.feedback import FeedbackTools
 from mcp_server.tools.review import ReviewTools
 from mcp_server.tools.similar_code import SimilarCodeTools
 
@@ -47,6 +48,10 @@ mcp.add_tool(
 mcp.add_tool(
     review_tools.review_pr,
     annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False),
+)
+mcp.add_tool(
+    FeedbackTools(api_client).rate_finding,
+    annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True),
 )
 similar_code_tools = SimilarCodeTools(api_client, status_source)
 mcp.add_tool(

@@ -16,6 +16,7 @@ from api.db.models.guest_session import GuestSession
 from api.db.models.registered_repo import RegisteredRepo
 from api.db.models.review_job import ReviewJob
 from api.db.models.user import User
+from api.feedback.rater import CallerIds
 from api.indexing.producer import RepoIndexProducer
 from api.integrations.github import GitHubOAuthClient, GitHubOAuthConfig
 from api.oauth.access_token_verifier import OAuthAccessTokenVerifier
@@ -246,6 +247,14 @@ def _optional_guest_session_id(
         return jwt_service.verify_guest_session_token(token)
     except InvalidGuestSessionTokenError:
         return None
+
+
+def get_caller_ids(
+    user_id: int | None = Depends(_optional_user_id),
+    guest_session_id: int | None = Depends(_optional_guest_session_id),
+) -> CallerIds:
+    """Every identity the request carries, for a route that serves both users and guests."""
+    return CallerIds(user_id=user_id, guest_session_id=guest_session_id)
 
 
 def require_user_or_guest(
