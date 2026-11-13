@@ -40,6 +40,7 @@ class ApiSettings(BaseSettings):
     llm_price_refresh_seconds: int = 6 * 3600
     alive_check_enabled: bool = False
     alive_check_interval_hours: int = 24
+    calibration_enabled: bool = False
     otel_capture_payloads: bool = False
     frontend_base_url: str = "http://localhost:5173"
     api_public_base_url: str = "http://localhost:8000"
