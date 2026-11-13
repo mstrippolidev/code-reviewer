@@ -19,6 +19,7 @@ from api.db.models.indexed_file import IndexedFile, IndexedFileStatus
 from api.db.models.registered_repo import RegisteredRepo
 from api.db.models.review_job import ReviewJob, ReviewJobStatus
 from api.db.models.review_job_file import ReviewJobFile
+from api.feedback.incident_recorder import IncidentRecorder
 from api.indexing.consumers.interface import ConsumerInterface
 from api.indexing.producer import RepoIndexProducer
 from api.observability.clock import seconds_since
@@ -169,7 +170,7 @@ class ReviewRequestConsumer(ConsumerInterface[ReviewRequestedMessage]):
                 self._agents_for(review_msg),
                 submission.repo_data,
                 on_file_reviewed=self._build_progress_callback(review_msg, job, session),
-                on_agent_reviewed=self._build_agent_progress_callback(review_msg),
+                on_agent_reviewed=self._build_agent_progress_callback(review_msg, job, session),
             )
         except Exception:
             self._record_run(review_msg, ReviewResult.FAILED, started)
@@ -225,17 +226,26 @@ class ReviewRequestConsumer(ConsumerInterface[ReviewRequestedMessage]):
     async def _persist_agent_entries(
         self, job: ReviewJob, file_path: str, entries: list[AgentReviewEntry], session: AsyncSession
     ) -> None:
+        recorder = IncidentRecorder(session)
         agent_entries = dict(job.agent_entries or {})
-        agent_entries[file_path] = {entry.code_key.value: entry.model_dump(mode="json") for entry in entries}
+        agent_entries[file_path] = {
+            entry.code_key.value: await recorder.stamp_entry(job.id, file_path, entry.model_dump(mode="json"))
+            for entry in entries
+        }
         job.agent_entries = agent_entries
         await session.commit()
 
     def _build_agent_progress_callback(
-        self, review_msg: ReviewRequestedMessage
+        self, review_msg: ReviewRequestedMessage, job: ReviewJob, session: AsyncSession
     ) -> Callable[[CodeKey, AgentReviewEntry], Awaitable[None]]:
         async def on_agent_reviewed(code_key: CodeKey, entry: AgentReviewEntry) -> None:
+            stamped = await IncidentRecorder(session).stamp_entry(job.id, entry.file_path, entry.model_dump(mode="json"))
+            await session.commit()
             event = ReviewAgentProgressMessage(
-                review_id=review_msg.review_id, file_path=entry.file_path, code_key=code_key, entry=entry
+                review_id=review_msg.review_id,
+                file_path=entry.file_path,
+                code_key=code_key,
+                entry=AgentReviewEntry.model_validate(stamped),
             )
             await self._dependencies.progress_publisher.publish(review_msg.review_id, event)
 
@@ -244,7 +254,7 @@ class ReviewRequestConsumer(ConsumerInterface[ReviewRequestedMessage]):
     async def _finish_job(
         self, job: ReviewJob, result: AggregatorOutput, session: AsyncSession, review_msg: ReviewRequestedMessage
     ) -> None:
-        job.result = result.model_dump(mode="json")
+        job.result = await IncidentRecorder(session).stamp_result(job.id, result.model_dump(mode="json"))
         job.status = ReviewJobStatus.COMPLETED
         job.completed_at = datetime.now(UTC).replace(tzinfo=None)
         await session.commit()
