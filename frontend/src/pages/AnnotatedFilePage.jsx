@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { fetchIndexedFileContent, fetchReviewFileContent } from '../api/client'
 import { AnnotatedSource, CODE_LINE_HEIGHT } from '../components/AnnotatedSource'
 import { RatingBadge } from '../components/RatingBadge'
+import { FeedbackProvider } from '../feedback/FeedbackProvider'
 import { useAgentCatalog } from '../hooks/useAgentCatalog'
 import { useReviewStream } from '../hooks/useReviewStream'
 import { useUnauthorizedHandler } from '../hooks/useUnauthorizedHandler'
@@ -81,12 +82,14 @@ export function AnnotatedFilePage() {
         </p>
       ) : null}
       {pendingMessage ? <p className="note annotated-pending">{pendingMessage}</p> : null}
-      <AnnotatedSource
-        content={content}
-        incidents={incidents}
-        focusedPosition={focusedPosition}
-        agentNamesByCodeKey={agentNamesByCodeKey}
-      />
+      <FeedbackProvider reviewId={reviewId}>
+        <AnnotatedSource
+          content={content}
+          incidents={incidents}
+          focusedPosition={focusedPosition}
+          agentNamesByCodeKey={agentNamesByCodeKey}
+        />
+      </FeedbackProvider>
     </div>
   )
 }
