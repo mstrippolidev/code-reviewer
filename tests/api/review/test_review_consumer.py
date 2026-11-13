@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime
 
 import pytest
+from sqlalchemy.sql.dml import Insert
 
 from api.db.models.indexed_file import IndexedFile, IndexedFileStatus
 from api.db.models.registered_repo import RegisteredRepo, RepoIndexStatus
@@ -27,9 +28,12 @@ from code_reviewer.schemas.review import (
     AgentReviewEntry,
     AggregatedReviewEntry,
     AggregatorOutput,
+    AttributedIncident,
     CodeKey,
+    Incident,
     Meta,
     PrRecommendation,
+    Priority,
     ReviewScope,
     SizeStatus,
     SkippedFile,
@@ -75,6 +79,8 @@ class FakeAsyncSession:
         self.indexed_files = indexed_files or []
         self.guest_files = guest_files or []
         self.commit_count = 0
+        self.next_incident_id = 100
+        self.recording_error: Exception | None = None
 
     async def __aenter__(self) -> "FakeAsyncSession":
         return self
@@ -82,7 +88,12 @@ class FakeAsyncSession:
     async def __aexit__(self, *exc_info) -> None:
         return None
 
+    def begin_nested(self) -> "FakeAsyncSession":
+        return self
+
     async def scalar(self, statement) -> object | None:
+        if isinstance(statement, Insert):
+            return self._next_incident_id()
         entity = statement.column_descriptions[0]["entity"]
         if entity is ReviewJob:
             return self.review_job
@@ -95,6 +106,12 @@ class FakeAsyncSession:
 
     async def commit(self) -> None:
         self.commit_count += 1
+
+    def _next_incident_id(self) -> int:
+        if self.recording_error is not None:
+            raise self.recording_error
+        self.next_incident_id += 1
+        return self.next_incident_id
 
 
 class FakeDatabaseEngine:
@@ -345,6 +362,97 @@ async def test_execute_pipeline_persists_agent_entries_per_file(monkeypatch: pyt
     assert job.agent_entries["a.py"]["VAR"]["rating"] == 100
     assert job.agent_entries["b.py"]["ERR"]["rating"] == 80
     assert job.agent_entries["a.py"].keys() == {"VAR"}, "b.py's entries must not leak into a.py's"
+
+
+def _incident() -> Incident:
+    return Incident(priority=Priority.HIGH, line_position="1-2", description="mixed concerns", advice="split it")
+
+
+def _single_file_session(review_msg: ReviewRequestedMessage, job: ReviewJob) -> FakeAsyncSession:
+    return FakeAsyncSession(
+        registered_repo=_make_repo(),
+        review_job=job,
+        indexed_files=[IndexedFile(id=1, repo_id=10, file_path="a.py", status=IndexedFileStatus.INDEXED, content="x = 1\n")],
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_live_agent_event_carries_the_incident_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    review_msg = _make_message()
+    job = _make_job(review_msg)
+    broadcaster = FakeProgressPublisher()
+    consumer = _make_consumer(session=_single_file_session(review_msg, job), broadcaster=broadcaster)
+    entry = AgentReviewEntry(file_path="a.py", code_key=CodeKey.SOLID1, incidents=[_incident()], rating=85)
+
+    async def fake_run_pipeline(*args, on_agent_reviewed=None, **kwargs) -> AggregatorOutput:
+        await on_agent_reviewed(CodeKey.SOLID1, entry)
+        return _make_result()
+
+    monkeypatch.setattr(review_consumer, "run_pipeline", fake_run_pipeline)
+
+    await consumer._run_review(review_msg)
+
+    agent_event = next(event for event in broadcaster.published if isinstance(event, ReviewAgentProgressMessage))
+    assert agent_event.entry.incidents[0].incident_id == 101
+
+
+@pytest.mark.asyncio
+async def test_the_stored_agent_entries_carry_the_incident_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    review_msg = _make_message()
+    job = _make_job(review_msg)
+    consumer = _make_consumer(session=_single_file_session(review_msg, job), broadcaster=FakeProgressPublisher())
+    entry = AgentReviewEntry(file_path="a.py", code_key=CodeKey.SOLID1, incidents=[_incident()], rating=85)
+
+    async def fake_run_pipeline(*args, on_file_reviewed=None, **kwargs) -> AggregatorOutput:
+        await on_file_reviewed("a.py", False, [entry])
+        return _make_result()
+
+    monkeypatch.setattr(review_consumer, "run_pipeline", fake_run_pipeline)
+
+    await consumer._run_review(review_msg)
+
+    assert job.agent_entries["a.py"]["SOLID1"]["incidents"][0]["incident_id"] == 101
+    assert entry.incidents[0].incident_id is None, "the pipeline's own entry must not be changed"
+
+
+@pytest.mark.asyncio
+async def test_the_stored_result_carries_the_incident_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    review_msg = _make_message()
+    job = _make_job(review_msg)
+    consumer = _make_consumer(session=_single_file_session(review_msg, job), broadcaster=FakeProgressPublisher())
+    file_review = _make_agent_entry(file_path="a.py", agents_failed=[]).model_copy(
+        update={"incidents": [AttributedIncident(**_incident().model_dump(), code_key=CodeKey.SOLID1)]}
+    )
+
+    async def fake_run_pipeline(*args, **kwargs) -> AggregatorOutput:
+        return _make_result(review=[file_review])
+
+    monkeypatch.setattr(review_consumer, "run_pipeline", fake_run_pipeline)
+
+    await consumer._run_review(review_msg)
+
+    assert job.result["review"][0]["incidents"][0]["incident_id"] == 101
+
+
+@pytest.mark.asyncio
+async def test_a_review_still_completes_when_recording_incidents_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    review_msg = _make_message()
+    job = _make_job(review_msg)
+    session = _single_file_session(review_msg, job)
+    session.recording_error = RuntimeError("database refused the insert")
+    consumer = _make_consumer(session=session, broadcaster=FakeProgressPublisher())
+    entry = AgentReviewEntry(file_path="a.py", code_key=CodeKey.SOLID1, incidents=[_incident()], rating=85)
+
+    async def fake_run_pipeline(*args, on_file_reviewed=None, **kwargs) -> AggregatorOutput:
+        await on_file_reviewed("a.py", False, [entry])
+        return _make_result()
+
+    monkeypatch.setattr(review_consumer, "run_pipeline", fake_run_pipeline)
+
+    await consumer._run_review(review_msg)
+
+    assert job.status == ReviewJobStatus.COMPLETED
+    assert job.agent_entries["a.py"]["SOLID1"]["incidents"][0]["incident_id"] is None
 
 
 @pytest.mark.asyncio

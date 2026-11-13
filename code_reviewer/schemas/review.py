@@ -1,6 +1,7 @@
 from enum import Enum
 
 from pydantic import BaseModel, Field
+from pydantic.json_schema import SkipJsonSchema
 
 
 class CodeKey(str, Enum):
@@ -63,6 +64,7 @@ class Incident(BaseModel):
     advice: str = Field(
         description="A concrete, actionable fix — what to rename, split, or extract."
     )
+    incident_id: SkipJsonSchema[int | None] = None
 
 
 class AttributedIncident(Incident):
