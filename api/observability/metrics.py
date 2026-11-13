@@ -9,6 +9,7 @@ from enum import StrEnum
 from opentelemetry import metrics
 from opentelemetry.metrics import Meter
 
+from api.db.models.finding_feedback import FeedbackReason, FeedbackVerdict
 from api.db.models.indexed_file import IndexedFileStatus
 from api.db.models.registered_repo import RepoIndexStatus
 from api.db.models.similar_code_search import SimilarCodeSearchStatus
@@ -32,6 +33,10 @@ GUARD = "code_reviewer.guard"
 SCOPE = "code_reviewer.scope"
 TIER = "code_reviewer.tier"
 MODEL = "code_reviewer.model"
+CODE_KEY = "code_reviewer.code_key"
+VERDICT = "code_reviewer.verdict"
+REASON = "code_reviewer.reason"
+NO_REASON = "none"
 
 
 class ReviewResult(StrEnum):
@@ -87,6 +92,11 @@ class ApiMetrics:
         self._create_guard_instruments(meter)
         self._alive_check_runs = meter.create_counter(
             "code_reviewer.alive_check.runs", unit="{call}", description="Daily probe calls to a model tier, by result"
+        )
+        self._feedback = meter.create_counter(
+            "code_reviewer.feedback.submitted",
+            unit="{rating}",
+            description="Thumbs up or down on a finding, by agent, verdict and reason",
         )
 
     def record_review_started(self, kind: ReviewKind, queue_wait_seconds: float) -> None:
@@ -154,6 +164,11 @@ class ApiMetrics:
     def record_unfinished_indexings(self, unfinished: int) -> None:
         """Reports how many unfinished indexings a user had when the cap was checked."""
         self._unfinished_indexings.record(unfinished)
+
+    def record_feedback(self, code_key: str, verdict: FeedbackVerdict, reason: FeedbackReason | None) -> None:
+        """Counts one rating of a finding; the thumbs-down share per agent is a drift signal."""
+        reason_label = reason.value if reason is not None else NO_REASON
+        self._feedback.add(1, {CODE_KEY: code_key, VERDICT: verdict.value, REASON: reason_label})
 
     def record_alive_check(self, tier: str, model: str, result: AliveResult) -> None:
         """Counts one probe call made to a model tier and whether it came back as a parsed review."""
