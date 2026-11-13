@@ -8,6 +8,7 @@ const REASONS = [
   { value: 'wrong_severity', label: 'Wrong severity' },
   { value: 'other', label: 'Something else' },
 ]
+const OTHER_REASON = 'other'
 const MAX_NOTE_LENGTH = 500
 
 export function FeedbackButtons({ incidentId }) {
@@ -35,8 +36,15 @@ export function FeedbackButtons({ incidentId }) {
 
   function startThumbsDown() {
     setReason(current?.reason ?? null)
-    setNote(current?.note ?? '')
+    setNote(current?.reason === OTHER_REASON ? (current?.note ?? '') : '')
     setIsAskingWhy(true)
+  }
+
+  function chooseReason(value) {
+    setReason(value)
+    if (value !== OTHER_REASON) {
+      setNote('')
+    }
   }
 
   return (
@@ -70,7 +78,7 @@ export function FeedbackButtons({ incidentId }) {
           className="feedback-form"
           onSubmit={(event) => {
             event.preventDefault()
-            send({ verdict: 'down', reason, note })
+            send({ verdict: 'down', reason, note: reason === OTHER_REASON ? note : '' })
           }}
         >
           <fieldset className="feedback-reasons">
@@ -81,20 +89,22 @@ export function FeedbackButtons({ incidentId }) {
                   type="radio"
                   name={`reason-${incidentId}`}
                   checked={reason === option.value}
-                  onChange={() => setReason(option.value)}
+                  onChange={() => chooseReason(option.value)}
                 />
                 {option.label}
               </label>
             ))}
           </fieldset>
-          <textarea
-            className="feedback-note"
-            rows={2}
-            maxLength={MAX_NOTE_LENGTH}
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-            placeholder="Not in the list? Tell us what was wrong (optional)."
-          />
+          {reason === OTHER_REASON ? (
+            <textarea
+              className="feedback-note"
+              rows={2}
+              maxLength={MAX_NOTE_LENGTH}
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              placeholder="Tell us what was wrong (optional)."
+            />
+          ) : null}
           <div className="feedback-actions">
             <button type="button" className="feedback-cancel" onClick={() => setIsAskingWhy(false)}>
               Cancel
