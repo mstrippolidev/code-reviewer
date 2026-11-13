@@ -26,7 +26,9 @@ from api.indexing.repo_progress_broadcaster import RepoProgressBroadcaster
 from api.integrations.github import GitHubOAuthClient, GitHubOAuthConfig
 from api.integrations.github_pull_requests import GitHubPullRequestClient
 from api.logging_config import configure_logging
+from api.observability.alive_check import AliveCheck
 from api.observability.llm_cost import start_cost_tracking
+from api.observability.metrics import api_metrics
 from api.observability.telemetry import configure_metrics, configure_telemetry, instrument_fastapi
 from api.review.pull_request_files import PullRequestFileFetcher
 from api.review.pull_request_loader import PullRequestSubmissionLoader
@@ -94,9 +96,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.consumer_tasks.append(
         asyncio.create_task(ReviewProgressConsumer(app.state.review_progress_broadcaster).consume())
     )
+    if settings.alive_check_enabled:
+        interval_seconds = settings.alive_check_interval_hours * 3600
+        app.state.alive_check = AliveCheck(build_llm(), api_metrics, interval_seconds)
+        app.state.alive_check.start()
 
     yield
 
+    if settings.alive_check_enabled:
+        await app.state.alive_check.stop()
     for task in app.state.consumer_tasks:
         task.cancel()
     for task in app.state.consumer_tasks:

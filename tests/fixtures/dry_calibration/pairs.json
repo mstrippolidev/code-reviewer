@@ -1,0 +1,682 @@
+[
+  {
+    "pair_id": "38e8271b9b38",
+    "left": {
+      "file_path": "code_reviewer/pipeline/call_depth/report_builder.py",
+      "chunk_name": "CallDepthReportBuilder",
+      "start_line": 28,
+      "end_line": 73,
+      "code": "class CallDepthReportBuilder:\n    def __init__(self, rag_manager: LlamaIndexRagManager | None = None) -> None:\n        self._rag_manager = rag_manager\n\n    def build(self, prepared_files: list[PreparedFile]) -> list[PreparedFile]:\n        follower = self._follower_for(prepared_files)\n        return [self._with_reports(prepared_file, follower) for prepared_file in prepared_files]\n\n    def _follower_for(self, prepared_files: list[PreparedFile]) -> CallDepthFollower:\n        sources = {\n            prepared_file.source_file.file_path: prepared_file.source_file.content\n            for prepared_file in prepared_files\n            if self._is_python(prepared_file)\n        }\n        return CallDepthFollower(ProjectFiles(sources, self._loader_for(prepared_files)), ThinBodyClassifier())\n\n    def _loader_for(self, prepared_files: list[PreparedFile]) -> ChunkFileLoader | None:\n        repo_data = next((file.repo_data for file in prepared_files if file.repo_data), None)\n        if self._rag_manager is None or repo_data is None:\n            return None\n        return ChunkFileLoader(self._rag_manager, repo_data)\n\n    def _with_reports(self, prepared_file: PreparedFile, follower: CallDepthFollower) -> PreparedFile:\n        if not self._is_walked(prepared_file):\n            return prepared_file\n        return prepared_file.model_copy(update={\"call_depth_reports\": self._reports_for(prepared_file, follower)})\n\n    def _reports_for(self, prepared_file: PreparedFile, follower: CallDepthFollower) -> list[DepthReport]:\n        file_path = prepared_file.source_file.file_path\n        try:\n            return follower.reports_for(file_path)\n        except UnknownEntry:\n            return []\n        except Exception:\n            logger.exception(\"Call-depth report failed for file_path=%s; reviewing it without one\", file_path)\n            return []\n\n    def _is_python(self, prepared_file: PreparedFile) -> bool:\n        return prepared_file.source_file.file_path.endswith(\".py\")\n\n    def _is_walked(self, prepared_file: PreparedFile) -> bool:\n        return (\n            self._is_python(prepared_file)\n            and prepared_file.review_scope is ReviewScope.FULL\n            and prepared_file.size_status is not SizeStatus.HARD_LIMIT_EXCEEDED\n        )"
+    },
+    "right": {
+      "file_path": "code_reviewer/pipeline/dispatch.py",
+      "chunk_name": "_tcase_test_files",
+      "start_line": 225,
+      "end_line": 244,
+      "code": "@tracer.start_as_current_span(\"find_test_files_for_source_file\")\ndef _tcase_test_files(\n    prepared_file: PreparedFile, test_pairing_finder: CorrectiveTestPairingFinder | None\n) -> list[SubmittedFile]:\n    \"\"\"Falls back to the repo's indexed corpus only when no test file rode along in the submission.\n\n    A failed corpus lookup degrades to no test files, never to a failed TCASE review.\n    \"\"\"\n    if prepared_file.test_files or prepared_file.repo_data is None or test_pairing_finder is None:\n        return prepared_file.test_files\n    with track_usage(f\"pairing file={prepared_file.source_file.file_path}\"):\n        try:\n            return test_pairing_finder.find_test_files(prepared_file.repo_data, prepared_file.source_file)\n        except _PAIRING_LOOKUP_ERRORS:\n            logger.warning(\n                \"corpus test-file pairing failed file_path=%s; reviewing without test files\",\n                prepared_file.source_file.file_path,\n                exc_info=True,\n            )\n            return []"
+    }
+  },
+  {
+    "pair_id": "b37b358e8a64",
+    "left": {
+      "file_path": "api/db/models/similar_code_search.py",
+      "chunk_name": "SimilarCodeSearch",
+      "start_line": 26,
+      "end_line": 51,
+      "code": "class SimilarCodeSearch(Base):\n    \"\"\"A snippet checked against one repo's indexed history, readable only by the user who asked.\"\"\"\n\n    __tablename__ = \"similar_code_searches\"\n\n    id: Mapped[int] = mapped_column(primary_key=True)\n    search_id: Mapped[uuid.UUID] = mapped_column(Uuid, unique=True, index=True, default=uuid.uuid4)\n    repo_id: Mapped[int] = mapped_column(\n        BigInteger, ForeignKey(\"api.registered_repos.repo_id\", ondelete=\"CASCADE\"), index=True\n    )\n    requested_by_user_id: Mapped[int] = mapped_column(ForeignKey(\"api.users.id\"))\n    code: Mapped[str | None] = mapped_column(Text)\n    status: Mapped[SimilarCodeSearchStatus] = mapped_column(\n        SqlEnum(\n            SimilarCodeSearchStatus,\n            name=\"similar_code_search_status\",\n            inherit_schema=True,\n            values_callable=lambda enum_cls: [member.value for member in enum_cls],\n        ),\n        default=SimilarCodeSearchStatus.PENDING,\n        server_default=SimilarCodeSearchStatus.PENDING.value,\n    )\n    status_reason: Mapped[str | None]\n    incidents: Mapped[list | None] = mapped_column(JSON)\n    created_at: Mapped[datetime] = mapped_column(server_default=func.now())\n    completed_at: Mapped[datetime | None]"
+    },
+    "right": {
+      "file_path": "api/db/models/registered_repo.py",
+      "chunk_name": "RegisteredRepo",
+      "start_line": 24,
+      "end_line": 49,
+      "code": "class RegisteredRepo(Base):\n    \"\"\"A GitHub repo registered for review; unique per repo_id, since indexed content is scoped globally by it.\"\"\"\n\n    __tablename__ = \"registered_repos\"\n\n    id: Mapped[int] = mapped_column(primary_key=True)\n    repo_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)\n    owner_id: Mapped[int] = mapped_column(BigInteger, index=True)\n    full_name: Mapped[str]\n    default_branch: Mapped[str]\n    branch: Mapped[str]\n    commit_sha: Mapped[str | None]\n    registered_by_user_id: Mapped[int] = mapped_column(ForeignKey(\"api.users.id\"))\n    status: Mapped[RepoIndexStatus] = mapped_column(\n        SqlEnum(\n            RepoIndexStatus,\n            name=\"repo_index_status\",\n            inherit_schema=True,\n            values_callable=lambda enum_cls: [member.value for member in enum_cls],\n        ),\n        default=RepoIndexStatus.PENDING,\n        server_default=RepoIndexStatus.PENDING.value,\n    )\n    status_reason: Mapped[str | None]\n    total_files_expected: Mapped[int | None]\n    created_at: Mapped[datetime] = mapped_column(server_default=func.now())"
+    }
+  },
+  {
+    "pair_id": "0b1ec512b002",
+    "left": {
+      "file_path": "code_reviewer/rag/embedding/bedrock.py",
+      "chunk_name": "BedrockEmbeddingProvider",
+      "start_line": 21,
+      "end_line": 33,
+      "code": "class BedrockEmbeddingProvider(EmbeddingInterface):\n    \"\"\"Builds the embedding client backed by AWS Bedrock's Titan Text Embeddings V2.\"\"\"\n\n    def create_embedding_model(self) -> BaseEmbedding:\n        return TimedBedrockEmbedding(\n            region_name=settings.bedrock_region,\n            model_name=TITAN_EMBED_TEXT_V2_MODEL,\n            additional_kwargs={\"dimensions\": TITAN_EMBED_TEXT_V2_DIM, \"normalize\": True},\n        )\n\n    @property\n    def embed_dim(self) -> int:\n        return TITAN_EMBED_TEXT_V2_DIM"
+    },
+    "right": {
+      "file_path": "code_reviewer/rag/embedding/ollama.py",
+      "chunk_name": "OllamaEmbeddingProvider",
+      "start_line": 20,
+      "end_line": 31,
+      "code": "class OllamaEmbeddingProvider(EmbeddingInterface):\n    \"\"\"Builds the embedding client backed by a local Ollama instance.\"\"\"\n\n    def create_embedding_model(self) -> BaseEmbedding:\n        return TimedOllamaEmbedding(\n            model_name=settings.ollama_embed_model,\n            base_url=settings.ollama_base_url,\n        )\n\n    @property\n    def embed_dim(self) -> int:\n        return NOMIC_EMBED_TEXT_DIM"
+    }
+  },
+  {
+    "pair_id": "46e817df4b22",
+    "left": {
+      "file_path": "api/routers/reviews.py",
+      "chunk_name": "submit_repoless_review",
+      "start_line": 108,
+      "end_line": 135,
+      "code": "@router.post(\n    \"/reviews\",\n    status_code=status.HTTP_202_ACCEPTED,\n    dependencies=[Depends(limit_review_submissions), Depends(require_review_capacity)],\n)\nasync def submit_repoless_review(\n    request: RepolessReviewSubmissionRequest,\n    current_user: User = Depends(get_current_user),\n    session: AsyncSession = Depends(get_db_session),\n    kafka_producer: RepoIndexProducer = Depends(get_kafka_producer),\n    slot_keeper: ReviewSlotKeeper = Depends(get_review_slot_keeper),\n) -> ReviewJobRead:\n    await slot_keeper.reserve(current_user.id)\n    job = ReviewJob(\n        review_id=uuid.uuid4(),\n        requested_by_user_id=current_user.id,\n        file_paths=[file.file_path for file in request.files],\n        agents=[agent.value for agent in request.agents] if request.agents else None,\n        status=ReviewJobStatus.PENDING,\n    )\n    session.add(job)\n    await session.flush()\n    for file in request.files:\n        session.add(ReviewJobFile(review_job_id=job.id, file_path=file.file_path, content=file.content))\n    await session.commit()\n    await session.refresh(job)\n    await _publish_repoless_review_requested(job, kafka_producer)\n    return ReviewJobRead.model_validate(job)"
+    },
+    "right": {
+      "file_path": "api/routers/reviews.py",
+      "chunk_name": "submit_review",
+      "start_line": 43,
+      "end_line": 70,
+      "code": "@router.post(\n    \"/repos/{repo_id}/review\",\n    status_code=status.HTTP_202_ACCEPTED,\n    dependencies=[Depends(limit_review_submissions), Depends(require_review_capacity)],\n)\nasync def submit_review(\n    request: ReviewSubmissionRequest,\n    repo: RegisteredRepo = Depends(require_github_repo_access),\n    current_user: User = Depends(get_current_user),\n    session: AsyncSession = Depends(get_db_session),\n    kafka_producer: RepoIndexProducer = Depends(get_kafka_producer),\n    slot_keeper: ReviewSlotKeeper = Depends(get_review_slot_keeper),\n) -> ReviewJobRead:\n    await _require_files_are_indexed(repo.repo_id, request.file_paths, session)\n    await slot_keeper.reserve(current_user.id)\n    job = ReviewJob(\n        review_id=uuid.uuid4(),\n        repo_id=repo.repo_id,\n        requested_by_user_id=current_user.id,\n        file_paths=request.file_paths,\n        agents=[agent.value for agent in request.agents] if request.agents else None,\n        status=ReviewJobStatus.PENDING,\n    )\n    session.add(job)\n    await session.commit()\n    await session.refresh(job)\n    await _publish_review_requested(job, repo, kafka_producer)\n    return ReviewJobRead.model_validate(job)"
+    }
+  },
+  {
+    "pair_id": "c941799e67d2",
+    "left": {
+      "file_path": "code_reviewer/agents/llm/middleware.py",
+      "chunk_name": "calculate_rating",
+      "start_line": 179,
+      "end_line": 188,
+      "code": "@after_model\ndef calculate_rating(state: AgentState, runtime: Runtime) -> dict[str, Any]:\n    \"\"\"Calculate the rating for the agent's output. A turn that emitted a\n    tool call has no structured output to rate yet.\"\"\"\n    output = state.get(\"structured_response\")\n    if output is None:\n        return {}\n    for review in output.review:\n        review.rating = _calculate_rating_for_review(review)\n    return {\"structured_response\": output}"
+    },
+    "right": {
+      "file_path": "code_reviewer/agents/llm/middleware.py",
+      "chunk_name": "retry_missing_structured_output",
+      "start_line": 92,
+      "end_line": 112,
+      "code": "@wrap_model_call\ndef retry_missing_structured_output(\n    request: ModelRequest,\n    handler: Callable[[ModelRequest], ModelResponse],\n) -> ModelResponse:\n    \"\"\"Retry a turn that answered in plain text instead of calling any tool.\n\n    Raises:\n        StructuredOutputNotCalledError: If the model still hasn't called any\n            tool after MAX_RETRIES corrective retries.\n    \"\"\"\n    for attempt in range(MAX_RETRIES + 1):\n        response = handler(request)\n        if response.structured_response is not None or _made_a_tool_call(response):\n            return response\n        if attempt == MAX_RETRIES:\n            raise StructuredOutputNotCalledError(\n                f\"Model did not call any tool after {MAX_RETRIES} corrective retries.\"\n            )\n        request = _append_no_tool_call_correction(request, response)\n    raise RuntimeError(\"Unreachable: retry loop completed without returning.\")"
+    }
+  },
+  {
+    "pair_id": "39763536dab1",
+    "left": {
+      "file_path": "api/indexing/repo_progress_broadcaster.py",
+      "chunk_name": "RepoProgressBroadcaster",
+      "start_line": 18,
+      "end_line": 40,
+      "code": "class RepoProgressBroadcaster:\n    \"\"\"Fans out repo progress events to every locally-subscribed SSE connection for that repo.\"\"\"\n\n    def __init__(self) -> None:\n        self._subscribers: dict[int, set[asyncio.Queue[ProgressEvent]]] = {}\n\n    def subscribe(self, repo_id: int) -> asyncio.Queue[ProgressEvent]:\n        queue: asyncio.Queue[ProgressEvent] = asyncio.Queue()\n        self._subscribers.setdefault(repo_id, set()).add(queue)\n        return queue\n\n    def unsubscribe(self, repo_id: int, queue: asyncio.Queue[ProgressEvent]) -> None:\n        subscribers = self._subscribers.get(repo_id)\n        if subscribers is None:\n            return\n        subscribers.discard(queue)\n        if not subscribers: # if the set is empty deleted\n            del self._subscribers[repo_id]\n\n    async def publish(self, repo_id: int, event: ProgressEvent) -> None:\n        # add the envent to the queue (all queue of this repo_id)\n        for queue in list(self._subscribers.get(repo_id, set())):\n            await queue.put(event)"
+    },
+    "right": {
+      "file_path": "api/dependencies.py",
+      "chunk_name": "require_registered_repo",
+      "start_line": 260,
+      "end_line": 267,
+      "code": "async def require_registered_repo(\n    repo_id: int, session: AsyncSession = Depends(get_db_session)\n) -> RegisteredRepo:\n    \"\"\"Shared by any route (repos, reviews) that acts on an already-registered repo.\"\"\"\n    repo = await session.scalar(select(RegisteredRepo).where(RegisteredRepo.repo_id == repo_id))\n    if repo is None:\n        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f\"Repo {repo_id} is not registered\")\n    return repo"
+    }
+  },
+  {
+    "pair_id": "2d08cb9906e3",
+    "left": {
+      "file_path": "api/calibration/pair_loader.py",
+      "chunk_name": "read_pair_records",
+      "start_line": 21,
+      "end_line": 28,
+      "code": "def read_pair_records(path: Path) -> list[PairRecord]:\n    \"\"\"Parses a pairs.json file.\n\n    Raises:\n        FileNotFoundError: If the file does not exist.\n        pydantic.ValidationError: If an entry does not have the pair shape.\n    \"\"\"\n    return [PairRecord.model_validate(entry) for entry in json.loads(path.read_text())]"
+    },
+    "right": {
+      "file_path": "code_reviewer/pipeline/dispatch.py",
+      "chunk_name": "_apply_cmplx_soft_limit_incident",
+      "start_line": 247,
+      "end_line": 257,
+      "code": "def _apply_cmplx_soft_limit_incident(entries: list[AgentReviewEntry], prepared_file: PreparedFile) -> None:\n    \"\"\"Appends CMPLX's file-size incident when the file is in the soft\n    limit band \u2014 a line-count threshold, not a judgment call, so it's\n    computed deterministically rather than asked of the LLM.\"\"\"\n    if prepared_file.size_status != SizeStatus.SOFT_LIMIT:\n        return\n    cmplx_entry = next((entry for entry in entries if entry.code_key == CodeKey.CMPLX), None)\n    if cmplx_entry is None:\n        return\n    cmplx_entry.incidents.append(_soft_limit_incident(prepared_file.source_file.content))\n    cmplx_entry.rating = rating_from_incidents(cmplx_entry.incidents)"
+    }
+  },
+  {
+    "pair_id": "e5ccdc4aeaf1",
+    "left": {
+      "file_path": "code_reviewer/rag/exemplar_promotion.py",
+      "chunk_name": "ExemplarCandidate",
+      "start_line": 32,
+      "end_line": 38,
+      "code": "@dataclass(frozen=True)\nclass ExemplarCandidate:\n    \"\"\"One reviewed chunk queued for possible promotion.\"\"\"\n\n    repo_data: RepoData\n    code_key: CodeKey\n    source: ExemplarSource"
+    },
+    "right": {
+      "file_path": "api/oauth/authorization_flow.py",
+      "chunk_name": "ValidatedAuthorization",
+      "start_line": 31,
+      "end_line": 37,
+      "code": "@dataclass(frozen=True)\nclass ValidatedAuthorization:\n    client_id: str\n    client_name: str\n    redirect_uri: str\n    code_challenge: str\n    state: str | None"
+    }
+  },
+  {
+    "pair_id": "e7d08516810f",
+    "left": {
+      "file_path": "api/routers/auth.py",
+      "chunk_name": "_validated_return_to",
+      "start_line": 165,
+      "end_line": 171,
+      "code": "def _validated_return_to(return_to: str | None) -> str | None:\n    if return_to is None:\n        return None\n    try:\n        return require_safe_return_to(return_to)\n    except InvalidReturnToError as error:\n        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error"
+    },
+    "right": {
+      "file_path": "api/routers/auth.py",
+      "chunk_name": "list_repos",
+      "start_line": 103,
+      "end_line": 117,
+      "code": "@router.get(\"/repos\")\nasync def list_repos(\n    page: int = Query(default=1, ge=1),\n    current_user: User = Depends(get_current_user),\n    github_oauth_client: GitHubOAuthClient = Depends(get_github_oauth_client),\n    token_cipher: TokenCipher = Depends(get_token_cipher),\n) -> list[GitHubRepo]:\n    access_token = token_cipher.decrypt(current_user.encrypted_github_token)\n    try:\n        return await github_oauth_client.fetch_user_repos(access_token, page)\n    except GitHubRepoFetchError as error:\n        raise HTTPException(\n            status_code=status.HTTP_502_BAD_GATEWAY,\n            detail=\"Could not fetch the GitHub repo list\",\n        ) from error"
+    }
+  },
+  {
+    "pair_id": "9f73bda8f09f",
+    "left": {
+      "file_path": "api/schemas/agents.py",
+      "chunk_name": "AgentRead",
+      "start_line": 6,
+      "end_line": 16,
+      "code": "class AgentRead(BaseModel):\n    \"\"\"One review agent and the rubric it judges against, for a client explaining a code_key.\"\"\"\n\n    model_config = ConfigDict(from_attributes=True)\n\n    code_key: str\n    name: str\n    weight: float\n    category: AgentCategory\n    summary: str\n    checks: list[str]"
+    },
+    "right": {
+      "file_path": "api/schemas/reviews.py",
+      "chunk_name": "ReviewAgentProgressMessage",
+      "start_line": 106,
+      "end_line": 112,
+      "code": "class ReviewAgentProgressMessage(BaseModel):\n    \"\"\"Published the instant one agent finishes reviewing one file; relayed live over the SSE stream.\"\"\"\n\n    review_id: uuid.UUID\n    file_path: str\n    code_key: CodeKey\n    entry: AgentReviewEntry"
+    }
+  },
+  {
+    "pair_id": "9e534d0fd23e",
+    "left": {
+      "file_path": "api/security/token_cipher.py",
+      "chunk_name": "TokenCipher",
+      "start_line": 8,
+      "end_line": 21,
+      "code": "class TokenCipher:\n    \"\"\"Encrypts and decrypts the GitHub access token stored at rest.\"\"\"\n\n    def __init__(self, encryption_key: str) -> None:\n        self._fernet = Fernet(encryption_key.encode())\n\n    def encrypt(self, plaintext: str) -> str:\n        return self._fernet.encrypt(plaintext.encode()).decode()\n\n    def decrypt(self, ciphertext: str) -> str:\n        try:\n            return self._fernet.decrypt(ciphertext.encode()).decode()\n        except InvalidToken as error:\n            raise TokenDecryptionError(\"Stored token could not be decrypted\") from error"
+    },
+    "right": {
+      "file_path": "code_reviewer/agents/llm/bedrock_price_list.py",
+      "chunk_name": "_price_per_token",
+      "start_line": 80,
+      "end_line": 88,
+      "code": "def _price_per_token(product: dict[str, Any]) -> float:\n    \"\"\"Reads the first on-demand price dimension and converts its unit to a single token.\"\"\"\n    try:\n        term = next(iter(product[\"terms\"][\"OnDemand\"].values()))\n        dimension = next(iter(term[\"priceDimensions\"].values()))\n        tokens_per_unit = _TOKENS_PER_UNIT[dimension[\"unit\"].strip().lower()]\n        return float(dimension[\"pricePerUnit\"][\"USD\"]) / tokens_per_unit\n    except (KeyError, StopIteration, TypeError, ValueError, AttributeError) as error:\n        raise PriceUnavailableError(\"The AWS Price List entry has a shape or unit that is not understood.\") from error"
+    }
+  },
+  {
+    "pair_id": "be2532fb3289",
+    "left": {
+      "file_path": "api/routers/repos.py",
+      "chunk_name": "get_repo_by_name",
+      "start_line": 47,
+      "end_line": 61,
+      "code": "@router.get(\"/name\")\nasync def get_repo_by_name(\n    full_name: str = Query(min_length=1),\n    with_files: bool = False,\n    current_user: User = Depends(get_current_user),\n    repository: RegisteredRepoRepository = Depends(get_repo_repository),\n    access_checker: RepoAccessChecker = Depends(get_repo_access_checker),\n) -> RegisteredRepoWithFilesRead:\n    repo = await repository.find_by_full_name(full_name)\n    await access_checker.require_access(current_user, repo)\n    files = await repository.list_indexed_files(repo.repo_id) if with_files else []\n    return RegisteredRepoWithFilesRead(\n        repo=RegisteredRepoRead.model_validate(repo),\n        files=[IndexedFileRead.model_validate(file) for file in files],\n    )"
+    },
+    "right": {
+      "file_path": "api/routers/repos.py",
+      "chunk_name": "get_indexed_file_content",
+      "start_line": 84,
+      "end_line": 92,
+      "code": "@router.get(\"/{repo_id}/files/content\")\nasync def get_indexed_file_content(\n    file_path: str,\n    repo: RegisteredRepo = Depends(require_github_repo_access),\n    _current_user: User = Depends(get_current_user),\n    repository: RegisteredRepoRepository = Depends(get_repo_repository),\n) -> IndexedFileContentRead:\n    file = await repository.find_indexed_content(repo.repo_id, file_path)\n    return IndexedFileContentRead.model_validate(file)"
+    }
+  },
+  {
+    "pair_id": "b0bb90c54a73",
+    "left": {
+      "file_path": "code_reviewer/telemetry/incident_overlap.py",
+      "chunk_name": "_line_range",
+      "start_line": 22,
+      "end_line": 28,
+      "code": "def _line_range(line_position: str) -> tuple[int, int] | None:\n    \"\"\"A 'start-end' range, or None when it is malformed or runs backwards.\"\"\"\n    try:\n        start, end = parse_line_range(line_position)\n    except ValueError:\n        return None\n    return (start, end) if start <= end else None"
+    },
+    "right": {
+      "file_path": "code_reviewer/agents/output_grounding.py",
+      "chunk_name": "_outside_file",
+      "start_line": 34,
+      "end_line": 40,
+      "code": "def _outside_file(line_position: str, line_count: int) -> bool:\n    \"\"\"A malformed range is a formatting slip, not evidence of invented code, so it never counts.\"\"\"\n    try:\n        start, end = parse_line_range(line_position)\n    except ValueError:\n        return False\n    return start <= end and (start < 1 or end > line_count)"
+    }
+  },
+  {
+    "pair_id": "ca5c7b61b483",
+    "left": {
+      "file_path": "code_reviewer/rag/code_similarity_index.py",
+      "chunk_name": "CodeSimilarityIndex",
+      "start_line": 80,
+      "end_line": 259,
+      "code": "class CodeSimilarityIndex:\n    \"\"\"Keeps one repo's indexed chunks queryable by raw code, embedded a\n    second way beside LlamaIndexRagManager's explanation index \u2014 the same\n    corpus, so a duplicate whose auto-generated explanation diverged in\n    wording can still be found by how the code itself reads.\n    \"\"\"\n\n    def __init__(\n        self,\n        vector_store: BasePydanticVectorStore | None = None,\n        embedding: EmbeddingInterface | None = None,\n        pipeline: _DocumentPipeline | None = None,\n    ) -> None:\n        self._embedding = embedding or OllamaCodeEmbeddingProvider()\n        self._vector_store = vector_store or create_vector_store_instance(\n            embedding=self._embedding, table_name=CODE_EMBEDDINGS_TABLE\n        )\n        self._pipeline = pipeline or self._build_default_pipeline()\n        self._index: VectorStoreIndex | None = None\n\n    def _get_index(self) -> VectorStoreIndex:\n        if self._index is None:\n            self._index = VectorStoreIndex.from_vector_store(\n                vector_store=self._vector_store,\n                embed_model=self._embedding.create_embedding_model(),\n            )\n        return self._index\n\n    def _build_default_pipeline(self) -> IngestionPipeline:\n        \"\"\"Build the real split-and-embed pipeline used outside of tests.\"\"\"\n        return IngestionPipeline(transformations=[CodeChunkSplitter(), self._embedding.create_embedding_model()])\n\n    def index_file(self, repo_data: RepoData, file_path: str, content: str) -> None:\n        \"\"\"Replace one file's indexed chunks with freshly embedded ones from its current content.\n\n        Raises:\n            RepoOwnerRequiredError: If repo_data has no owner_id.\n            FileEmbeddingError: If splitting or embedding the content fails.\n            VectorStoreDeletionError: If removing the file's existing chunks fails.\n            VectorStoreWriteError: If writing the new chunks fails.\n        \"\"\"\n        if repo_data.owner_id is None:\n            raise RepoOwnerRequiredError(\n                f\"Repo {repo_data.repo_id!r} has no owner_id \u2014 required before indexing its content.\"\n            )\n\n        document = Document(text=content, metadata=self._file_metadata(repo_data, file_path))\n        nodes = self._embed_document(document)\n        self.delete_file(repo_data.repo_id, file_path)\n        self._store_nodes(nodes)\n\n    def _file_metadata(self, repo_data: RepoData, file_path: str) -> dict[str, Any]:\n        return {\n            \"repo_id\": repo_data.repo_id,\n            \"owner_id\": repo_data.owner_id,\n            \"file_path\": file_path,\n            \"commit_sha\": repo_data.commit_sha,\n            \"indexed_at\": datetime.now(UTC),\n        }\n\n    def _embed_document(self, document: Document) -> list[BaseNode]:\n        \"\"\"Raises:\n        FileEmbeddingError: If the pipeline fails.\n        \"\"\"\n        try:\n            return self._pipeline.run(documents=[document])\n        except Exception as error:\n            logger.exception(\"Failed to split and embed %s\", document.metadata[\"file_path\"])\n            raise FileEmbeddingError(f\"Could not split and embed {document.metadata['file_path']!r}\") from error\n\n    def _store_nodes(self, nodes: list[BaseNode]) -> None:\n        \"\"\"Raises:\n        VectorStoreWriteError: If the write fails.\n        \"\"\"\n        try:\n            self._vector_store.add(nodes)\n        except Exception as error:\n            logger.exception(\"Failed to write %d raw-code chunk(s) to the vector store\", len(nodes))\n            raise VectorStoreWriteError(\"Failed to write embedded chunks to the vector store\") from error\n\n    def delete_file(self, repo_id: str, file_path: str) -> None:\n        \"\"\"Raises:\n        VectorStoreDeletionError: If the delete itself fails.\n        \"\"\"\n        try:\n            self._vector_store.delete_nodes(filters=self._scope_filters(repo_id, file_path))\n        except Exception as error:\n            logger.exception(\"Failed to delete existing chunks for %r in repo %r\", file_path, repo_id)\n            raise VectorStoreDeletionError(f\"Failed to delete existing chunks for {file_path!r}\") from error\n\n    def delete_repo(self, repo_id: str) -> None:\n        \"\"\"Raises:\n        VectorStoreDeletionError: If the delete itself fails.\n        \"\"\"\n        try:\n            self._vector_store.delete_nodes(filters=self._scope_filters(repo_id))\n        except Exception as error:\n            logger.exception(\"Failed to delete all chunks for repo %r\", repo_id)\n            raise VectorStoreDeletionError(f\"Failed to delete chunks for repo {repo_id!r}\") from error\n\n    def _scope_filters(\n        self, repo_id: str, file_path: str | None = None, owner_id: str | None = None\n    ) -> MetadataFilters:\n        filters = [MetadataFilter(key=\"repo_id\", value=repo_id)]\n        if file_path:\n            filters.append(MetadataFilter(key=\"file_path\", value=file_path))\n        if owner_id:\n            filters.append(MetadataFilter(key=\"owner_id\", value=owner_id))\n        return MetadataFilters(filters=filters, condition=FilterCondition.AND)\n\n    def find_similar(self, repo_data: RepoData, code: str, top_k: int = 5) -> list[CodeMatch]:\n        \"\"\"Find the top_k indexed chunks whose raw code is most similar to\n        code, scoped to repo_data's repo/owner.\n\n        Queried directly with code \u2014 symmetric, no explanation step, since\n        every chunk in this index was embedded as code on both sides.\n\n        Raises:\n            VectorStoreQueryError: If querying the vector store fails.\n        \"\"\"\n        retriever = self._get_index().as_retriever(\n            similarity_top_k=top_k,\n            filters=self._scope_filters(repo_data.repo_id, owner_id=repo_data.owner_id),\n        )\n        try:\n            nodes = retriever.retrieve(code)\n        except Exception as error:\n            logger.exception(\"Raw-code similarity search failed for repo %r\", repo_data.repo_id)\n            raise VectorStoreQueryError(f\"Raw-code similarity search failed for repo {repo_data.repo_id!r}\") from error\n\n        return [self._as_code_match(node.node, node.get_score()) for node in nodes]\n\n    def find_lexical_matches(self, repo_data: RepoData, code: str, top_k: int = 5) -> list[LexicalMatch]:\n        \"\"\"Find the top_k indexed chunks sharing the most distinctive\n        vocabulary with code (BM25), scoped to repo_data's repo/owner.\n\n        Builds the BM25 index fresh from this repo's already-stored nodes\n        on every call rather than persisting one: a repo's corpus tops out\n        at a few thousand chunks, well within what bm25s indexes in memory\n        in milliseconds, so there is no scale here to justify a persistent\n        second copy of the same content.\n\n        Raises:\n            VectorStoreQueryError: If fetching this repo's nodes fails.\n        \"\"\"\n        nodes = self._repo_nodes(repo_data)\n        if not nodes:\n            return []\n        retriever = BM25Retriever.from_defaults(nodes=nodes, similarity_top_k=top_k)\n        results = retriever.retrieve(code)\n        return [self._as_lexical_match(result.node, result.get_score()) for result in results]\n\n    def _repo_nodes(self, repo_data: RepoData) -> list[BaseNode]:\n        try:\n            return self._vector_store.get_nodes(\n                filters=self._scope_filters(repo_data.repo_id, owner_id=repo_data.owner_id)\n            )\n        except Exception as error:\n            logger.exception(\"Failed to fetch indexed nodes for repo %r\", repo_data.repo_id)\n            raise VectorStoreQueryError(f\"Failed to fetch indexed nodes for repo {repo_data.repo_id!r}\") from error\n\n    def _as_code_match(self, node: BaseNode, score: float) -> CodeMatch:\n        return CodeMatch(\n            file_path=node.metadata[\"file_path\"],\n            chunk_name=node.metadata[\"chunk_name\"],\n            start_line=node.metadata[\"start_line\"],\n            end_line=node.metadata[\"end_line\"],\n            code=node.get_content(),\n            score=score,\n        )\n\n    def _as_lexical_match(self, node: BaseNode, score: float) -> LexicalMatch:\n        return LexicalMatch(\n            file_path=node.metadata[\"file_path\"],\n            chunk_name=node.metadata[\"chunk_name\"],\n            start_line=node.metadata[\"start_line\"],\n            end_line=node.metadata[\"end_line\"],\n            code=node.get_content(),\n            score=score,\n        )"
+    },
+    "right": {
+      "file_path": "code_reviewer/rag/indexer.py",
+      "chunk_name": "LlamaIndexRagManager",
+      "start_line": 68,
+      "end_line": 278,
+      "code": "class LlamaIndexRagManager:\n    \"\"\"Keeps one repo's indexed code corpus in sync with its current file content.\"\"\"\n\n    def __init__(\n        self,\n        vector_store: BasePydanticVectorStore | None = None,\n        embedding: EmbeddingInterface | None = None,\n        explainer: ChunkExplainer | None = None,\n        pipeline: _DocumentPipeline | None = None,\n    ) -> None:\n        self._embedding = embedding or OllamaCodeEmbeddingProvider()\n        self._explainer = explainer or ChunkExplainer()\n        self._vector_store = vector_store or create_vector_store_instance(embedding=self._embedding)\n        self._pipeline = pipeline or self._build_default_pipeline()\n        self._index: VectorStoreIndex | None = None\n\n    def _get_index(self) -> VectorStoreIndex:\n        \"\"\"Build the retrieval-side VectorStoreIndex on first.\n        \"\"\"\n        if self._index is None:\n            self._index = VectorStoreIndex.from_vector_store(\n                vector_store=self._vector_store,\n                embed_model=self._embedding.create_embedding_model(),\n            )\n        return self._index\n\n    def _build_default_pipeline(self) -> IngestionPipeline:\n        \"\"\"Build the real split-and-embed pipeline used outside of tests.\"\"\"\n        explained_chunk_splitter = ExplainedChunkSplitter(self._explainer)\n        return IngestionPipeline(transformations=[explained_chunk_splitter, self._embedding.create_embedding_model()])\n\n    def index_file(self, repo_data: RepoData, file_path: str, content: str) -> None:\n        \"\"\"Replace one file's indexed chunks with freshly embedded ones from its current content.\n\n        Raises:\n            RepoOwnerRequiredError: If repo_data has no owner_id.\n            FileEmbeddingError: If splitting or embedding the content fails.\n            VectorStoreDeletionError: If removing the file's existing chunks fails.\n            VectorStoreWriteError: If writing the new chunks fails.\n        \"\"\"\n        if repo_data.owner_id is None:\n            raise RepoOwnerRequiredError(\n                f\"Repo {repo_data.repo_id!r} has no owner_id \u2014 required before indexing its content.\"\n            )\n\n        document = Document(text=content, metadata=self._file_metadata(repo_data, file_path))\n        nodes = self._embed_document(document)\n        self.delete_file(repo_data.repo_id, file_path)\n        self._store_nodes(nodes)\n\n    def _file_metadata(self, repo_data: RepoData, file_path: str) -> dict[str, Any]:\n        \"\"\"Metadata every chunk of this file must carry to stay scoped and traceable.\"\"\"\n        return {\n            \"repo_id\": repo_data.repo_id,\n            \"owner_id\": repo_data.owner_id,\n            \"file_path\": file_path,\n            \"commit_sha\": repo_data.commit_sha,\n            \"indexed_at\": datetime.now(UTC),\n        }\n\n    def _embed_document(self, document: Document) -> list[BaseNode]:\n        \"\"\"Split and embed one document.\n\n        Raises:\n            FileEmbeddingError: If the pipeline fails.\n        \"\"\"\n        try:\n            return self._pipeline.run(documents=[document])\n        except Exception as error:\n            logger.exception(\"Failed to split and embed %s\", document.metadata[\"file_path\"])\n            raise FileEmbeddingError(\n                f\"Could not split and embed {document.metadata['file_path']!r}\"\n            ) from error\n\n    def _store_nodes(self, nodes: list[BaseNode]) -> None:\n        \"\"\"Write already-embedded nodes to the vector store.\n\n        Raises:\n            VectorStoreWriteError: If the write fails.\n        \"\"\"\n        try:\n            self._vector_store.add(nodes)\n        except Exception as error:\n            logger.exception(\"Failed to write %d embedded chunk(s) to the vector store\", len(nodes))\n            raise VectorStoreWriteError(\"Failed to write embedded chunks to the vector store\") from error\n\n    def delete_file(self, repo_id: str, file_path: str) -> None:\n        \"\"\"Remove every indexed chunk for one file. A no-op if none exist yet.\n\n        Raises:\n            VectorStoreDeletionError: If the delete itself fails.\n        \"\"\"\n        try:\n            self._vector_store.delete_nodes(filters=self._scope_filters(repo_id, file_path))\n        except Exception as error:\n            logger.exception(\"Failed to delete existing chunks for %r in repo %r\", file_path, repo_id)\n            raise VectorStoreDeletionError(f\"Failed to delete existing chunks for {file_path!r}\") from error\n\n    def _scope_filters(\n        self, repo_id: str, file_path: str | None = None, owner_id: str | None = None\n    ) -> MetadataFilters:\n        \"\"\"Build the repo_id filter every scoped operation uses, narrowed by\n        file_path and/or owner_id when given.\n        \"\"\"\n        filters = [MetadataFilter(key=\"repo_id\", value=repo_id)]\n        if file_path:\n            filters.append(MetadataFilter(key=\"file_path\", value=file_path))\n        if owner_id:\n            filters.append(MetadataFilter(key='owner_id', value=owner_id))\n\n        return MetadataFilters(filters=filters, condition=FilterCondition.AND)\n\n    def delete_repo(self, repo_id: str) -> None:\n        \"\"\"Remove every indexed chunk for a repo. A no-op if none exist yet.\n\n        Raises:\n            VectorStoreDeletionError: If the delete itself fails.\n        \"\"\"\n        try:\n            self._vector_store.delete_nodes(filters=self._scope_filters(repo_id))\n        except Exception as error:\n            logger.exception(\"Failed to delete all chunks for repo %r\", repo_id)\n            raise VectorStoreDeletionError(f\"Failed to delete chunks for repo {repo_id!r}\") from error\n\n    def find_similar(self, repo_data: RepoData, code: str, top_k: int = 5) -> list[SimilarChunk]:\n        \"\"\"Find the top_k indexed chunks whose behavior is most similar to\n        code, scoped to repo_data's repo/owner.\n\n        code is explained before embedding, since every indexed chunk was\n        embedded as an explanation rather than as raw code \u2014 embedding code\n        directly here would compare it against explanations in a shared\n        vector space neither representation was meant to occupy alone.\n\n        Raises:\n            ChunkExplanationError: If explaining code fails.\n            VectorStoreQueryError: If querying the vector store fails.\n        \"\"\"\n        explanation = self._explainer.explain(code)\n        return self.find_similar_by_query(repo_data, explanation, top_k)\n\n    def find_similar_by_query(self, repo_data: RepoData, query: str, top_k: int = 5) -> list[SimilarChunk]:\n        \"\"\"Like find_similar, but for a caller that already holds a\n        natural-language query: query is embedded as-is, with no explain step.\n\n        Raises:\n            VectorStoreQueryError: If querying the vector store fails.\n        \"\"\"\n        retriever = self._get_index().as_retriever(\n            similarity_top_k=top_k,\n            filters=self._scope_filters(repo_data.repo_id, owner_id=repo_data.owner_id),\n        )\n        try:\n            nodes = retriever.retrieve(query)\n        except Exception as error:\n            logger.exception(\"Similarity search failed for repo %r\", repo_data.repo_id)\n            raise VectorStoreQueryError(f\"Similarity search failed for repo {repo_data.repo_id!r}\") from error\n\n        return [\n            SimilarChunk(\n                file_path=node.node.metadata[\"file_path\"],\n                chunk_name=node.node.metadata[\"chunk_name\"],\n                start_line=node.node.metadata[\"start_line\"],\n                end_line=node.node.metadata[\"end_line\"],\n                text=node.node.get_content(),\n                score=node.get_score(),\n                code=node.node.metadata.get(\"code\", \"\"),\n            )\n            for node in nodes\n        ]\n\n    def list_indexed_file_paths(self, repo_id: str, owner_id: str | None) -> list[str]:\n        \"\"\"Every distinct file_path with at least one chunk indexed for this repo.\n\n        Raises:\n            VectorStoreQueryError: If the lookup fails.\n        \"\"\"\n        try:\n            nodes = self._vector_store.get_nodes(filters=self._scope_filters(repo_id, owner_id=owner_id))\n        except Exception as error:\n            logger.exception(\"Failed to list indexed files for repo %r\", repo_id)\n            raise VectorStoreQueryError(f\"Failed to list indexed files for repo {repo_id!r}\") from error\n\n        return sorted({node.metadata[\"file_path\"] for node in nodes})\n\n    def get_file_chunks(self, repo_id: str, owner_id: str | None, file_path: str) -> list[FileChunk]:\n        \"\"\"Exact lookup of one file's indexed content, for the multi-hop\n        evidence pass. Not a similarity search \u2014 the caller already knows\n        precisely which file it needs to read, so this filters the vector\n        store's metadata directly instead of running it through the ANN index.\n\n        Raises:\n            VectorStoreQueryError: If the lookup fails.\n        \"\"\"\n        try:\n            nodes = self._vector_store.get_nodes(filters=self._scope_filters(repo_id, file_path, owner_id))\n        except Exception as error:\n            logger.exception(\"Failed to look up chunks for %r in repo %r\", file_path, repo_id)\n            raise VectorStoreQueryError(f\"Failed to look up chunks for {file_path!r}\") from error\n\n        return [\n            FileChunk(\n                file_path=node.metadata[\"file_path\"],\n                chunk_name=node.metadata[\"chunk_name\"],\n                start_line=node.metadata[\"start_line\"],\n                end_line=node.metadata[\"end_line\"],\n                text=node.get_content(),\n                code=node.metadata.get(\"code\", \"\"),\n                imports=node.metadata.get(\"imports\", []),\n            )\n            for node in nodes\n        ]"
+    }
+  },
+  {
+    "pair_id": "115f6c01651d",
+    "left": {
+      "file_path": "api/oauth/access_token_verifier.py",
+      "chunk_name": "OAuthAccessTokenVerifier",
+      "start_line": 10,
+      "end_line": 30,
+      "code": "class OAuthAccessTokenVerifier:\n    \"\"\"Resolves an opaque OAuth access token to the user it was issued to; read-only, never commits.\"\"\"\n\n    def __init__(self, repository: OAuthTokenRepository, clock: Callable[[], datetime] = utc_now) -> None:\n        self._repository = repository\n        self._clock = clock\n\n    async def verify(self, access_token: str) -> int:\n        \"\"\"Returns the token's user id.\n\n        Raises InvalidOAuthAccessTokenError when the token is unknown, its family is revoked or it has expired.\n        A refresh token is not an access token and is rejected as unknown.\n        \"\"\"\n        row = await self._repository.find_by_access_hash(hash_secret(access_token))\n        if row is None:\n            raise InvalidOAuthAccessTokenError(\"unknown access token\")\n        if row.revoked_at is not None:\n            raise InvalidOAuthAccessTokenError(\"access token is revoked\")\n        if self._clock() >= row.access_expires_at:\n            raise InvalidOAuthAccessTokenError(\"access token expired\")\n        return row.user_id"
+    },
+    "right": {
+      "file_path": "api/routers/oauth.py",
+      "chunk_name": "read_client",
+      "start_line": 65,
+      "end_line": 74,
+      "code": "@router.get(\"/oauth/clients/{client_id}\")\nasync def read_client(\n    client_id: str, clients: OAuthClientService = Depends(get_oauth_client_service)\n) -> ClientPublicInfo:\n    \"\"\"Public name of a registered client, so the consent page can say who is asking for access.\"\"\"\n    try:\n        client = await clients.get(client_id)\n    except UnknownClientError as error:\n        raise OAuthProtocolError(\"invalid_client\", \"Unknown client_id\", status_code=404) from error\n    return ClientPublicInfo(client_id=client.client_id, client_name=client.client_name)"
+    }
+  },
+  {
+    "pair_id": "04b5e8b8ca95",
+    "left": {
+      "file_path": "api/indexing/consumers/dlq_notifier.py",
+      "chunk_name": "DlqNotifier",
+      "start_line": 8,
+      "end_line": 13,
+      "code": "class DlqNotifier(ABC):\n    \"\"\"One notification about a message that landed on the DLQ.\"\"\"\n\n    @abstractmethod\n    def notify(self, subject: str, body: str) -> None:\n        \"\"\"Raises: whatever the concrete sink raises on delivery failure.\"\"\""
+    },
+    "right": {
+      "file_path": "api/indexing/consumers/sns_dlq_notifier.py",
+      "chunk_name": "SnsDlqNotifier",
+      "start_line": 28,
+      "end_line": 46,
+      "code": "class SnsDlqNotifier(DlqNotifier):\n    \"\"\"Publishes each DLQ notification to one SNS topic.\"\"\"\n\n    def __init__(self, topic_arn: str, client: SnsPublisher) -> None:\n        self._topic_arn = topic_arn\n        self._client = client\n\n    @classmethod\n    def for_topic(cls, topic_arn: str) -> \"SnsDlqNotifier\":\n        \"\"\"Builds the client in the topic's own region, which may differ from the deployment's.\"\"\"\n        region = topic_arn.split(\":\")[_TOPIC_ARN_REGION_INDEX]\n        return cls(topic_arn, boto3.client(\"sns\", region_name=region))\n\n    def notify(self, subject: str, body: str) -> None:\n        try:\n            self._client.publish(TopicArn=self._topic_arn, Subject=_to_sns_subject(subject), Message=body)\n        except (BotoCoreError, ClientError) as error:\n            logger.error(\"SNS publish failed topic_arn=%s\", self._topic_arn, exc_info=error)\n            raise DlqNotificationDeliveryError(f\"Could not publish DLQ notification to {self._topic_arn}\") from error"
+    }
+  },
+  {
+    "pair_id": "e52aad694396",
+    "left": {
+      "file_path": "code_reviewer/pipeline/dispatch.py",
+      "chunk_name": "_record_standalone_skips",
+      "start_line": 94,
+      "end_line": 110,
+      "code": "def _record_standalone_skips(prepared_file: PreparedFile, agents_container: AgentsContainer) -> None:\n    \"\"\"Counts every selected agent that a standalone test file's scope leaves out.\"\"\"\n    if not _is_standalone_test_review(prepared_file):\n        return\n    left_out = [\n        *_file_agents_for(prepared_file, agents_container),\n        *(\n            agent\n            for agent in _scoped_chunk_agents(agents_container, standalone=False)\n            if agent.get_agent_key() not in _TEST_FILE_HYGIENE_KEYS\n        ),\n    ]\n    code_keys = [agent.get_agent_key() for agent in left_out]\n    if agents_container.is_selected(CodeKey.DRY):\n        code_keys.append(CodeKey.DRY)\n    for code_key in code_keys:\n        pipeline_metrics.record_agent_skip(code_key.value, STANDALONE_TEST_FILE_SKIP_REASON)"
+    },
+    "right": {
+      "file_path": "code_reviewer/pipeline/dispatch.py",
+      "chunk_name": "_apply_cmplx_soft_limit_incident",
+      "start_line": 247,
+      "end_line": 257,
+      "code": "def _apply_cmplx_soft_limit_incident(entries: list[AgentReviewEntry], prepared_file: PreparedFile) -> None:\n    \"\"\"Appends CMPLX's file-size incident when the file is in the soft\n    limit band \u2014 a line-count threshold, not a judgment call, so it's\n    computed deterministically rather than asked of the LLM.\"\"\"\n    if prepared_file.size_status != SizeStatus.SOFT_LIMIT:\n        return\n    cmplx_entry = next((entry for entry in entries if entry.code_key == CodeKey.CMPLX), None)\n    if cmplx_entry is None:\n        return\n    cmplx_entry.incidents.append(_soft_limit_incident(prepared_file.source_file.content))\n    cmplx_entry.rating = rating_from_incidents(cmplx_entry.incidents)"
+    }
+  },
+  {
+    "pair_id": "905d43bd6a6a",
+    "left": {
+      "file_path": "code_reviewer/agents/llm/bedrock.py",
+      "chunk_name": "BedrockLLM",
+      "start_line": 17,
+      "end_line": 43,
+      "code": "class BedrockLLM(LLMInterface[T]):\n    \"\"\"Builds chat models backed by AWS Bedrock's Converse API.\"\"\"\n\n    def fetch_token_prices(self, model_name: str) -> TokenPrices:\n        price_list_name = get_settings().bedrock_price_list_model\n        if not price_list_name:\n            raise PriceUnavailableError(\"Set BEDROCK_PRICE_LIST_MODEL to this model's name in the AWS Price List.\")\n        return fetch_bedrock_prices(price_list_name, settings.bedrock_region)\n\n    def _get_model_name(self) -> str:\n        return settings.bedrock_llm_model\n\n    def _get_model_provider(self) -> str:\n        return \"bedrock_converse\"\n\n    def _get_base_url(self) -> str | None:\n        return None\n\n    def _get_extra_kwargs(self) -> dict[str, Any]:\n        timeout = get_settings().llm_call_timeout_seconds\n        return {\n            \"region_name\": settings.bedrock_region,\n            \"config\": Config(connect_timeout=timeout, read_timeout=timeout),\n        }\n\n    def build_response_format(self, schema: type[T]) -> ResponseFormat[T]:\n        return ProviderStrategy(schema)"
+    },
+    "right": {
+      "file_path": "code_reviewer/rag/embedding/bedrock.py",
+      "chunk_name": "BedrockEmbeddingProvider",
+      "start_line": 21,
+      "end_line": 33,
+      "code": "class BedrockEmbeddingProvider(EmbeddingInterface):\n    \"\"\"Builds the embedding client backed by AWS Bedrock's Titan Text Embeddings V2.\"\"\"\n\n    def create_embedding_model(self) -> BaseEmbedding:\n        return TimedBedrockEmbedding(\n            region_name=settings.bedrock_region,\n            model_name=TITAN_EMBED_TEXT_V2_MODEL,\n            additional_kwargs={\"dimensions\": TITAN_EMBED_TEXT_V2_DIM, \"normalize\": True},\n        )\n\n    @property\n    def embed_dim(self) -> int:\n        return TITAN_EMBED_TEXT_V2_DIM"
+    }
+  },
+  {
+    "pair_id": "14b1ce96b3c0",
+    "left": {
+      "file_path": "api/routers/auth.py",
+      "chunk_name": "_verify_state",
+      "start_line": 174,
+      "end_line": 181,
+      "code": "def _verify_state(state: str, jwt_service: JwtTokenService) -> str | None:\n    try:\n        return jwt_service.verify_oauth_state(state)\n    except InvalidOAuthStateError as error:\n        raise HTTPException(\n            status_code=status.HTTP_400_BAD_REQUEST,\n            detail=\"Invalid or expired OAuth state\",\n        ) from error"
+    },
+    "right": {
+      "file_path": "api/dependencies.py",
+      "chunk_name": "_verify_guest_cookie",
+      "start_line": 147,
+      "end_line": 156,
+      "code": "def _verify_guest_cookie(token: str | None, jwt_service: JwtTokenService) -> int:\n    if token is None:\n        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=\"No guest session\")\n    try:\n        return jwt_service.verify_guest_session_token(token)\n    except InvalidGuestSessionTokenError as error:\n        raise HTTPException(\n            status_code=status.HTTP_401_UNAUTHORIZED,\n            detail=\"Invalid or expired guest session\",\n        ) from error"
+    }
+  },
+  {
+    "pair_id": "0fe80250fd3d",
+    "left": {
+      "file_path": "code_reviewer/rag/dry_matching.py",
+      "chunk_name": "_group_pr_chunks_by_hash",
+      "start_line": 51,
+      "end_line": 57,
+      "code": "def _group_pr_chunks_by_hash(files: list[SubmittedFile]) -> dict[str, list[StructuralMatch]]:\n    chunks_by_hash: dict[str, list[StructuralMatch]] = {}\n    for file in files:\n        for chunk in _split_file(file.file_path, file.content):\n            structural_hash = compute_structural_hash(chunk.code)\n            chunks_by_hash.setdefault(structural_hash, []).append(_as_match(file.file_path, chunk))\n    return chunks_by_hash"
+    },
+    "right": {
+      "file_path": "code_reviewer/pipeline/dispatch.py",
+      "chunk_name": "_run_chunk_agents",
+      "start_line": 168,
+      "end_line": 174,
+      "code": "def _run_chunk_agents(\n    prepared_file: PreparedFile,\n    chunk_agents: list[AgentBase],\n    splitter: CodeSplitterInterface,\n) -> list[AgentReviewEntry]:\n    code_chunks = _chunks_or_whole_file(splitter, prepared_file.source_file.content)\n    return [_run_chunked_agent(agent, prepared_file.source_file.file_path, code_chunks) for agent in chunk_agents]"
+    }
+  },
+  {
+    "pair_id": "789a00cdd3fd",
+    "left": {
+      "file_path": "api/security/rate_limit.py",
+      "chunk_name": "RateLimitExceededError",
+      "start_line": 11,
+      "end_line": 16,
+      "code": "class RateLimitExceededError(Exception):\n    \"\"\"Raised when a caller has used up their requests for the current minute.\"\"\"\n\n    def __init__(self, retry_after_seconds: int) -> None:\n        super().__init__(f\"Too many requests. Try again in {retry_after_seconds} seconds.\")\n        self.retry_after_seconds = retry_after_seconds"
+    },
+    "right": {
+      "file_path": "api/review/errors.py",
+      "chunk_name": "TooManyUnfinishedReviewsError",
+      "start_line": 13,
+      "end_line": 19,
+      "code": "class TooManyUnfinishedReviewsError(Exception):\n    \"\"\"Raised when a user already has as many reviews running or waiting as they are allowed at once.\"\"\"\n\n    def __init__(self, limit: int) -> None:\n        super().__init__(\n            f\"You already have {limit} reviews running or waiting. Wait for one to finish before starting another.\"\n        )"
+    }
+  },
+  {
+    "pair_id": "f76c1744c8ef",
+    "left": {
+      "file_path": "code_reviewer/pipeline/dispatch.py",
+      "chunk_name": "_tcase_branch",
+      "start_line": 423,
+      "end_line": 430,
+      "code": "def _tcase_branch(agents_container: AgentsContainer, prepared_file: PreparedFile) -> RunnableLambda:\n    \"\"\"Builds a branch that runs TCASE against its own paired content,\n    isolated so its own failure can't take down the other branches.\"\"\"\n    return RunnableLambda(\n        lambda ctx: _isolate_agent_failure(\n            CodeKey.TCASE, ctx[\"file_path\"], lambda: _run_tcase_agent(prepared_file, agents_container)\n        )\n    )"
+    },
+    "right": {
+      "file_path": "code_reviewer/pipeline/dispatch.py",
+      "chunk_name": "_run_tcase_agent",
+      "start_line": 212,
+      "end_line": 222,
+      "code": "def _run_tcase_agent(prepared_file: PreparedFile, agents_container: AgentsContainer) -> AgentReviewEntry:\n    \"\"\"Runs TCASE once, whole-file, via its paired test-file content \u2014\n    never chunked, regardless of size band. Both _tcase_content branches\n    (SOURCE FILE:/TEST FILE UNDER REVIEW:) prepend exactly one header line\n    before the reviewed file's own content, so TCASE's line numbers are\n    always one line ahead of the real file and need the same offsetting\n    every chunk agent already gets.\"\"\"\n    content = _tcase_content(prepared_file, agents_container.test_pairing_finder)\n    entry = agents_container.tcase_agent.execute_agent(content, prepared_file.source_file.file_path).review[0]\n    entry.incidents = offset_incidents(entry.incidents, start_line=1 - _TCASE_HEADER_LINE_COUNT)\n    return entry"
+    }
+  },
+  {
+    "pair_id": "b23e2b0a46ae",
+    "left": {
+      "file_path": "api/schemas/repos.py",
+      "chunk_name": "RepoFileProgressMessage",
+      "start_line": 58,
+      "end_line": 63,
+      "code": "class RepoFileProgressMessage(BaseModel):\n    \"\"\"Schema for the progress bar SSE\"\"\"\n    repo_id: int\n    file_path: str\n    status: IndexedFileStatus\n    status_reason: str | None"
+    },
+    "right": {
+      "file_path": "api/schemas/repos.py",
+      "chunk_name": "IndexedFileRead",
+      "start_line": 38,
+      "end_line": 47,
+      "code": "class IndexedFileRead(BaseModel):\n    \"\"\"\n        Show state of a file in a repo.\n    \"\"\"\n    model_config = ConfigDict(from_attributes=True)\n\n    file_path: str\n    status: IndexedFileStatus\n    status_reason: str | None\n    indexed_at: datetime | None"
+    }
+  },
+  {
+    "pair_id": "bd2cebe7870a",
+    "left": {
+      "file_path": "code_reviewer/rag/rag_file_sync.py",
+      "chunk_name": "RagFileSync",
+      "start_line": 25,
+      "end_line": 43,
+      "code": "class RagFileSync:\n    \"\"\"Keeps every registered index in sync with each other, so callers\n    never update one and forget another.\n    \"\"\"\n\n    def __init__(self, indexes: list[SyncableIndex]) -> None:\n        self._indexes = indexes\n\n    def index_file(self, repo_data: RepoData, file_path: str, content: str) -> None:\n        for index in self._indexes:\n            index.index_file(repo_data, file_path, content)\n\n    def delete_file(self, repo_id: str, file_path: str) -> None:\n        for index in self._indexes:\n            index.delete_file(repo_id, file_path)\n\n    def delete_repo(self, repo_id: str) -> None:\n        for index in self._indexes:\n            index.delete_repo(repo_id)"
+    },
+    "right": {
+      "file_path": "code_reviewer/rag/rag_file_sync.py",
+      "chunk_name": "SyncableIndex",
+      "start_line": 15,
+      "end_line": 22,
+      "code": "class SyncableIndex(Protocol):\n    \"\"\"Lifecycle shape shared by every index RagFileSync keeps aligned.\"\"\"\n\n    def index_file(self, repo_data: RepoData, file_path: str, content: str) -> None: ...\n\n    def delete_file(self, repo_id: str, file_path: str) -> None: ...\n\n    def delete_repo(self, repo_id: str) -> None: ..."
+    }
+  },
+  {
+    "pair_id": "ad371ccf0c37",
+    "left": {
+      "file_path": "api/schemas/github.py",
+      "chunk_name": "GitHubPullRequest",
+      "start_line": 13,
+      "end_line": 23,
+      "code": "class GitHubPullRequest(BaseModel):\n    \"\"\"The subset of a pull request this app needs to decide whether to review it and which commit to read.\"\"\"\n\n    number: int\n    state: str\n    merged: bool\n    head_sha: str\n    base_ref: str\n    base_repo_id: int\n    base_repo_full_name: str\n    changed_files: int"
+    },
+    "right": {
+      "file_path": "api/review/pull_request_files.py",
+      "chunk_name": "PullRequestSource",
+      "start_line": 19,
+      "end_line": 25,
+      "code": "@dataclass(frozen=True)\nclass PullRequestSource:\n    \"\"\"Which pull request to read, and the commit its files are read at.\"\"\"\n\n    full_name: str\n    number: int\n    head_sha: str"
+    }
+  },
+  {
+    "pair_id": "be8c7a4b3924",
+    "left": {
+      "file_path": "api/review/pull_request_files.py",
+      "chunk_name": "PullRequestFileFetcher",
+      "start_line": 44,
+      "end_line": 82,
+      "code": "class PullRequestFileFetcher:\n    \"\"\"Collects a pull request's changed Python files; which of them get reviewed is the pipeline's choice.\"\"\"\n\n    def __init__(self, github_client: GitHubPullRequestClient, max_concurrent_reads: int) -> None:\n        self._github_client = github_client\n        self._max_concurrent_reads = max_concurrent_reads\n\n    async def fetch(self, access_token: str, source: PullRequestSource) -> FetchedPullRequestFiles:\n        \"\"\"Reads every changed `.py` file that was not removed, as it is at the pull request's head commit.\n\n        A file GitHub cannot return as text is reported as skipped, not as a failure. Any other failure\n        (an expired token, GitHub unreachable, a file missing at the commit) fails the whole fetch, so a\n        review never silently runs on a partial set of files.\n\n        Raises:\n            GitHubPullRequestNotFoundError: If the pull request disappeared.\n            GitHubTokenRejectedError: If GitHub no longer accepts the token.\n            GitHubPullRequestFetchError: If GitHub cannot be reached or answers unexpectedly.\n        \"\"\"\n        changed_files = await self._github_client.fetch_changed_files(access_token, source.full_name, source.number)\n        python_paths = [file.path for file in changed_files if _is_reviewable_python_file(file.path, file.status)]\n        context = _ReadContext(access_token=access_token, source=source)\n        semaphore = asyncio.Semaphore(self._max_concurrent_reads)\n        outcomes = await asyncio.gather(\n            *(self._read_one(context, path, semaphore) for path in python_paths), return_exceptions=True\n        )\n        return _split_outcomes(outcomes)\n\n    async def _read_one(self, context: _ReadContext, path: str, semaphore: asyncio.Semaphore) -> SubmittedFile | SkippedFile:\n        \"\"\"Reads one file, turning an unreadable one into a skipped entry and letting every other failure through.\"\"\"\n        async with semaphore:\n            try:\n                content = await self._github_client.fetch_file_at_ref(\n                    context.access_token, context.source.full_name, path, context.source.head_sha\n                )\n            except GitHubFileUnreadableError as error:\n                logger.warning(\"pull request file skipped path=%s: %s\", path, error)\n                return SkippedFile(file_path=path, reason=UNREADABLE_FILE_REASON)\n        return SubmittedFile(file_path=path, content=content)"
+    },
+    "right": {
+      "file_path": "code_reviewer/schemas/review.py",
+      "chunk_name": "AgentReviewEntry",
+      "start_line": 72,
+      "end_line": 127,
+      "code": "class AgentReviewEntry(BaseModel):\n    file_path: str | None = Field(\n        default=None,\n        description=(\n            \"Path to the reviewed file, relative to the repo root. None when \"\n            \"reviewing a standalone snippet with no associated file \u2014 only \"\n            \"meaningful for PR or whole-file reviews.\"\n        ),\n    )\n    rating: int = Field(\n        default=100,\n        ge=0,\n        le=100,\n        description=(\n            \"Score for this agent's dimension only. Computed by the \"\n            \"calculate_rating middleware after the model responds \u2014 the \"\n            \"model does not need to set this.\"\n        ),\n    )\n    code_key: CodeKey = Field(\n        description=\"Identity of the agent producing this review. Must match the agent's own key.\"\n    )\n    incidents: list[Incident] = Field(\n        description=(\n            \"All incidents this agent found in the file or chunk. An empty \"\n            \"list is a common, fully valid response when the code has no \"\n            \"real issues \u2014 it is not evidence of insufficient effort. \"\n            \"Never invent or pad an incident just to return a non-empty list.\"\n        )\n    )\n    failed: bool = Field(\n        default=False,\n        description=(\n            \"Set by the pipeline, never by the reviewer: true when this agent's \"\n            \"dispatch raised and never produced a real review (provider outage, \"\n            \"tool-recursion limit, etc.) \u2014 rating and incidents carry no signal \"\n            \"when true. Distinct from the hard-size-limit case, which stays \"\n            \"rating 0 with failed=False. Always leave this false.\"\n        ),\n    )\n    failure_reason: str | None = Field(\n        default=None,\n        description=\"Set by the pipeline, never by the reviewer. Always leave this null.\",\n    )\n    skipped: bool = Field(\n        default=False,\n        description=(\n            \"Set by the pipeline, never by the reviewer: true when this agent \"\n            \"does not apply to this submission at all (e.g. DRY on a review with \"\n            \"no registered repo) \u2014 rating and incidents carry no signal when true.\"\n        ),\n    )\n    skip_reason: str | None = Field(\n        default=None,\n        description=\"Why this agent did not apply when skipped is true; null otherwise.\",\n    )"
+    }
+  },
+  {
+    "pair_id": "8eac71207e1c",
+    "left": {
+      "file_path": "api/routers/repos.py",
+      "chunk_name": "resume_repo_indexing",
+      "start_line": 135,
+      "end_line": 144,
+      "code": "@router.post(\"/{repo_id}/resume\")\nasync def resume_repo_indexing(\n    repo: RegisteredRepo = Depends(require_github_repo_access),\n    service: RepoLifecycleService = Depends(get_repo_lifecycle_service),\n    current_user: User = Depends(get_current_user),\n) -> RegisteredRepoRead:\n    if repo.status != RepoIndexStatus.PAUSED:\n        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=\"Repo is not paused\")\n    await service.resume(repo, current_user)\n    return RegisteredRepoRead.model_validate(repo)"
+    },
+    "right": {
+      "file_path": "api/routers/repos.py",
+      "chunk_name": "retry_failed_files",
+      "start_line": 147,
+      "end_line": 156,
+      "code": "@router.post(\"/{repo_id}/files/retry\")\nasync def retry_failed_files(\n    repo: RegisteredRepo = Depends(require_github_repo_access),\n    service: RepoLifecycleService = Depends(get_repo_lifecycle_service),\n    current_user: User = Depends(get_current_user),\n) -> RegisteredRepoRead:\n    if repo.status not in _TERMINAL_REPO_STATUSES:\n        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=\"Repo indexing has not finished yet\")\n    await service.retry_failed_files(repo, current_user)\n    return RegisteredRepoRead.model_validate(repo)"
+    }
+  },
+  {
+    "pair_id": "4421ce4c05e5",
+    "left": {
+      "file_path": "code_reviewer/rag/shared_exemplars.py",
+      "chunk_name": "SharedExemplarStore",
+      "start_line": 35,
+      "end_line": 96,
+      "code": "class SharedExemplarStore(ExemplarStoreBase):\n    \"\"\"Keeps the repo-less corpus of curated good code, retrievable per principle.\"\"\"\n\n    CORPUS = Corpus.SHARED\n\n    def __init__(self, vector_store: Any = None, embedding: Any = None) -> None:\n        super().__init__(vector_store, embedding, SHARED_EXEMPLAR_TABLE_NAME)\n\n    def add_exemplar(self, code_key: CodeKey, source: ExemplarSource) -> None:\n        \"\"\"Add one piece of curated good code, visible to every review this\n        system runs \u2014 only deliberately curated code belongs here.\n\n        Raises:\n            FileEmbeddingError: If splitting or embedding the code fails.\n            VectorStoreWriteError: If writing the exemplar fails.\n        \"\"\"\n        self._add(\n            source,\n            {\n                \"file_path\": source.file_path,\n                \"code_key\": code_key.value,\n                \"indexed_at\": datetime.now(UTC),\n            },\n        )\n\n    def is_empty(self) -> bool:\n        \"\"\"Whether the corpus holds nothing yet, so a caller can tell a\n        first-time bootstrap from a corpus that is already curated.\n\n        Raises:\n            VectorStoreQueryError: If the lookup fails.\n        \"\"\"\n        try:\n            return not self._vector_store.get_nodes(filters=self._any_code_key_filter())\n        except Exception as error:\n            raise VectorStoreQueryError(\"Failed to inspect the shared exemplar corpus\") from error\n\n    def _any_code_key_filter(self) -> MetadataFilters:\n        return MetadataFilters(\n            filters=[\n                MetadataFilter(\n                    key=\"code_key\",\n                    operator=FilterOperator.IN,\n                    value=[code_key.value for code_key in CodeKey],\n                )\n            ],\n            condition=FilterCondition.AND,\n        )\n\n    def find_exemplars(self, query: SharedExemplarQuery, top_k: int = 3) -> list[Exemplar]:\n        \"\"\"Retrieve curated good code for one principle, unscoped by repo.\n\n        Returns:\n            Up to top_k candidates, most similar first, for the exemplar jury to judge.\n\n        Raises:\n            VectorStoreQueryError: If querying the vector store fails.\n        \"\"\"\n        filters = MetadataFilters(\n            filters=[self._code_key_filter(query.code_key)], condition=FilterCondition.AND\n        )\n        return self._find(query, filters, top_k)"
+    },
+    "right": {
+      "file_path": "code_reviewer/rag/exemplar_judge.py",
+      "chunk_name": "ExemplarJury",
+      "start_line": 59,
+      "end_line": 90,
+      "code": "class ExemplarJury:\n    \"\"\"Asks every judge about the same candidates at once and keeps only those all of them call relevant.\"\"\"\n\n    def __init__(self, judges: list[ExemplarJudge]) -> None:\n        self._judges = judges\n\n    def confirm(self, code_key: CodeKey, code: str, candidates: list[Exemplar]) -> list[Exemplar]:\n        \"\"\"The unanimously relevant candidates, in the order given; no model call when there are none to judge.\n\n        Raises:\n            ExemplarJudgeInvocationError: If any judge fails, since a verdict missing from the\n                jury cannot be told apart from a split one.\n        \"\"\"\n        if not candidates:\n            return []\n        relevant_by_judge = self._ask_every_judge(code_key, code, candidates)\n        for candidate in candidates:\n            judges_in_favour = sum(candidate in relevant_candidates for relevant_candidates in relevant_by_judge)\n            rag_metrics.record_exemplar_jury_result(judges_in_favour, len(self._judges))\n        return [\n            candidate\n            for candidate in candidates\n            if all(candidate in relevant_candidates for relevant_candidates in relevant_by_judge)\n        ]\n\n    def _ask_every_judge(self, code_key: CodeKey, code: str, candidates: list[Exemplar]) -> list[list[Exemplar]]:\n        with ThreadPoolExecutor(max_workers=len(self._judges)) as executor:\n            futures = [\n                executor.submit(contextvars.copy_context().run, judge.pick_relevant, code_key, code, candidates)\n                for judge in self._judges\n            ]\n        return [future.result() for future in futures]"
+    }
+  },
+  {
+    "pair_id": "e24f40258d96",
+    "left": {
+      "file_path": "api/security/token_cipher.py",
+      "chunk_name": "TokenCipher",
+      "start_line": 8,
+      "end_line": 21,
+      "code": "class TokenCipher:\n    \"\"\"Encrypts and decrypts the GitHub access token stored at rest.\"\"\"\n\n    def __init__(self, encryption_key: str) -> None:\n        self._fernet = Fernet(encryption_key.encode())\n\n    def encrypt(self, plaintext: str) -> str:\n        return self._fernet.encrypt(plaintext.encode()).decode()\n\n    def decrypt(self, ciphertext: str) -> str:\n        try:\n            return self._fernet.decrypt(ciphertext.encode()).decode()\n        except InvalidToken as error:\n            raise TokenDecryptionError(\"Stored token could not be decrypted\") from error"
+    },
+    "right": {
+      "file_path": "api/routers/oauth.py",
+      "chunk_name": "read_client",
+      "start_line": 65,
+      "end_line": 74,
+      "code": "@router.get(\"/oauth/clients/{client_id}\")\nasync def read_client(\n    client_id: str, clients: OAuthClientService = Depends(get_oauth_client_service)\n) -> ClientPublicInfo:\n    \"\"\"Public name of a registered client, so the consent page can say who is asking for access.\"\"\"\n    try:\n        client = await clients.get(client_id)\n    except UnknownClientError as error:\n        raise OAuthProtocolError(\"invalid_client\", \"Unknown client_id\", status_code=404) from error\n    return ClientPublicInfo(client_id=client.client_id, client_name=client.client_name)"
+    }
+  },
+  {
+    "pair_id": "36b64a9e256c",
+    "left": {
+      "file_path": "api/schemas/repos.py",
+      "chunk_name": "RegisterRepoRequest",
+      "start_line": 9,
+      "end_line": 14,
+      "code": "class RegisterRepoRequest(BaseModel):\n    \"\"\"What the client claims about the repo to register; verified against GitHub before it's trusted.\"\"\"\n\n    repo_id: int | None = None\n    full_name: str\n    branch: str | None = None"
+    },
+    "right": {
+      "file_path": "api/schemas/repos.py",
+      "chunk_name": "RepoFileProgressMessage",
+      "start_line": 58,
+      "end_line": 63,
+      "code": "class RepoFileProgressMessage(BaseModel):\n    \"\"\"Schema for the progress bar SSE\"\"\"\n    repo_id: int\n    file_path: str\n    status: IndexedFileStatus\n    status_reason: str | None"
+    }
+  },
+  {
+    "pair_id": "856cfd999a1b",
+    "left": {
+      "file_path": "api/indexing/repo_progress_broadcaster.py",
+      "chunk_name": "RepoProgressBroadcaster",
+      "start_line": 18,
+      "end_line": 40,
+      "code": "class RepoProgressBroadcaster:\n    \"\"\"Fans out repo progress events to every locally-subscribed SSE connection for that repo.\"\"\"\n\n    def __init__(self) -> None:\n        self._subscribers: dict[int, set[asyncio.Queue[ProgressEvent]]] = {}\n\n    def subscribe(self, repo_id: int) -> asyncio.Queue[ProgressEvent]:\n        queue: asyncio.Queue[ProgressEvent] = asyncio.Queue()\n        self._subscribers.setdefault(repo_id, set()).add(queue)\n        return queue\n\n    def unsubscribe(self, repo_id: int, queue: asyncio.Queue[ProgressEvent]) -> None:\n        subscribers = self._subscribers.get(repo_id)\n        if subscribers is None:\n            return\n        subscribers.discard(queue)\n        if not subscribers: # if the set is empty deleted\n            del self._subscribers[repo_id]\n\n    async def publish(self, repo_id: int, event: ProgressEvent) -> None:\n        # add the envent to the queue (all queue of this repo_id)\n        for queue in list(self._subscribers.get(repo_id, set())):\n            await queue.put(event)"
+    },
+    "right": {
+      "file_path": "api/repos/access.py",
+      "chunk_name": "RepoAccessChecker",
+      "start_line": 13,
+      "end_line": 47,
+      "code": "class RepoAccessChecker:\n    \"\"\"Confirms with GitHub that a user can see a repo, caching a granted answer in Redis for a few minutes.\"\"\"\n\n    def __init__(self, github: GitHubOAuthClient, token_cipher: TokenCipher, redis: Redis) -> None:\n        self._github = github\n        self._token_cipher = token_cipher\n        self._redis = redis\n\n    async def require_access(self, user: User, repo: RegisteredRepo) -> None:\n        if not await self.has_access(user, repo):\n            raise RepoNotFoundError(\"Could not find the repo\")\n\n    async def has_access(self, user: User, repo: RegisteredRepo) -> bool:\n        cache_key = f\"{CACHE_KEY_PREFIX}:{user.id}:{repo.repo_id}\"\n        if await self._redis.exists(cache_key):\n            return True\n        if not await self._ask_github(user, repo):\n            return False\n        await self._redis.set(cache_key, \"1\", ex=REPO_ACCESS_CACHE_TTL_SECONDS)\n        return True\n\n    async def _ask_github(self, user: User, repo: RegisteredRepo) -> bool:\n        access_token = self._token_cipher.decrypt(user.encrypted_github_token)\n        try:\n            return await self._github.user_have_access(access_token, repo.full_name)\n        except GitHubTokenRejectedError as error:\n            await self._forget_user(user.id)\n            raise GitHubAuthorizationExpiredError(\"GitHub authorization expired, please log in again\") from error\n        except GitHubAccessCheckError as error:\n            raise GitHubVerificationUnavailableError(\"Could not confirm your access to this repo with GitHub\") from error\n\n    async def _forget_user(self, user_id: int) -> None:\n        keys = [key async for key in self._redis.scan_iter(match=f\"{CACHE_KEY_PREFIX}:{user_id}:*\")]\n        if keys:\n            await self._redis.delete(*keys)"
+    }
+  },
+  {
+    "pair_id": "77c32d56a8b3",
+    "left": {
+      "file_path": "api/routers/repos.py",
+      "chunk_name": "retry_failed_files",
+      "start_line": 147,
+      "end_line": 156,
+      "code": "@router.post(\"/{repo_id}/files/retry\")\nasync def retry_failed_files(\n    repo: RegisteredRepo = Depends(require_github_repo_access),\n    service: RepoLifecycleService = Depends(get_repo_lifecycle_service),\n    current_user: User = Depends(get_current_user),\n) -> RegisteredRepoRead:\n    if repo.status not in _TERMINAL_REPO_STATUSES:\n        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=\"Repo indexing has not finished yet\")\n    await service.retry_failed_files(repo, current_user)\n    return RegisteredRepoRead.model_validate(repo)"
+    },
+    "right": {
+      "file_path": "api/routers/repos.py",
+      "chunk_name": "delete_registered_repo",
+      "start_line": 159,
+      "end_line": 165,
+      "code": "@router.delete(\"/{repo_id}\", status_code=status.HTTP_204_NO_CONTENT)\nasync def delete_registered_repo(\n    repo: RegisteredRepo = Depends(require_github_repo_access),\n    service: RepoLifecycleService = Depends(get_repo_lifecycle_service),\n    current_user: User = Depends(get_current_user),\n) -> None:\n    await service.delete(repo, current_user)"
+    }
+  },
+  {
+    "pair_id": "685edfd28a72",
+    "left": {
+      "file_path": "code_reviewer/rag/tcase_pairing_judge.py",
+      "chunk_name": "_build_prompt",
+      "start_line": 54,
+      "end_line": 59,
+      "code": "def _build_prompt(source_file: SubmittedFile, candidates: list[PairingCandidate]) -> str:\n    candidate_entries = \"\\n\\n\".join(\n        f\"Candidate {index}: {candidate.file_path}\\n{candidate.content}\"\n        for index, candidate in enumerate(candidates)\n    )\n    return f\"SOURCE FILE: {source_file.file_path}\\n{source_file.content}\\n\\nCandidates:\\n\\n{candidate_entries}\""
+    },
+    "right": {
+      "file_path": "code_reviewer/rag/dry_matching.py",
+      "chunk_name": "_group_pr_chunks_by_hash",
+      "start_line": 51,
+      "end_line": 57,
+      "code": "def _group_pr_chunks_by_hash(files: list[SubmittedFile]) -> dict[str, list[StructuralMatch]]:\n    chunks_by_hash: dict[str, list[StructuralMatch]] = {}\n    for file in files:\n        for chunk in _split_file(file.file_path, file.content):\n            structural_hash = compute_structural_hash(chunk.code)\n            chunks_by_hash.setdefault(structural_hash, []).append(_as_match(file.file_path, chunk))\n    return chunks_by_hash"
+    }
+  },
+  {
+    "pair_id": "fe822e98bb58",
+    "left": {
+      "file_path": "api/indexing/producer.py",
+      "chunk_name": "RepoIndexProducer",
+      "start_line": 25,
+      "end_line": 63,
+      "code": "class RepoIndexProducer:\n    \"\"\"Publishes indexing-pipeline messages to Kafka; one instance lives for the app's lifetime.\"\"\"\n\n    def __init__(self, bootstrap_servers: str, producer: AIOKafkaProducer | None = None) -> None:\n        self._producer = producer or AIOKafkaProducer(\n            bootstrap_servers=bootstrap_servers, acks=\"all\", request_timeout_ms=_REQUEST_TIMEOUT_MS\n        )\n\n    async def start(self) -> None:\n        await self._producer.start()\n\n    async def stop(self) -> None:\n        await self._producer.stop()\n\n    async def publish(self, topic: str, message: BaseModel, key: bytes) -> None:\n        try:\n            metadata = await self._producer.send_and_wait(topic, value=message.model_dump_json().encode(), key=key)\n        except KafkaError as error:\n            kafka_metrics.record_publish(topic, PublishOutcome.FAILED)\n            raise PublishError(f\"Could not publish {type(message).__name__} to topic={topic}\") from error\n        kafka_metrics.record_publish(topic, PublishOutcome.PUBLISHED)\n        logger.info(\n            \"Published %s to topic=%s partition=%s offset=%s\",\n            type(message).__name__,\n            topic,\n            metadata.partition,\n            metadata.offset,\n        )\n\n    async def publish_to_dlq(self, dlq_topic: str, payload: bytes, key: bytes | None, error: Exception) -> None:\n        headers = [(\"error_type\", type(error).__name__.encode()), (\"error_message\", str(error).encode())]\n        try:\n            metadata = await self._producer.send_and_wait(dlq_topic, value=payload, key=key, headers=headers)\n        except KafkaError as dlq_error:\n            kafka_metrics.record_dlq_publish(dlq_topic, type(error).__name__, PublishOutcome.FAILED)\n            logger.error(\"Failed to publish to DLQ topic=%s\", dlq_topic, exc_info=dlq_error)\n            raise DlqPublishError(f\"Could not publish to DLQ topic={dlq_topic}\") from dlq_error\n        kafka_metrics.record_dlq_publish(dlq_topic, type(error).__name__, PublishOutcome.PUBLISHED)\n        logger.info(\"Published to DLQ topic=%s partition=%s offset=%s\", dlq_topic, metadata.partition, metadata.offset)"
+    },
+    "right": {
+      "file_path": "api/indexing/consumers/dlq_consumer.py",
+      "chunk_name": "DlqConsumer",
+      "start_line": 38,
+      "end_line": 68,
+      "code": "class DlqConsumer(ConsumerInterface[DeadLetter]):\n    \"\"\"Sends one notification per message that lands on any dead-letter topic.\"\"\"\n\n    def __init__(self, notifier: DlqNotifier) -> None:\n        super().__init__(TOPICS, BOOTSTRAP_SERVER, GROUP_ID, enable_auto_commit=False)\n        self._notifier = notifier\n\n    def _parse_msg(self, msg: ConsumerRecord) -> DeadLetter:\n        error_type, error_message = _read_error_headers(msg.headers)\n        return DeadLetter(\n            topic=msg.topic,\n            partition=msg.partition,\n            offset=msg.offset,\n            key=_decode(msg.key) or \"none\",\n            error_type=error_type,\n            error_message=error_message,\n        )\n\n    async def _handle_parse_error(self, msg: ConsumerRecord, error: Exception) -> None:\n        logger.error(\"Could not interpret DLQ message at offset=%s\", msg.offset, exc_info=error)\n\n    async def _handle_parsed_message(\n        self, parsed: DeadLetter, msg: ConsumerRecord, consumer: AIOKafkaConsumer\n    ) -> None:\n        try:\n            await asyncio.to_thread(\n                self._notifier.notify, f\"{parsed.topic}: {parsed.error_type}\", _build_notification_body(parsed)\n            )\n        except Exception as error:\n            logger.error(\"Failed to send DLQ notification for topic=%s offset=%s\", parsed.topic, parsed.offset,\n                         exc_info=error)"
+    }
+  },
+  {
+    "pair_id": "4c75ae3e57cb",
+    "left": {
+      "file_path": "api/routers/guest.py",
+      "chunk_name": "start_guest_session",
+      "start_line": 26,
+      "end_line": 44,
+      "code": "@router.post(\"/session\", status_code=status.HTTP_204_NO_CONTENT)\nasync def start_guest_session(\n    response: Response,\n    session: AsyncSession = Depends(get_db_session),\n    jwt_service: JwtTokenService = Depends(get_jwt_service),\n) -> None:\n    guest_session = GuestSession()\n    session.add(guest_session)\n    await session.commit()\n    await session.refresh(guest_session)\n    settings = get_api_settings()\n    response.set_cookie(\n        key=GUEST_SESSION_COOKIE,\n        value=jwt_service.issue_guest_session_token(guest_session_id=guest_session.id),\n        max_age=settings.api_jwt_access_token_ttl_seconds,\n        httponly=True,\n        samesite=\"lax\",\n        secure=settings.api_environment != \"local\",\n    )"
+    },
+    "right": {
+      "file_path": "api/routers/auth.py",
+      "chunk_name": "_set_user_session_cookie",
+      "start_line": 137,
+      "end_line": 146,
+      "code": "def _set_user_session_cookie(response: RedirectResponse, user_id: int, jwt_service: JwtTokenService) -> None:\n    settings = get_api_settings()\n    response.set_cookie(\n        key=USER_SESSION_COOKIE,\n        value=jwt_service.issue_user_session_token(user_id=user_id),\n        max_age=settings.api_jwt_access_token_ttl_seconds,\n        httponly=True,\n        samesite=\"lax\",\n        secure=settings.api_environment != \"local\",\n    )"
+    }
+  },
+  {
+    "pair_id": "cbe4074a69b9",
+    "left": {
+      "file_path": "code_reviewer/agents/architecture.py",
+      "chunk_name": "ArchitectureAgent",
+      "start_line": 17,
+      "end_line": 37,
+      "code": "class ArchitectureAgent(FileSizeAwareAgentBase):\n    \"\"\"Reviews architecture: which layer a unit sits in, which way its\n    dependencies point, and whether construction is kept apart from use.\"\"\"\n\n    def __init__(self, llm: LLMInterface | None = None, rag_manager: LlamaIndexRagManager | None = None) -> None:\n        self._rag_manager = rag_manager\n        prompt = ARCH_AGENT_SYSTEM_PROMPT if rag_manager is not None else ARCH_AGENT_REPOLESS_SYSTEM_PROMPT\n        super().__init__(CodeKey.ARCH, prompt, llm)\n\n    def _build_tools(self) -> list[BaseTool] | None:\n        if self._rag_manager is None:\n            return None\n        return [GetFileChunksTool(rag_manager=self._rag_manager)]\n\n    def _context_schema(self) -> type | None:\n        return ReviewContext if self._rag_manager is not None else None\n\n    def _recursion_limit(self) -> int:\n        if self._rag_manager is None:\n            return super()._recursion_limit()\n        return recursion_limit_for_tool_calls(_MAX_EVIDENCE_LOOKUPS)"
+    },
+    "right": {
+      "file_path": "code_reviewer/agents/coupling.py",
+      "chunk_name": "CouplingAgent",
+      "start_line": 19,
+      "end_line": 52,
+      "code": "class CouplingAgent(FileSizeAwareAgentBase):\n    \"\"\"Reviews coupling: how units depend on each other, in which direction,\n    and how far past each other's public surface they reach.\"\"\"\n\n    def __init__(\n        self,\n        llm: LLMInterface | None = None,\n        rag_manager: LlamaIndexRagManager | None = None,\n        corpora: ExemplarCorpora | None = None,\n    ) -> None:\n        self._rag_manager = rag_manager\n        self._corpora = corpora\n        prompt = COUP_AGENT_SYSTEM_PROMPT if rag_manager is not None else COUP_AGENT_REPOLESS_SYSTEM_PROMPT\n        super().__init__(CodeKey.COUP, prompt, llm)\n\n    def _build_tools(self) -> list[BaseTool] | None:\n        if self._rag_manager is None:\n            return None\n        return [GetFileChunksTool(rag_manager=self._rag_manager)]\n\n    def _extra_middleware(self) -> list[AgentMiddleware]:\n        if self._corpora is None:\n            return []\n        return [ExemplarInjection(CodeKey.COUP, self._corpora)]\n\n    def _context_schema(self) -> type | None:\n        if self._rag_manager is None and self._corpora is None:\n            return None\n        return ReviewContext\n\n    def _recursion_limit(self) -> int:\n        if self._rag_manager is None:\n            return super()._recursion_limit()\n        return recursion_limit_for_tool_calls(_MAX_EVIDENCE_LOOKUPS)"
+    }
+  },
+  {
+    "pair_id": "f48d98ec0cc8",
+    "left": {
+      "file_path": "api/routers/reviews.py",
+      "chunk_name": "_publish_repoless_review_requested",
+      "start_line": 138,
+      "end_line": 151,
+      "code": "async def _publish_repoless_review_requested(job: ReviewJob, kafka_producer: RepoIndexProducer) -> None:\n    message = ReviewRequestedMessage(\n        review_id=job.review_id,\n        requested_by_user_id=job.requested_by_user_id,\n        file_paths=job.file_paths,\n        agents=job.agents,\n    )\n    try:\n        await kafka_producer.publish(REVIEW_REQUESTED, message, str(job.review_id).encode())\n    except PublishError as error:\n        raise HTTPException(\n            status_code=status.HTTP_502_BAD_GATEWAY,\n            detail=\"Could not queue this review\",\n        ) from error"
+    },
+    "right": {
+      "file_path": "api/routers/guest.py",
+      "chunk_name": "_publish_guest_review_requested",
+      "start_line": 70,
+      "end_line": 82,
+      "code": "async def _publish_guest_review_requested(job: ReviewJob, kafka_producer: RepoIndexProducer) -> None:\n    message = ReviewRequestedMessage(\n        review_id=job.review_id,\n        file_paths=job.file_paths,\n        guest_session_id=job.guest_session_id,\n    )\n    try:\n        await kafka_producer.publish(REVIEW_REQUESTED, message, str(job.review_id).encode())\n    except PublishError as error:\n        raise HTTPException(\n            status_code=status.HTTP_502_BAD_GATEWAY,\n            detail=\"Could not queue this review\",\n        ) from error"
+    }
+  },
+  {
+    "pair_id": "9cf7e4275833",
+    "left": {
+      "file_path": "code_reviewer/pipeline/dispatch.py",
+      "chunk_name": "_tcase_test_files",
+      "start_line": 225,
+      "end_line": 244,
+      "code": "@tracer.start_as_current_span(\"find_test_files_for_source_file\")\ndef _tcase_test_files(\n    prepared_file: PreparedFile, test_pairing_finder: CorrectiveTestPairingFinder | None\n) -> list[SubmittedFile]:\n    \"\"\"Falls back to the repo's indexed corpus only when no test file rode along in the submission.\n\n    A failed corpus lookup degrades to no test files, never to a failed TCASE review.\n    \"\"\"\n    if prepared_file.test_files or prepared_file.repo_data is None or test_pairing_finder is None:\n        return prepared_file.test_files\n    with track_usage(f\"pairing file={prepared_file.source_file.file_path}\"):\n        try:\n            return test_pairing_finder.find_test_files(prepared_file.repo_data, prepared_file.source_file)\n        except _PAIRING_LOOKUP_ERRORS:\n            logger.warning(\n                \"corpus test-file pairing failed file_path=%s; reviewing without test files\",\n                prepared_file.source_file.file_path,\n                exc_info=True,\n            )\n            return []"
+    },
+    "right": {
+      "file_path": "code_reviewer/pipeline/orchestrator.py",
+      "chunk_name": "_screen_test_files",
+      "start_line": 247,
+      "end_line": 264,
+      "code": "def _screen_test_files(\n    test_files: list[SubmittedFile], intake_llm: LLMInterface | None\n) -> tuple[list[SubmittedFile], list[SkippedFile]]:\n    \"\"\"Screens each paired test file, keeping the ones that pass. A\n    rejected test file drops out of the pairing rather than skipping the\n    source file it belongs to \u2014 including a guard raising unexpectedly.\"\"\"\n    screened, rejected = [], []\n    for test_file in test_files:\n        try:\n            _run_test_file_guards(test_file.content, intake_llm)\n        except (SubmissionTooLargeError, IntakeRejectedError) as error:\n            rejected.append(_rejected_file(test_file.file_path, error))\n        except Exception:\n            logger.exception(\"Guard execution failed unexpectedly for file_path=%s\", test_file.file_path)\n            rejected.append(SkippedFile(file_path=test_file.file_path, reason=GUARD_EXECUTION_FAILED_REASON))\n        else:\n            screened.append(test_file)\n    return screened, rejected"
+    }
+  },
+  {
+    "pair_id": "1f4b03915149",
+    "left": {
+      "file_path": "api/oauth/token_service.py",
+      "chunk_name": "OAuthTokenService",
+      "start_line": 34,
+      "end_line": 131,
+      "code": "class OAuthTokenService:\n    \"\"\"Issues access and refresh tokens, rotates refresh tokens and revokes whole token families.\"\"\"\n\n    def __init__(\n        self,\n        repository: OAuthTokenRepository,\n        lifetimes: TokenLifetimes,\n        clock: Callable[[], datetime] = utc_now,\n    ) -> None:\n        self._repository = repository\n        self._lifetimes = lifetimes\n        self._clock = clock\n\n    async def issue(self, user_id: int, client_id: str) -> IssuedTokens:\n        now = self._clock()\n        tokens = self._add_token_row(\n            user_id=user_id, client_id=client_id, family_id=uuid.uuid4(), authorized_at=now, now=now\n        )\n        await self._repository.commit()\n        return tokens\n\n    async def refresh(self, refresh_token: str, client_id: str) -> IssuedTokens:\n        now = self._clock()\n        row = await self._repository.find_by_refresh_hash(hash_secret(refresh_token))\n        if row is None:\n            raise self._reject(\"unknown refresh token\")\n        self._require_same_client(row, client_id)\n        if row.revoked_at is not None:\n            raise self._reject(\"refresh token is revoked\", row)\n        if row.refresh_used_at is not None:\n            await self._revoke_family(row, now)\n            raise self._reject(\"refresh token reused, token family revoked\", row)\n        self._require_not_expired(row, now)\n        if not await self._repository.mark_refresh_used(row.id, now):\n            await self._revoke_family(row, now)\n            raise self._reject(\"refresh token reused concurrently, token family revoked\", row)\n        tokens = self._add_token_row(\n            user_id=row.user_id,\n            client_id=row.client_id,\n            family_id=row.family_id,\n            authorized_at=row.authorized_at,\n            now=now,\n        )\n        await self._repository.commit()\n        return tokens\n\n    async def revoke(self, token: str) -> None:\n        \"\"\"Revokes the token's whole family; an unknown token is ignored.\"\"\"\n        token_hash = hash_secret(token)\n        row = await self._repository.find_by_refresh_hash(token_hash)\n        if row is None:\n            row = await self._repository.find_by_access_hash(token_hash)\n        if row is None:\n            return\n        await self._revoke_family(row, self._clock())\n\n    def _add_token_row(\n        self, *, user_id: int, client_id: str, family_id: uuid.UUID, authorized_at: datetime, now: datetime\n    ) -> IssuedTokens:\n        access_token, refresh_token = generate_secret(), generate_secret()\n        absolute_deadline = authorized_at + timedelta(seconds=self._lifetimes.refresh_absolute_seconds)\n        idle_deadline = now + timedelta(seconds=self._lifetimes.refresh_idle_seconds)\n        self._repository.add(\n            OAuthToken(\n                access_token_hash=hash_secret(access_token),\n                access_expires_at=now + timedelta(seconds=self._lifetimes.access_seconds),\n                refresh_token_hash=hash_secret(refresh_token),\n                refresh_expires_at=min(idle_deadline, absolute_deadline),\n                family_id=family_id,\n                authorized_at=authorized_at,\n                user_id=user_id,\n                client_id=client_id,\n            )\n        )\n        return IssuedTokens(\n            access_token=access_token, refresh_token=refresh_token, expires_in=self._lifetimes.access_seconds\n        )\n\n    def _require_same_client(self, row: OAuthToken, client_id: str) -> None:\n        if row.client_id != client_id:\n            raise self._reject(\"refresh token belongs to another client\", row)\n\n    def _require_not_expired(self, row: OAuthToken, now: datetime) -> None:\n        if now >= row.refresh_expires_at:\n            raise self._reject(\"refresh token expired\", row)\n        absolute_deadline = row.authorized_at + timedelta(seconds=self._lifetimes.refresh_absolute_seconds)\n        if now >= absolute_deadline:\n            raise self._reject(\"authorization reached its absolute lifetime\", row)\n\n    async def _revoke_family(self, row: OAuthToken, now: datetime) -> None:\n        await self._repository.revoke_family(row.family_id, now)\n        await self._repository.commit()\n\n    def _reject(self, reason: str, row: OAuthToken | None = None) -> InvalidGrantError:\n        user_id = row.user_id if row is not None else None\n        client_id = row.client_id if row is not None else None\n        logger.warning(\"OAuth refresh rejected: %s (user_id=%s, client_id=%s)\", reason, user_id, client_id)\n        return InvalidGrantError(reason)"
+    },
+    "right": {
+      "file_path": "api/oauth/access_token_verifier.py",
+      "chunk_name": "OAuthAccessTokenVerifier",
+      "start_line": 10,
+      "end_line": 30,
+      "code": "class OAuthAccessTokenVerifier:\n    \"\"\"Resolves an opaque OAuth access token to the user it was issued to; read-only, never commits.\"\"\"\n\n    def __init__(self, repository: OAuthTokenRepository, clock: Callable[[], datetime] = utc_now) -> None:\n        self._repository = repository\n        self._clock = clock\n\n    async def verify(self, access_token: str) -> int:\n        \"\"\"Returns the token's user id.\n\n        Raises InvalidOAuthAccessTokenError when the token is unknown, its family is revoked or it has expired.\n        A refresh token is not an access token and is rejected as unknown.\n        \"\"\"\n        row = await self._repository.find_by_access_hash(hash_secret(access_token))\n        if row is None:\n            raise InvalidOAuthAccessTokenError(\"unknown access token\")\n        if row.revoked_at is not None:\n            raise InvalidOAuthAccessTokenError(\"access token is revoked\")\n        if self._clock() >= row.access_expires_at:\n            raise InvalidOAuthAccessTokenError(\"access token expired\")\n        return row.user_id"
+    }
+  },
+  {
+    "pair_id": "7ccb83117eae",
+    "left": {
+      "file_path": "api/schemas/reviews.py",
+      "chunk_name": "RepolessReviewSubmissionRequest",
+      "start_line": 35,
+      "end_line": 53,
+      "code": "class RepolessReviewSubmissionRequest(BaseModel):\n    \"\"\"Raw files a logged-in user wants reviewed together with no repo, optionally by a subset of agents.\"\"\"\n\n    files: list[FileData] = Field(min_length=1, max_length=get_settings().max_files_per_submission)\n    agents: AgentSelection | None = None\n\n    @field_validator(\"agents\")\n    @classmethod\n    def _excludes_dry(cls, agents: list[CodeKey] | None) -> list[CodeKey] | None:\n        if agents is not None and CodeKey.DRY in agents:\n            raise ValueError(\"DRY compares against a registered repo's indexed history and cannot run with no repo\")\n        return agents\n\n    @model_validator(mode=\"after\")\n    def _has_unique_file_paths(self) -> \"RepolessReviewSubmissionRequest\":\n        file_paths = [file.file_path for file in self.files]\n        if len(file_paths) != len(set(file_paths)):\n            raise ValueError(\"Each submitted file must have a distinct file_path\")\n        return self"
+    },
+    "right": {
+      "file_path": "api/schemas/reviews.py",
+      "chunk_name": "GuestReviewSubmissionRequest",
+      "start_line": 61,
+      "end_line": 71,
+      "code": "class GuestReviewSubmissionRequest(BaseModel):\n    \"\"\"Raw files a guest wants reviewed together \u2014 there is no indexed repo to look them up from.\"\"\"\n\n    files: list[GuestSubmittedFile] = Field(min_length=1, max_length=MAX_GUEST_FILES)\n\n    @model_validator(mode=\"after\")\n    def _has_unique_file_paths(self) -> \"GuestReviewSubmissionRequest\":\n        file_paths = [file.file_path for file in self.files]\n        if len(file_paths) != len(set(file_paths)):\n            raise ValueError(\"Each submitted file must have a distinct file_path\")\n        return self"
+    }
+  }
+]
