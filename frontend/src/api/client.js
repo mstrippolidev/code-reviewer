@@ -255,3 +255,75 @@ export async function fetchCurrentUser() {
 export async function logout() {
   await fetch(`${API_BASE_URL}/api/oauth/github/logout`, { method: 'POST', credentials: 'include' })
 }
+
+export class FeedbackError extends Error {}
+
+export async function fetchReviewFeedback(reviewId) {
+  return getJson(`${API_BASE_URL}/api/reviews/${reviewId}/feedback`, FeedbackError)
+}
+
+export async function submitFeedback(reviewId, incidentId, rating) {
+  const response = await fetch(`${API_BASE_URL}/api/reviews/${reviewId}/feedback`, {
+    method: 'PUT',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      incident_id: incidentId,
+      verdict: rating.verdict,
+      reason: rating.reason ?? null,
+      note: rating.note || null,
+    }),
+  })
+  if (response.status === 401) {
+    throw new UnauthorizedError('Session expired')
+  }
+  if (!response.ok) {
+    throw new FeedbackError(`Request failed with status ${response.status}`)
+  }
+  return response.json()
+}
+
+export class CalibrationError extends Error {}
+
+export class CalibrationFinishedError extends Error {}
+
+export async function fetchNextCalibrationPair() {
+  const response = await fetch(`${API_BASE_URL}/api/calibration/next`, { credentials: 'include' })
+  if (response.status === 404) {
+    throw new CalibrationFinishedError('Every pair is labeled')
+  }
+  if (response.status === 401) {
+    throw new UnauthorizedError('Session expired')
+  }
+  if (!response.ok) {
+    throw new CalibrationError(`Request failed with status ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function fetchCalibrationPair(pairId) {
+  return getJson(`${API_BASE_URL}/api/calibration/pairs/${pairId}`, CalibrationError)
+}
+
+export async function fetchCalibrationProgress() {
+  return getJson(`${API_BASE_URL}/api/calibration/progress`, CalibrationError)
+}
+
+export async function exportCalibrationLabels() {
+  return getJson(`${API_BASE_URL}/api/calibration/export`, CalibrationError)
+}
+
+export async function saveCalibrationLabel(pairId, isDuplicate, note) {
+  const response = await fetch(`${API_BASE_URL}/api/calibration/pairs/${pairId}/label`, {
+    method: 'PUT',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ is_duplicate: isDuplicate, note: note || null }),
+  })
+  if (response.status === 401) {
+    throw new UnauthorizedError('Session expired')
+  }
+  if (!response.ok) {
+    throw new CalibrationError(`Request failed with status ${response.status}`)
+  }
+}

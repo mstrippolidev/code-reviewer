@@ -38,6 +38,8 @@ from api.review.review_progress_consumer import ReviewProgressConsumer
 from api.review.review_progress_publisher import KafkaReviewProgressPublisher
 from api.routers.agents import router as agents_router
 from api.routers.auth import router as auth_router
+from api.routers.calibration import router as calibration_router
+from api.routers.feedback import router as feedback_router
 from api.routers.guest import router as guest_router
 from api.routers.health import router as health_router
 from api.routers.oauth import router as oauth_router
@@ -209,6 +211,9 @@ def _register_routers(app: FastAPI) -> None:
     app.include_router(pull_requests_router)
     app.include_router(similar_code_router)
     app.include_router(guest_router)
+    app.include_router(feedback_router)
+    if get_api_settings().calibration_enabled:
+        app.include_router(calibration_router)
 
 
 def _register_cors(app: FastAPI) -> None:
