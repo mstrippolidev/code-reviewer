@@ -1,0 +1,11 @@
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: exemplar-promotion.requested.dlq
+  labels:
+    strimzi.io/cluster: code-reviewer-kafka
+spec:
+  partitions: 1
+  replicas: 3
+  config:
+    min.insync.replicas: 2

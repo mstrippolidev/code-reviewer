@@ -34,6 +34,7 @@ from api.security.jwt_service import (
 )
 from api.security.token_cipher import TokenCipher
 from code_reviewer.agents.registry import AgentsContainer
+from code_reviewer.rag.exemplars import ExemplarStore
 from code_reviewer.rag.indexer import LlamaIndexRagManager
 
 GUEST_SESSION_COOKIE = "guest_session_token"
@@ -100,6 +101,10 @@ def get_rag_manager(request: Request) -> LlamaIndexRagManager:
     return request.app.state.rag_manager
 
 
+def get_exemplar_store(request: Request) -> ExemplarStore:
+    return request.app.state.exemplar_store
+
+
 def get_agents_container(request: Request) -> AgentsContainer:
     return request.app.state.agents_container
 
@@ -128,8 +133,9 @@ def get_repo_lifecycle_service(
     token_cipher: TokenCipher = Depends(get_token_cipher),
     kafka_producer: RepoIndexProducer = Depends(get_kafka_producer),
     rag_manager: LlamaIndexRagManager = Depends(get_rag_manager),
+    exemplar_store: ExemplarStore = Depends(get_exemplar_store),
 ) -> RepoLifecycleService:
-    integrations = RepoIntegrations(github_oauth_client, token_cipher, kafka_producer, rag_manager)
+    integrations = RepoIntegrations(github_oauth_client, token_cipher, kafka_producer, rag_manager, exemplar_store)
     return RepoLifecycleService(repository, integrations, get_api_settings().max_unfinished_repo_indexings_per_user)
 
 

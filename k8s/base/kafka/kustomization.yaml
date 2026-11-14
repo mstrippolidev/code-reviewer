@@ -15,3 +15,5 @@ resources:
   - topics/review-requested-dlq.yaml
   - topics/review-progress.yaml
   - topics/similar-code-requested.yaml
+  - topics/exemplar-promotion-requested.yaml
+  - topics/exemplar-promotion-requested-dlq.yaml

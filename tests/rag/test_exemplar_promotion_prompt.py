@@ -11,6 +11,7 @@
 import pytest
 
 from code_reviewer.agents.llm.base import LLMInterface
+from code_reviewer.prompts.exemplar_promotion import build_promotion_prompt
 from code_reviewer.rag.exemplar_promotion import (
     ExemplarCandidate,
     ExemplarPromoter,
@@ -60,6 +61,35 @@ def test_a_segregated_interface_demonstration_is_promoted(promoter: ExemplarProm
     """Verify the SOLID2 criteria accept a genuine ISP/DIP demonstration, so
     the prompt works for both principles it is built for."""
     candidate = _candidate("worthy_solid2.py", CodeKey.SOLID2)
+
+    assert promoter.promote(candidate) is PromotionOutcome.PROMOTED
+
+
+@pytest.mark.parametrize(
+    ("code_key", "principle_word"), [(CodeKey.COH, "cohesion"), (CodeKey.COUP, "coupling")]
+)
+def test_every_principle_that_reads_exemplars_has_promotion_criteria(
+    code_key: CodeKey, principle_word: str
+) -> None:
+    """Verify COH and COUP can be promoted at all. Both read the repo corpus,
+    so a missing statement would leave them with exemplars nothing can fill."""
+    assert principle_word in build_promotion_prompt(code_key)
+
+
+@pytest.mark.llm
+def test_a_cohesive_class_demonstration_is_promoted(promoter: ExemplarPromoter) -> None:
+    """Verify the COH criteria accept a class whose members share one purpose
+    and one state."""
+    candidate = _candidate("worthy_cohesion.py", CodeKey.COH)
+
+    assert promoter.promote(candidate) is PromotionOutcome.PROMOTED
+
+
+@pytest.mark.llm
+def test_a_healthily_coupled_pair_is_promoted(promoter: ExemplarPromoter) -> None:
+    """Verify the COUP criteria accept one-way, injected, public-method-only
+    dependencies."""
+    candidate = _candidate("worthy_coupling.py", CodeKey.COUP)
 
     assert promoter.promote(candidate) is PromotionOutcome.PROMOTED
 

@@ -19,12 +19,14 @@ from api.db.models.indexed_file import IndexedFile, IndexedFileStatus
 from api.db.models.registered_repo import RegisteredRepo
 from api.db.models.review_job import ReviewJob, ReviewJobStatus
 from api.db.models.review_job_file import ReviewJobFile
+from api.exemplars.publisher import ExemplarNominationPublisher
 from api.feedback.incident_recorder import IncidentRecorder
 from api.indexing.consumers.interface import ConsumerInterface
 from api.indexing.producer import RepoIndexProducer
 from api.observability.clock import seconds_since
 from api.observability.metrics import ReviewResult, api_metrics
-from api.observability.review_outcome import UNEXPECTED_SKIP_REASONS, review_kind_of, summarize_review
+from api.observability.review_outcome import UNEXPECTED_SKIP_REASONS, ReviewKind, review_kind_of, summarize_review
+from api.repos.repo_data import repo_data_of
 from api.review.pull_request_loader import PullRequestReviewUnavailableError, PullRequestSubmissionLoader
 from api.review.review_progress_publisher import ReviewProgressPublisher
 from api.review.topics import REVIEW_REQUESTED, REVIEW_REQUESTED_DLQ
@@ -81,6 +83,7 @@ class ReviewRequestConsumerDependencies:
     progress_publisher: ReviewProgressPublisher
     dlq_producer: RepoIndexProducer
     pull_request_loader: PullRequestSubmissionLoader
+    nomination_publisher: ExemplarNominationPublisher
 
 
 @dataclass(frozen=True)
@@ -147,6 +150,8 @@ class ReviewRequestConsumer(ConsumerInterface[ReviewRequestedMessage]):
             job = await self._start_job(review_msg, session)
             result = await self._execute_pipeline(review_msg, job, session)
             await self._finish_job(job, result, session, review_msg)
+            if review_kind_of(review_msg) is ReviewKind.REPO:
+                await self._dependencies.nomination_publisher.nominate(job)
             return result
 
     async def _start_job(self, review_msg: ReviewRequestedMessage, session: AsyncSession) -> ReviewJob:
@@ -201,7 +206,7 @@ class ReviewRequestConsumer(ConsumerInterface[ReviewRequestedMessage]):
         repo = await self._load_repo(review_msg.repo_id, session)
         indexed_files = await self._load_indexed_files(review_msg.repo_id, review_msg.file_paths, session)
         files = [SubmittedFile(file_path=f.file_path, content=f.content) for f in indexed_files]
-        return _LoadedSubmission(files=files, repo_data=_repo_data_of(repo), unreadable_files=[])
+        return _LoadedSubmission(files=files, repo_data=repo_data_of(repo), unreadable_files=[])
 
     async def _load_pull_request(
         self, review_msg: ReviewRequestedMessage, job: ReviewJob, session: AsyncSession
@@ -210,7 +215,7 @@ class ReviewRequestConsumer(ConsumerInterface[ReviewRequestedMessage]):
         repo = await self._load_repo(review_msg.repo_id, session)
         loaded = await self._dependencies.pull_request_loader.load(job, repo, session)
         await self._broadcast_status(review_msg, job)
-        return _LoadedSubmission(files=loaded.files, repo_data=_repo_data_of(repo), unreadable_files=loaded.skipped)
+        return _LoadedSubmission(files=loaded.files, repo_data=repo_data_of(repo), unreadable_files=loaded.skipped)
 
     def _build_progress_callback(
         self, review_msg: ReviewRequestedMessage, job: ReviewJob, session: AsyncSession
@@ -329,11 +334,6 @@ class ReviewRequestConsumer(ConsumerInterface[ReviewRequestedMessage]):
 def _result_of(report: AggregatorOutput) -> ReviewResult:
     """Degraded when the report finished but an agent or file failed inside it."""
     return ReviewResult.DEGRADED if _has_pipeline_failures(report) else ReviewResult.COMPLETED
-
-
-def _repo_data_of(repo: RegisteredRepo) -> RepoData:
-    """The scoping the pipeline searches within: this repo, its owner, and the commit its index reflects."""
-    return RepoData(repo_id=str(repo.repo_id), owner_id=str(repo.owner_id), commit_sha=repo.commit_sha)
 
 
 def _has_pipeline_failures(result: AggregatorOutput) -> bool:

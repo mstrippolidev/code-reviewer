@@ -16,6 +16,14 @@ PRINCIPLE_STATEMENTS: dict[CodeKey, str] = {
         "on no more of an interface than they use, and dependencies pointing at "
         "abstractions rather than concretions"
     ),
+    CodeKey.COH: (
+        "cohesion — members of a unit share one purpose and the same data, and "
+        "things that change together live together"
+    ),
+    CodeKey.COUP: (
+        "healthy coupling — dependencies run one way, are handed in rather than "
+        "reached for, and every call goes through a public method"
+    ),
 }
 
 _PROMPTS_TEMPLATE = """You are judging whether one fragment of code belongs in a small, permanent

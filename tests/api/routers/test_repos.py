@@ -14,6 +14,7 @@ from api.db.models.user import User
 from api.dependencies import (
     get_current_user,
     get_db_session,
+    get_exemplar_store,
     get_github_oauth_client,
     get_kafka_producer,
     get_rag_manager,
@@ -78,6 +79,11 @@ class FakeRagManager:
         if self._delete_error:
             raise self._delete_error
         self.deleted_repo_ids.append(repo_id)
+
+
+class FakeExemplarStore:
+    def delete_repo(self, repo_id: str) -> None:
+        return None
 
 
 class _ScalarsResult:
@@ -241,6 +247,7 @@ def _build_app(
     app.dependency_overrides[get_db_session] = _fake_db_session
     app.dependency_overrides[get_kafka_producer] = lambda: kafka_producer or FakeRepoIndexProducer()
     app.dependency_overrides[get_rag_manager] = lambda: rag_manager or FakeRagManager()
+    app.dependency_overrides[get_exemplar_store] = lambda: FakeExemplarStore()
     app.dependency_overrides[get_repo_access_checker] = lambda: access_checker or FakeRepoAccessChecker()
     app.dependency_overrides[get_rate_limiter] = lambda: AllowAllRateLimiter()
     if current_user is not None:
