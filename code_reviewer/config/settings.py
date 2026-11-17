@@ -73,6 +73,7 @@ class Settings(BaseSettings):
 
     llm_call_timeout_seconds: float = 60.0
     dry_agent_timeout_seconds: float = 300.0
+    llm_max_output_tokens: int = 60000
 
     llm_provider: Literal["ollama", "openrouter", "bedrock"] = "ollama"
     embedding_provider: Literal["ollama", "bedrock"] = "ollama"

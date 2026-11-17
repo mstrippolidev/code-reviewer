@@ -27,6 +27,9 @@ class OllamaLLM(LLMInterface[T]):
     def _get_base_url(self) -> str:
         return settings.ollama_base_url
 
+    def _output_limit_kwargs(self, limit: int) -> dict[str, Any]:
+        return {"num_predict": limit}
+
     def _get_extra_kwargs(self) -> dict[str, Any]:
         timeout = get_settings().llm_call_timeout_seconds
         return {
