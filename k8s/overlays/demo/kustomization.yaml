@@ -5,6 +5,16 @@ resources:
   - ../../base/migrations
   - ../../base/kafka
   - ../../base/redis
+  - ../../base/otel-collector
   - ../../base/api
   - ../../base/exemplar-seed
   - ../../base/frontend
+
+patches:
+  - target:
+      kind: ConfigMap
+      name: api-config
+    patch: |-
+      - op: replace
+        path: /data/OTEL_ENABLE
+        value: "true"

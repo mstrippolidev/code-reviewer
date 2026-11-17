@@ -13,6 +13,7 @@ from langchain.agents.structured_output import StructuredOutputValidationError
 from langchain_core.messages import AIMessage, BaseMessage
 
 from code_reviewer.agents.llm.middleware import StructuredOutputNotCalledError
+from code_reviewer.agents.llm.output_cap import OutputTruncatedError
 from code_reviewer.agents.llm.timeout import raise_if_deadline_passed
 from code_reviewer.telemetry.metrics import pipeline_metrics
 from code_reviewer.telemetry.run_summary import usage_of
@@ -25,6 +26,7 @@ class LlmErrorCause(StrEnum):
     TIMEOUT = "timeout"
     SCHEMA_INVALID = "schema_invalid"
     NO_TOOL_CALL = "no_tool_call"
+    OUTPUT_TRUNCATED = "output_truncated"
     OTHER = "other"
 
 
@@ -39,6 +41,7 @@ _CAUSES_BY_TYPE = (
     (ConnectionError, LlmErrorCause.CONNECTION),
     (StructuredOutputValidationError, LlmErrorCause.SCHEMA_INVALID),
     (StructuredOutputNotCalledError, LlmErrorCause.NO_TOOL_CALL),
+    (OutputTruncatedError, LlmErrorCause.OUTPUT_TRUNCATED),
 )
 
 _OLLAMA_CONNECTION_STATUS = -1

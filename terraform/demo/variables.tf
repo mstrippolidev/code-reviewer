@@ -63,3 +63,9 @@ variable "dlq_sns_topic_arn" {
   type        = string
   default     = "arn:aws:sns:us-east-1:413001138120:portfolioTopic"
 }
+
+variable "alarm_sns_topic_arns" {
+  description = "SNS topics the CloudWatch alarms notify. They must be in the alarm's own region."
+  type        = list(string)
+  default     = ["arn:aws:sns:us-east-2:413001138120:code-reviewer-alarms"]
+}

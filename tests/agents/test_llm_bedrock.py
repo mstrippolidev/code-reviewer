@@ -7,6 +7,8 @@ from langchain_core.tools import tool
 from pydantic import BaseModel
 
 from code_reviewer.agents.llm.bedrock import BedrockLLM
+from code_reviewer.agents.llm.output_cap import OutputTruncatedError
+from code_reviewer.config.settings import get_settings
 
 
 class _Greeting(BaseModel):
@@ -68,3 +70,14 @@ def test_tool_bound_model_calls_the_tool_when_forced() -> None:
     assert len(response.tool_calls) == 1
     assert response.tool_calls[0]["name"] == "_get_capital"
     assert response.tool_calls[0]["args"] == {"country": "France"}
+
+
+@pytest.mark.bedrock
+def test_a_reply_cut_off_at_the_output_cap_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify Bedrock's stop reason reaches the truncation check, so a cut-off reply fails
+    instead of being parsed as data."""
+    monkeypatch.setattr(get_settings(), "llm_max_output_tokens", 20)
+    model = BedrockLLM().create_raw_model()
+
+    with pytest.raises(OutputTruncatedError):
+        model.invoke("Write a detailed ten-step guide to brewing coffee.")

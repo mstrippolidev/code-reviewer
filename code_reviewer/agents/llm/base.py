@@ -11,7 +11,9 @@ from langchain_core.language_models import BaseChatModel, LanguageModelInput
 from langchain_core.runnables import Runnable
 from pydantic import BaseModel
 
+from code_reviewer.agents.llm.output_cap import RaiseOnTruncatedOutput
 from code_reviewer.agents.llm.pricing import TokenPrices
+from code_reviewer.config.settings import get_settings
 from code_reviewer.schemas.review import CodeKey
 
 T = TypeVar("T", bound=BaseModel)
@@ -74,6 +76,8 @@ class LLMInterface(ABC, Generic[T]):
         kwargs: dict[str, Any] = {
             "temperature": self._temperature,
             "model_provider": self._get_model_provider(),
+            "callbacks": [RaiseOnTruncatedOutput()],
+            **self._output_limit_kwargs(get_settings().llm_max_output_tokens),
             **self._get_extra_kwargs(),
         }
         api_key = self._get_api_key()
@@ -112,6 +116,10 @@ class LLMInterface(ABC, Generic[T]):
         """API key for the provider's API, or None when no auth is needed
         (e.g. a local Ollama instance). Cloud providers override this."""
         return None
+
+    def _output_limit_kwargs(self, limit: int) -> dict[str, Any]:
+        """The provider's own name for its output token cap; LangChain's standard max_tokens unless overridden."""
+        return {"max_tokens": limit}
 
     def _get_extra_kwargs(self) -> dict[str, Any]:
         """Any other provider-specific kwargs (timeout, context window,

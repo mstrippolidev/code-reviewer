@@ -27,6 +27,11 @@ variable "ecr_repositories" {
   ]
 }
 
+variable "alarm_email" {
+  description = "Address that receives CloudWatch alarm notifications. Pass it at apply time; AWS emails a confirmation link once."
+  type        = string
+}
+
 variable "ecr_images_to_keep" {
   description = "Lifecycle policy cap: older images beyond this count expire."
   type        = number
