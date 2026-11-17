@@ -30,6 +30,19 @@ data "aws_iam_policy_document" "instance_permissions" {
     actions   = ["sns:Publish"]
     resources = [var.dlq_sns_topic_arn]
   }
+
+  statement {
+    actions   = ["cloudwatch:PutMetricData"]
+    resources = ["*"]
+  }
+
+  statement {
+    actions = [
+      "xray:PutTraceSegments",
+      "xray:PutTelemetryRecords",
+    ]
+    resources = ["*"]
+  }
 }
 
 resource "aws_iam_role" "instance" {

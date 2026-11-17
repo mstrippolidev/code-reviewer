@@ -13,6 +13,11 @@ output "acm_certificate_arn" {
   value       = aws_acm_certificate_validation.app.certificate_arn
 }
 
+output "alarms_topic_arn" {
+  description = "SNS topic the CloudWatch alarms notify; the default of alarm_sns_topic_arns in terraform/demo."
+  value       = aws_sns_topic.alarms.arn
+}
+
 output "app_fqdn" {
   description = "Public hostname of the app."
   value       = local.app_fqdn
