@@ -2,7 +2,9 @@ from mcp.types import ToolAnnotations
 
 from mcp_server.api_client import build_api_client
 from mcp_server.app import mcp
+from mcp_server.config import get_mcp_settings
 from mcp_server.custom_caller_auth import CallerBearerAuth
+from mcp_server.health import HEALTH_PATH, report_health
 from mcp_server.resources.agents import AGENTS_URI, AgentsResource
 from mcp_server.tools.index_repo import IndexRepoTool
 from mcp_server.tools.repo_status import HttpRepoStatusSource, RepoStatusTools
@@ -76,7 +78,9 @@ mcp.resource(
     ),
     mime_type="application/json",
 )(AgentsResource(api_client).read_agents)
+mcp.custom_route(HEALTH_PATH, methods=["GET"])(report_health)
 
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http", port=8001)
+    settings = get_mcp_settings()
+    mcp.run(transport="streamable-http", host=settings.mcp_host, port=settings.mcp_port)

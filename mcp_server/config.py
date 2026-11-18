@@ -11,6 +11,8 @@ class McpSettings(BaseSettings):
     mcp_api_base_url: str = "http://localhost:8000"
     mcp_authorization_server_url: str = "http://localhost:8000"
     mcp_public_base_url: str = "http://localhost:8001"
+    mcp_host: str = "127.0.0.1"
+    mcp_port: int = 8001
 
     otel_enable: bool = False
     otel_exporter_otlp_traces_endpoint: str = "http://localhost:6006/v1/traces"
