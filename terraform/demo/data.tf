@@ -24,6 +24,15 @@ data "aws_ami" "k3s" {
     name   = "tag:Role"
     values = ["demo-ami"]
   }
+
+  dynamic "filter" {
+    for_each = var.ami_id == "" ? [] : [var.ami_id]
+
+    content {
+      name   = "image-id"
+      values = [filter.value]
+    }
+  }
 }
 
 data "aws_route53_zone" "root" {

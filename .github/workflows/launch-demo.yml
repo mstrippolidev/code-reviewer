@@ -2,6 +2,11 @@ name: launch-demo
 
 on:
   workflow_dispatch:
+    inputs:
+      ami_id:
+        description: AMI to launch for a rollback; leave empty for the newest
+        type: string
+        default: ""
   repository_dispatch:
     types: [launch-demo]
 
@@ -36,6 +41,8 @@ jobs:
         with:
           terraform_version: 1.10.5
 
-      - run: |
+      - env:
+          AMI_ID: ${{ inputs.ami_id }}
+        run: |
           terraform init -input=false
-          terraform apply -auto-approve -input=false
+          terraform apply -auto-approve -input=false -var "ami_id=${AMI_ID}"
