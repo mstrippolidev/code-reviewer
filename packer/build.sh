@@ -13,4 +13,5 @@ packer build \
   -var "region=${REGION}" \
   -var "ecr_registry=${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com" \
   -var "ecr_password=$(aws ecr get-login-password --region "$REGION")" \
+  -var "git_commit=${GITHUB_SHA:-unknown}" \
   .

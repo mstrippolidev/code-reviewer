@@ -38,6 +38,11 @@ variable "ecr_password" {
   sensitive = true
 }
 
+variable "git_commit" {
+  type    = string
+  default = "unknown"
+}
+
 data "amazon-ami" "al2023" {
   region      = var.region
   owners      = ["amazon"]
@@ -65,8 +70,9 @@ source "amazon-ebs" "k3s" {
   }
 
   tags = {
-    Project = "code-reviewer"
-    Role    = "demo-ami"
+    Project   = "code-reviewer"
+    Role      = "demo-ami"
+    GitCommit = var.git_commit
   }
 }
 

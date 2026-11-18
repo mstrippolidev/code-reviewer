@@ -22,6 +22,7 @@ variable "ecr_repositories" {
   default = [
     "code-reviewer-base",
     "code-reviewer-api",
+    "code-reviewer-mcp",
     "code-reviewer-frontend",
     "code-reviewer-postgres",
   ]

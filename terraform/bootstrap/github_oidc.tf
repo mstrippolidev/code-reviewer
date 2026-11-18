@@ -160,6 +160,22 @@ data "aws_iam_policy_document" "github_demo" {
   }
 
   statement {
+    actions = [
+      "cloudwatch:DeleteAlarms",
+      "cloudwatch:ListTagsForResource",
+      "cloudwatch:PutMetricAlarm",
+      "cloudwatch:TagResource",
+      "cloudwatch:UntagResource",
+    ]
+    resources = ["arn:aws:cloudwatch:${var.region}:${local.account_id}:alarm:${var.demo_name}-*"]
+  }
+
+  statement {
+    actions   = ["cloudwatch:DescribeAlarms"]
+    resources = ["*"]
+  }
+
+  statement {
     actions   = ["iam:PassRole"]
     resources = ["arn:aws:iam::${local.account_id}:role/${var.demo_name}-*"]
 

@@ -7,6 +7,20 @@ on:
         description: Bake a new AMI after pushing the images
         type: boolean
         default: true
+  push:
+    branches: [main]
+    paths:
+      - "api/**"
+      - "code_reviewer/**"
+      - "frontend/**"
+      - "k8s/**"
+      - "mcp_server/**"
+      - "packer/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "alembic.ini"
+      - "scripts/prune_old_amis.sh"
+      - ".github/workflows/build-images.yml"
 
 # Queue rather than cancel: a cancelled bake leaves its temporary Packer instance behind.
 concurrency:
@@ -47,7 +61,9 @@ jobs:
           push: true
           secrets: |
             guardrails_api_key=${{ secrets.GUARDRAILS_API_KEY }}
-          tags: ${{ env.ECR_REGISTRY }}/code-reviewer-base:latest
+          tags: |
+            ${{ env.ECR_REGISTRY }}/code-reviewer-base:latest
+            ${{ env.ECR_REGISTRY }}/code-reviewer-base:${{ github.sha }}
           cache-from: type=gha,scope=base
           cache-to: type=gha,mode=max,scope=base
 
@@ -59,9 +75,25 @@ jobs:
           platforms: linux/amd64
           push: true
           build-args: BASE_IMAGE=${{ env.ECR_REGISTRY }}/code-reviewer-base:latest
-          tags: ${{ env.ECR_REGISTRY }}/code-reviewer-api:latest
+          tags: |
+            ${{ env.ECR_REGISTRY }}/code-reviewer-api:latest
+            ${{ env.ECR_REGISTRY }}/code-reviewer-api:${{ github.sha }}
           cache-from: type=gha,scope=api
           cache-to: type=gha,mode=max,scope=api
+
+      - name: Build and push code-reviewer-mcp
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: mcp_server/Dockerfile
+          platforms: linux/amd64
+          push: true
+          build-args: BASE_IMAGE=${{ env.ECR_REGISTRY }}/code-reviewer-base:latest
+          tags: |
+            ${{ env.ECR_REGISTRY }}/code-reviewer-mcp:latest
+            ${{ env.ECR_REGISTRY }}/code-reviewer-mcp:${{ github.sha }}
+          cache-from: type=gha,scope=mcp
+          cache-to: type=gha,mode=max,scope=mcp
 
       - name: Build and push code-reviewer-frontend
         uses: docker/build-push-action@v6
@@ -70,7 +102,9 @@ jobs:
           platforms: linux/amd64
           push: true
           build-args: VITE_API_BASE_URL=${{ env.APP_URL }}
-          tags: ${{ env.ECR_REGISTRY }}/code-reviewer-frontend:latest
+          tags: |
+            ${{ env.ECR_REGISTRY }}/code-reviewer-frontend:latest
+            ${{ env.ECR_REGISTRY }}/code-reviewer-frontend:${{ github.sha }}
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,mode=max,scope=frontend
 
@@ -113,5 +147,7 @@ jobs:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Delete every demo AMI except the one just baked
+      - name: Delete every demo AMI except the one just baked and the one before it
+        env:
+          KEEP_AMIS: "2"
         run: ./scripts/prune_old_amis.sh

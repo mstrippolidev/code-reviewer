@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deregisters every demo AMI except the newest, and deletes their snapshots.
+# Deregisters every demo AMI except the newest KEEP_AMIS (default 1), and deletes their snapshots.
 # Run only after a successful bake, so a failed build never leaves zero AMIs to launch from.
 set -euo pipefail
 

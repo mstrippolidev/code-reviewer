@@ -34,6 +34,12 @@ variable "root_volume_size_gb" {
   default     = 50
 }
 
+variable "ami_id" {
+  description = "AMI to launch, for a rollback. Empty launches the newest demo AMI."
+  type        = string
+  default     = ""
+}
+
 variable "node_port" {
   description = "NodePort the frontend Service listens on, set in the single-node overlay."
   type        = number

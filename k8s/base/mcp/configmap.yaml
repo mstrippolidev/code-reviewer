@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-config
+data:
+  MCP_HOST: "0.0.0.0"
+  MCP_API_BASE_URL: "http://api:8000"
+  MCP_AUTHORIZATION_SERVER_URL: "http://CHANGE_ME"
+  MCP_PUBLIC_BASE_URL: "http://CHANGE_ME/mcp"
+  OTEL_ENABLE: "false"
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://otel-collector.code-reviewer.svc.cluster.local:4318/v1/traces"
+  OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: "http://otel-collector.code-reviewer.svc.cluster.local:4318/v1/metrics"
+  OTEL_METRIC_EXPORT_INTERVAL_MS: "60000"

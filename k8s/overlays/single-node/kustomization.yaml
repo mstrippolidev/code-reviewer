@@ -6,6 +6,7 @@ resources:
   - ../../base/redis
   - ../../base/otel-collector
   - ../../base/api
+  - ../../base/mcp
   - ../../base/exemplar-seed
   - ../../base/frontend
 
@@ -116,6 +117,28 @@ patches:
       - op: add
         path: /data/DLQ_SNS_TOPIC_ARN
         value: "arn:aws:sns:us-east-1:413001138120:portfolioTopic"
+      - op: replace
+        path: /data/OTEL_ENABLE
+        value: "true"
+
+  - target:
+      kind: Deployment
+      name: mcp-server
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
+
+  - target:
+      kind: ConfigMap
+      name: mcp-config
+    patch: |-
+      - op: replace
+        path: /data/MCP_AUTHORIZATION_SERVER_URL
+        value: "https://codereview.mstrippolidev.com"
+      - op: replace
+        path: /data/MCP_PUBLIC_BASE_URL
+        value: "https://codereview.mstrippolidev.com/mcp"
       - op: replace
         path: /data/OTEL_ENABLE
         value: "true"

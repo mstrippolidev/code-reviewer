@@ -7,6 +7,7 @@ resources:
   - ../../base/redis
   - ../../base/otel-collector
   - ../../base/api
+  - ../../base/mcp
   - ../../base/exemplar-seed
   - ../../base/frontend
 
@@ -15,6 +16,20 @@ patches:
       kind: ConfigMap
       name: api-config
     patch: |-
+      - op: replace
+        path: /data/OTEL_ENABLE
+        value: "true"
+
+  - target:
+      kind: ConfigMap
+      name: mcp-config
+    patch: |-
+      - op: replace
+        path: /data/MCP_AUTHORIZATION_SERVER_URL
+        value: "https://codereview.mstrippolidev.com"
+      - op: replace
+        path: /data/MCP_PUBLIC_BASE_URL
+        value: "https://codereview.mstrippolidev.com/mcp"
       - op: replace
         path: /data/OTEL_ENABLE
         value: "true"
