@@ -43,6 +43,11 @@ data "aws_iam_policy_document" "instance_permissions" {
     ]
     resources = ["*"]
   }
+
+  statement {
+    actions   = ["pricing:GetProducts"]
+    resources = ["*"]
+  }
 }
 
 resource "aws_iam_role" "instance" {
