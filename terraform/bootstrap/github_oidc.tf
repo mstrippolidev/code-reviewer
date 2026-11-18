@@ -167,7 +167,10 @@ data "aws_iam_policy_document" "github_demo" {
       "cloudwatch:TagResource",
       "cloudwatch:UntagResource",
     ]
-    resources = ["arn:aws:cloudwatch:${var.region}:${local.account_id}:alarm:${var.demo_name}-*"]
+    resources = [
+      "arn:aws:cloudwatch:${var.region}:${local.account_id}:alarm:${var.demo_name}-*",
+      "arn:aws:cloudwatch:${var.region}:${local.account_id}:dataset/default",
+    ]
   }
 
   statement {
